@@ -38,8 +38,8 @@ services:
       TEI_DB_QUEUE_INTERVAL: "5000"
     entrypoint: ["/bin/bash", "/entrypoint.sh"]
     volumes:
-      - ./docker/teiserver-entrypoint.sh:/entrypoint.sh:ro
-      - ./docker/setup-spads-bot.exs:/setup-spads-bot.exs:ro
+      - ./docker/teiserver-entrypoint.sh:/entrypoint.sh:ro,z
+      - ./docker/setup-spads-bot.exs:/setup-spads-bot.exs:ro,z
       - devtools_state:/app/.devtools
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:4000/ || exit 1"]
@@ -70,10 +70,10 @@ services:
       SPRING_HOSTIP: ""
       SPADS_ARGS: "--tls-cert-trust"
     volumes:
-      - ./docker/spads-dev-entrypoint.sh:/dev-entrypoint.sh:ro
-      - ./docker/spads_dev.conf:/spads_dev.conf:ro
-      - ./spads_config_bar/etc:/spads_etc:ro
-      - ./spads_config_bar/var:/spads_var:ro
+      - ./docker/spads-dev-entrypoint.sh:/dev-entrypoint.sh:ro,z
+      - ./docker/spads_dev.conf:/spads_dev.conf:ro,z
+      - ./spads_config_bar/etc:/spads_etc:ro,z
+      - ./spads_config_bar/var:/spads_var:ro,z
       - spring_data:/spring-data
       - spads_cache:/opt/spads/var
       - spring_engines:/spring-engines
