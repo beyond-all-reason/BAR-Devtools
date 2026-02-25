@@ -8,6 +8,20 @@ LOBBY_DIR="$SCRIPT_DIR/bar-lobby"
 REPOS_CONF="$SCRIPT_DIR/repos.conf"
 REPOS_LOCAL="$SCRIPT_DIR/repos.local.conf"
 
+detect_game_dir() {
+  if [ -n "${BAR_GAME_DIR:-}" ]; then
+    echo "$BAR_GAME_DIR"
+    return 0
+  fi
+  local xdg_state="${XDG_STATE_HOME:-$HOME/.local/state}"
+  local candidate="$xdg_state/Beyond All Reason"
+  if [ -d "$candidate" ]; then
+    echo "$candidate"
+    return 0
+  fi
+  return 1
+}
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -148,11 +162,11 @@ check_prerequisites() {
 # ===========================================================================
 
 # Parse repos.conf (with repos.local.conf overrides) into parallel arrays.
-# Populates: REPO_DIRS[], REPO_URLS[], REPO_BRANCHES[], REPO_GROUPS[]
-declare -a REPO_DIRS=() REPO_URLS=() REPO_BRANCHES=() REPO_GROUPS=()
+# Populates: REPO_DIRS[], REPO_URLS[], REPO_BRANCHES[], REPO_GROUPS[], REPO_LOCAL_PATHS[]
+declare -a REPO_DIRS=() REPO_URLS=() REPO_BRANCHES=() REPO_GROUPS=() REPO_LOCAL_PATHS=()
 
 load_repos_conf() {
-  REPO_DIRS=(); REPO_URLS=(); REPO_BRANCHES=(); REPO_GROUPS=()
+  REPO_DIRS=(); REPO_URLS=(); REPO_BRANCHES=(); REPO_GROUPS=(); REPO_LOCAL_PATHS=()
   local -A seen=()
 
   _parse_conf() {
@@ -162,12 +176,14 @@ load_repos_conf() {
       line="${line%%#*}"                        # strip comments
       line="$(echo "$line" | xargs 2>/dev/null || true)"  # trim whitespace
       [ -z "$line" ] && continue
-      local dir url branch group
-      read -r dir url branch group <<< "$line"
+      local dir url branch group local_path
+      read -r dir url branch group local_path <<< "$line"
       [ -z "$dir" ] || [ -z "$url" ] && continue
       branch="${branch:-master}"
       group="${group:-extra}"
-      seen[$dir]="$url $branch $group"
+      # Expand ~ in local_path
+      local_path="${local_path/#\~/$HOME}"
+      seen[$dir]="$url $branch $group $local_path"
     done < "$file"
   }
 
@@ -176,17 +192,45 @@ load_repos_conf() {
 
   local dir
   for dir in "${!seen[@]}"; do
-    local url branch group
-    read -r url branch group <<< "${seen[$dir]}"
+    local url branch group local_path
+    read -r url branch group local_path <<< "${seen[$dir]}"
     REPO_DIRS+=("$dir")
     REPO_URLS+=("$url")
     REPO_BRANCHES+=("$branch")
     REPO_GROUPS+=("$group")
+    REPO_LOCAL_PATHS+=("$local_path")
   done
 }
 
 clone_or_update_repo() {
-  local dir="$1" url="$2" branch="$3" target="$SCRIPT_DIR/$dir"
+  local dir="$1" url="$2" branch="$3" local_path="${4:-}" target="$SCRIPT_DIR/$dir"
+
+  if [ -n "$local_path" ]; then
+    if [ ! -d "$local_path" ]; then
+      warn "  ${dir}: local path does not exist: ${local_path}"
+      return 1
+    fi
+    if [ -L "$target" ]; then
+      local current_link
+      current_link="$(readlink "$target")"
+      if [ "$current_link" = "$local_path" ]; then
+        ok "  ${dir}: linked -> ${local_path}"
+      else
+        warn "  ${dir}: symlink points to ${current_link}, config says ${local_path}"
+        info "  ${dir}: updating symlink..."
+        rm "$target"
+        ln -s "$local_path" "$target"
+        ok "  ${dir}: linked -> ${local_path}"
+      fi
+    elif [ -d "$target" ]; then
+      warn "  ${dir}: exists as a real directory but config says link to ${local_path}"
+      warn "  ${dir}: remove it manually to use the local path"
+    else
+      ln -s "$local_path" "$target"
+      ok "  ${dir}: linked -> ${local_path}"
+    fi
+    return 0
+  fi
 
   if [ -d "$target/.git" ]; then
     local current_url
@@ -227,19 +271,23 @@ cmd_clone() {
     echo ""
   fi
 
-  local i cloned=0 updated=0 skipped=0
+  local i cloned=0 updated=0 skipped=0 linked=0
   for i in "${!REPO_DIRS[@]}"; do
     local dir="${REPO_DIRS[$i]}"
     local url="${REPO_URLS[$i]}"
     local branch="${REPO_BRANCHES[$i]}"
     local group="${REPO_GROUPS[$i]}"
+    local local_path="${REPO_LOCAL_PATHS[$i]}"
 
     if [ "$group_filter" != "all" ] && [ "$group" != "$group_filter" ]; then
       skipped=$((skipped + 1))
       continue
     fi
 
-    if [ -d "$SCRIPT_DIR/$dir/.git" ]; then
+    if [ -n "$local_path" ]; then
+      clone_or_update_repo "$dir" "$url" "$branch" "$local_path"
+      linked=$((linked + 1))
+    elif [ -d "$SCRIPT_DIR/$dir/.git" ]; then
       clone_or_update_repo "$dir" "$url" "$branch"
       updated=$((updated + 1))
     else
@@ -249,7 +297,9 @@ cmd_clone() {
   done
 
   echo ""
-  ok "Repos: ${cloned} cloned, ${updated} updated, ${skipped} skipped"
+  local summary="${cloned} cloned, ${updated} updated, ${skipped} skipped"
+  [ "$linked" -gt 0 ] && summary+=", ${linked} linked"
+  ok "Repos: ${summary}"
 }
 
 cmd_repos() {
@@ -266,10 +316,25 @@ cmd_repos() {
     local url="${REPO_URLS[$i]}"
     local branch="${REPO_BRANCHES[$i]}"
     local group="${REPO_GROUPS[$i]}"
+    local local_path="${REPO_LOCAL_PATHS[$i]}"
     local target="$SCRIPT_DIR/$dir"
 
     local status current_branch
-    if [ -d "$target/.git" ]; then
+    if [ -L "$target" ]; then
+      local link_dest
+      link_dest="$(readlink "$target")"
+      if [ -d "$target/.git" ]; then
+        current_branch="$(git -C "$target" branch --show-current 2>/dev/null || echo "detached")"
+        local dirty=""
+        if ! git -C "$target" diff --quiet 2>/dev/null || ! git -C "$target" diff --cached --quiet 2>/dev/null; then
+          dirty=" ${YELLOW}*dirty*${NC}"
+        fi
+        status="${CYAN}local${NC}${dirty} -> ${link_dest}"
+      else
+        status="${RED}broken link${NC} -> ${link_dest}"
+        current_branch="-"
+      fi
+    elif [ -d "$target/.git" ]; then
       current_branch="$(git -C "$target" branch --show-current 2>/dev/null || echo "detached")"
       local dirty=""
       if ! git -C "$target" diff --quiet 2>/dev/null || ! git -C "$target" diff --cached --quiet 2>/dev/null; then
@@ -403,6 +468,128 @@ cmd_build() {
 }
 
 # ===========================================================================
+# Engine
+# ===========================================================================
+
+cmd_engine() {
+  local subcmd="${1:-}"
+  case "$subcmd" in
+    build)
+      shift
+      local build_script="$SCRIPT_DIR/RecoilEngine/docker-build-v2/build.sh"
+      if [ ! -f "$build_script" ]; then
+        err "RecoilEngine not found. Clone it first: ./devtools.sh clone extra"
+        exit 1
+      fi
+      exec "$build_script" "$@"
+      ;;
+    *)
+      err "Usage: ./devtools.sh engine build [args...]"
+      echo ""
+      echo "  Wraps RecoilEngine/docker-build-v2/build.sh with full flag pass-through."
+      echo ""
+      echo "  Examples:"
+      echo "    ./devtools.sh engine build linux"
+      echo "    ./devtools.sh engine build linux -DCMAKE_BUILD_TYPE=Release"
+      echo "    ./devtools.sh engine build linux -DCMAKE_BUILD_TYPE=Release -DTRACY_ENABLE=ON"
+      echo "    ./devtools.sh engine build --help"
+      exit 1
+      ;;
+  esac
+}
+
+# ===========================================================================
+# Game directory linking
+# ===========================================================================
+
+cmd_link() {
+  local target="${1:-}"
+  local game_dir
+  game_dir="$(detect_game_dir 2>/dev/null)" || true
+
+  if [ -z "$target" ]; then
+    echo -e "${BOLD}=== Symlink Status ===${NC}"
+    echo ""
+    if [ -z "$game_dir" ]; then
+      warn "Game directory not found. Set BAR_GAME_DIR env var or install BAR to the default location."
+      echo ""
+      return 0
+    fi
+    info "Game directory: ${game_dir}"
+    echo ""
+
+    local -A link_map=(
+      [engine]="$game_dir/engine/local-build"
+      [chobby]="$game_dir/games/BYAR-Chobby"
+      [bar]="$game_dir/games/Beyond-All-Reason"
+    )
+    for name in engine chobby bar; do
+      local link_path="${link_map[$name]}"
+      if [ -L "$link_path" ]; then
+        local link_target
+        link_target="$(readlink -f "$link_path" 2>/dev/null || echo "?")"
+        printf "  %-10s ${GREEN}linked${NC} -> %s\n" "$name" "$link_target"
+      elif [ -e "$link_path" ]; then
+        printf "  %-10s ${YELLOW}exists (not a symlink)${NC} at %s\n" "$name" "$link_path"
+      else
+        printf "  %-10s ${DIM}not linked${NC}\n" "$name"
+      fi
+    done
+    echo ""
+    return 0
+  fi
+
+  if [ -z "$game_dir" ]; then
+    err "Game directory not found. Set BAR_GAME_DIR env var or install BAR to the default location."
+    exit 1
+  fi
+
+  local source_path link_path
+  case "$target" in
+    engine)
+      source_path="$SCRIPT_DIR/RecoilEngine/build-linux/install"
+      link_path="$game_dir/engine/local-build"
+      ;;
+    chobby)
+      source_path="$SCRIPT_DIR/BYAR-Chobby"
+      link_path="$game_dir/games/BYAR-Chobby"
+      ;;
+    bar)
+      source_path="$SCRIPT_DIR/Beyond-All-Reason"
+      link_path="$game_dir/games/Beyond-All-Reason"
+      ;;
+    *)
+      err "Unknown link target: $target"
+      echo "  Valid targets: engine, chobby, bar"
+      exit 1
+      ;;
+  esac
+
+  if [ ! -e "$source_path" ] && [ ! -L "$source_path" ]; then
+    err "Source not found: $source_path"
+    if [ "$target" = "engine" ]; then
+      echo "  Build the engine first: ./devtools.sh engine build linux"
+    else
+      echo "  Clone the repo first: ./devtools.sh clone extra"
+    fi
+    exit 1
+  fi
+
+  if [ -L "$link_path" ]; then
+    info "Replacing existing symlink at $link_path"
+    rm "$link_path"
+  elif [ -e "$link_path" ]; then
+    warn "$link_path already exists and is not a symlink. Skipping."
+    warn "Remove it manually if you want to replace it."
+    return 1
+  fi
+
+  mkdir -p "$(dirname "$link_path")"
+  ln -s "$source_path" "$link_path"
+  ok "Linked $target: $link_path -> $source_path"
+}
+
+# ===========================================================================
 # Main commands
 # ===========================================================================
 
@@ -412,7 +599,7 @@ cmd_init() {
   echo -e "${BOLD}==========================================${NC}"
   echo ""
 
-  step "1/4  Checking & installing dependencies"
+  step "1/5  Checking & installing dependencies"
   echo ""
   local deps_ok=0
   if check_git &>/dev/null && check_docker &>/dev/null; then
@@ -425,7 +612,7 @@ cmd_init() {
   fi
   echo ""
 
-  step "2/4  Cloning repositories"
+  step "2/5  Cloning repositories"
   echo ""
   if [ ! -f "$REPOS_CONF" ]; then
     err "repos.conf not found at: $REPOS_CONF"
@@ -434,19 +621,78 @@ cmd_init() {
   cmd_clone core
   echo ""
 
-  read -rp "Also clone extra repositories (game, SPADS source, infra)? [y/N] " extras
+  read -rp "Also clone extra repositories (game engine, SPADS source, infra)? [y/N] " extras
   if [[ "$extras" =~ ^[Yy]$ ]]; then
     cmd_clone extra
     echo ""
   fi
 
-  step "3/4  Building Docker images"
+  step "3/5  Building Docker images"
   echo ""
   cmd_build
   echo ""
 
-  step "4/4  Done!"
+  local do_build_engine=0
+  if [ -d "$SCRIPT_DIR/RecoilEngine/docker-build-v2" ]; then
+    step "4/5  Engine build"
+    echo ""
+    read -rp "Build engine from source? [y/N] " build_engine
+    if [[ "$build_engine" =~ ^[Yy]$ ]]; then
+      do_build_engine=1
+      info "Building Recoil engine (this may take a while)..."
+      "$SCRIPT_DIR/RecoilEngine/docker-build-v2/build.sh" linux
+    fi
+    echo ""
+  else
+    step "4/5  Engine build"
+    echo ""
+    info "RecoilEngine not cloned -- skipping. Clone with: ./devtools.sh clone extra"
+    echo ""
+  fi
+
+  step "5/5  Symlinks to game directory"
   echo ""
+  local game_dir
+  game_dir="$(detect_game_dir 2>/dev/null)" || true
+  if [ -z "$game_dir" ]; then
+    info "No game directory detected. Set BAR_GAME_DIR to enable linking."
+    echo ""
+  else
+    local available=()
+    if [ -d "$SCRIPT_DIR/RecoilEngine" ]; then
+      available+=("engine")
+    fi
+    if [ -d "$SCRIPT_DIR/BYAR-Chobby" ]; then
+      available+=("chobby")
+    fi
+    if [ -d "$SCRIPT_DIR/Beyond-All-Reason" ]; then
+      available+=("bar")
+    fi
+
+    if [ "${#available[@]}" -gt 0 ]; then
+      echo "  Available repos to symlink into $game_dir:"
+      for name in "${available[@]}"; do
+        case "$name" in
+          engine) echo -e "    ${BOLD}engine${NC}  -> $game_dir/engine/local-build/" ;;
+          chobby) echo -e "    ${BOLD}chobby${NC}  -> $game_dir/games/BYAR-Chobby/" ;;
+          bar)    echo -e "    ${BOLD}bar${NC}     -> $game_dir/games/Beyond-All-Reason/" ;;
+        esac
+      done
+      echo ""
+      warn "This will replace any existing directories at these paths with symlinks."
+      read -rp "Symlink all? [y/N] " do_link
+      if [[ "$do_link" =~ ^[Yy]$ ]]; then
+        BAR_GAME_DIR="$game_dir"
+        for name in "${available[@]}"; do
+          cmd_link "$name"
+        done
+      fi
+    else
+      info "No linkable repos cloned yet."
+    fi
+  fi
+  echo ""
+
   echo -e "${BOLD}=== Setup Complete ===${NC}"
   echo ""
   echo "  Your workspace is ready. Next steps:"
@@ -454,6 +700,8 @@ cmd_init() {
   echo -e "    ${BOLD}./devtools.sh up${NC}             Start Teiserver + PostgreSQL"
   echo -e "    ${BOLD}./devtools.sh up lobby${NC}       ...and launch bar-lobby"
   echo -e "    ${BOLD}./devtools.sh up spads${NC}       ...and start SPADS autohost"
+  echo -e "    ${BOLD}./devtools.sh engine build${NC}   Build the Recoil engine"
+  echo -e "    ${BOLD}./devtools.sh link${NC}           Show symlink status"
   echo -e "    ${BOLD}./devtools.sh repos${NC}          Show repository status"
   echo ""
   echo "  To use your own forks, copy repos.conf to repos.local.conf"
@@ -680,6 +928,13 @@ show_help() {
   echo "  reset            Destroy all data and rebuild from scratch"
   echo "  shell [svc]      Open a shell in a container (default: teiserver)"
   echo ""
+  echo -e "${BOLD}Engine:${NC}"
+  echo "  engine build [args]   Build Recoil engine via docker-build-v2"
+  echo ""
+  echo -e "${BOLD}Game Directory:${NC}"
+  echo "  link [target]    Symlink repos into game directory (engine, chobby, bar)"
+  echo "                   With no target, shows status of all links"
+  echo ""
   echo -e "${BOLD}Repositories:${NC}"
   echo "  clone [group]    Clone/update repos (group: core, extra, or all)"
   echo "  repos            Show status of all configured repositories"
@@ -690,6 +945,9 @@ show_help() {
   echo "  ./devtools.sh up                 # Start postgres + teiserver"
   echo "  ./devtools.sh up lobby           # Start stack + bar-lobby"
   echo "  ./devtools.sh up spads lobby     # Start everything"
+  echo "  ./devtools.sh engine build linux # Build engine for linux"
+  echo "  ./devtools.sh link               # Show symlink status"
+  echo "  ./devtools.sh link engine        # Symlink engine to game dir"
   echo "  ./devtools.sh repos              # Check repo status"
   echo "  ./devtools.sh clone extra        # Clone optional repos"
   echo "  ./devtools.sh logs teiserver     # Follow Teiserver logs"
@@ -697,13 +955,14 @@ show_help() {
   echo -e "${BOLD}Configuration:${NC}"
   echo "  repos.conf         Default repository URLs and branches"
   echo "  repos.local.conf   Personal overrides (forks, branches) -- gitignored"
+  echo "  BAR_GAME_DIR       Env var: path to BAR game data directory (auto-detected if unset)"
   echo ""
   echo "  To use your own fork of teiserver:"
   echo "    cp repos.conf repos.local.conf"
   echo "    # Edit repos.local.conf: change teiserver URL to your fork"
   echo "    ./devtools.sh clone core"
   echo ""
-  echo -e "${BOLD}Services:${NC}"
+  echo -e "${BOLD}Docker Services:${NC}"
   echo "  postgres    PostgreSQL 16 database"
   echo "  teiserver   Elixir lobby server (HTTP :4000, Spring :8200/:8201)"
   echo "  spads       Perl autohost (optional, needs game data)"
@@ -730,6 +989,8 @@ case "${1:-help}" in
   repos)        cmd_repos ;;
   update)       cmd_update ;;
   build)        cmd_build ;;
+  engine)       shift; cmd_engine "$@" ;;
+  link)         cmd_link "${2:-}" ;;
   help|--help|-h) show_help ;;
   *)            err "Unknown command: $1"; echo ""; show_help; exit 1 ;;
 esac
