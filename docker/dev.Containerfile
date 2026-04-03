@@ -8,7 +8,12 @@ RUN dnf install -y --setopt=install_weak_deps=False \
         nodejs npm \
         rust cargo \
         clang-tools-extra cmake \
+        just \
         gcc gcc-c++ make git curl jq unzip binutils \
+        SDL2-devel DevIL-devel glew-devel openal-soft-devel \
+        libvorbis-devel freetype-devel fontconfig-devel \
+        libunwind-devel libcurl-devel jsoncpp-devel minizip-devel \
+        expat-devel libXcursor-devel p7zip \
     && dnf clean all \
     && ln -s /usr/bin/lua-5.1 /usr/local/bin/lua
 
@@ -35,5 +40,13 @@ RUN ARCH=$(uname -m) \
     && unzip -o /tmp/stylua.zip -d /usr/local/bin \
     && chmod +x /usr/local/bin/stylua \
     && rm /tmp/stylua.zip
+
+ARG EMMYLUA_VERSION=latest
+RUN ARCH=$(uname -m) \
+    && case "$ARCH" in x86_64) PLAT=linux-x64;; aarch64) PLAT=linux-arm64;; esac \
+    && URL=$(curl -fsSL "https://api.github.com/repos/EmmyLuaLs/emmylua-analyzer-rust/releases/${EMMYLUA_VERSION}" \
+       | jq -r --arg plat "emmylua_ls-${PLAT}.tar.gz" '.assets[] | select(.name == $plat) | .browser_download_url') \
+    && curl -fsSL "$URL" | tar xz -C /usr/local/bin \
+    && chmod +x /usr/local/bin/emmylua_ls
 
 LABEL com.github.containers.toolbox="true"

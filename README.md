@@ -7,10 +7,20 @@ Everything server-side runs in Docker. The game client runs natively.
 ## Quick Start
 
 ```bash
+# Install just
+pacman -S just        # Arch
+dnf install just      # Fedora
+apt install just      # Debian/Ubuntu
+```
+
+```bash
+# Run setup
 git clone https://github.com/thvl3/BAR-Devtools.git
 cd BAR-Devtools
 just setup::init
 just services::up
+# recommended
+just setup::editor    # export clangd + generate compile_commands.json
 ```
 
 `setup::init` walks you through installing dependencies, cloning repositories, and building Docker images. You only need to run it once.
@@ -37,13 +47,6 @@ Once running:
 - **[just](https://github.com/casey/just)** -- command runner
 - **[distrobox](https://distrobox.it/)** (recommended) -- dev toolchain container
 
-```bash
-# Install just
-pacman -S just        # Arch
-dnf install just      # Fedora
-apt install just      # Debian/Ubuntu
-```
-
 `just setup::deps` will detect your distro and install what's missing (except `just` itself).
 
 ### Dev environment (distrobox)
@@ -52,7 +55,7 @@ All dev tools (Lua 5.1, [Lux](https://github.com/lumen-oss/lux), Node.js, Cargo,
 
 Running `just setup::init` will offer to build the image and create a distrobox for you. Recipes that need these tools (`bar::lint`, `bar::fmt`, `bar::units`, `lua::library`, etc.) automatically enter the distrobox when `DEVTOOLS_DISTROBOX` is set in `.env`.
 
-To set up the distrobox standalone:
+To set up a new distrobox standalone:
 
 ```bash
 just setup::distrobox
@@ -60,16 +63,39 @@ just setup::distrobox
 
 ### Editor integration (VS Code / Cursor)
 
-Language servers like clangd are installed inside the distrobox. To make your editor use them, export the binaries to your host PATH with `distrobox-export`:
+Language servers and formatters live inside the distrobox. One command exports them to your host and generates `compile_commands.json` for engine C++ support:
 
 ```bash
-distrobox enter bar-dev
-
-# Inside the distrobox:
-distrobox-export --bin /usr/bin/clangd --export-path ~/.local/bin
+just setup::editor
 ```
 
-This creates thin wrapper scripts in `~/.local/bin` that transparently enter the distrobox when called. Your editor finds them on PATH and everything works as if they were installed natively.
+This exports `emmylua_ls`, `clangd`, and `stylua` as wrapper scripts in `~/.local/bin` (via `distrobox-export`), and runs `cmake` against RecoilEngine to produce `compile_commands.json` for clangd. Your editor finds the wrappers on PATH and everything works as if installed natively.
+
+### Git hooks
+
+Install a pre-commit hook that runs `stylua` (formatting) and `luacheck` (linting) on every commit:
+
+```bash
+just setup::hooks
+```
+
+**Recommended extensions:**
+
+* [EmmyLua](https://marketplace.visualstudio.com/items?itemName=tangzx.emmylua) (Lua language server -- Cursor users: install from VSIX, the marketplace version is outdated)
+* [StyLua](https://marketplace.visualstudio.com/items?itemName=JohnnyMorganz.stylua) (Lua formatter)
+* [clangd](https://marketplace.visualstudio.com/items?itemName=llvm-vs-code-extensions.vscode-clangd) (C/C++ for engine work)
+
+**Settings** (JSON):
+
+```json
+{
+  "emmylua.ls.executablePath": "~/.local/bin/emmylua_ls",
+  "[lua]": {
+    "editor.defaultFormatter": "JohnnyMorganz.stylua",
+    "editor.formatOnSave": true
+  }
+}
+```
 
 #### VS Code Test Switcher (optional)
 
@@ -117,7 +143,9 @@ Run `just` with no arguments for the full recipe list.
 just bar::fmt           # format with stylua
 just bar::lint          # lint with luacheck
 just bar::units         # run busted unit tests
-just bar::test-shell    # interactive busted shell, run `busted -t focus` to test specs tagged #focus
+just bar::test-shell    # interactive busted shell,
+                        #   run `busted -t focus` to test specs tagged "#focus"
+                        #   for example: `it "should do something #focus", function()`
 ```
 
 ### Engine development
@@ -141,6 +169,7 @@ just services::up               # start PostgreSQL + Teiserver
 just services::up lobby spads   # ...with bar-lobby and SPADS
 just services::down             # stop everything
 just services::logs teiserver   # tail logs
+just tei::mix                   # run teiserver mix tests
 ```
 
 ## Using Your Own Forks
@@ -171,7 +200,7 @@ just repos::clone core
 You can also point a repo entry at a local directory instead of cloning. Add a fifth column with the path:
 
 ```
-lua-doc-extractor  https://github.com/rhys-vdw/lua-doc-extractor.git  main  extra  ~/code/lua-doc-extractor
+lua-doc-extractor  https://github.com/rhys-vdw/lua-doc-extractor.git  your-branch  extra  ~/code/lua-doc-extractor
 ```
 
 This creates a symlink instead of cloning.

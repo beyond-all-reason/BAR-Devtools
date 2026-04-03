@@ -78,6 +78,18 @@ services:
       - spads_cache:/opt/spads/var
       - spring_engines:/spring-engines
 
+  recoil-docs:
+    build:
+      context: ./RecoilEngine/doc/site
+      dockerfile: ../../../docker/recoil-docs.Dockerfile
+    platform: linux/amd64
+    profiles: ["docs"]
+    volumes:
+      - ./RecoilEngine:/recoil:z
+    working_dir: /recoil/doc/site
+    ports:
+      - "1313:1313"
+
 volumes:
   pgdata:
   devtools_state:
