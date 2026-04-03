@@ -21,6 +21,7 @@ just setup::init
 just services::up
 # recommended
 just setup::editor    # export clangd + generate compile_commands.json
+just setup::hooks     # install formatting git hooks
 ```
 
 `setup::init` walks you through installing dependencies, cloning repositories, and building Docker images. You only need to run it once.

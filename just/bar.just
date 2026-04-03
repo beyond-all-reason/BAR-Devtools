@@ -5,6 +5,8 @@ COMPOSE_FILE        := DEVTOOLS_DIR / "docker-compose.dev.yml"
 COMPOSE             := "docker compose -f " + COMPOSE_FILE
 BAR_DIR             := DEVTOOLS_DIR / "Beyond-All-Reason"
 INTEGRATION_COMPOSE := "docker compose -f " + BAR_DIR / "tools" / "headless_testing" / "docker-compose.yml"
+CODEMOD_DIR         := DEVTOOLS_DIR / "bar-lua-codemod"
+CODEMOD_BIN         := CODEMOD_DIR / "target" / "release" / "bar-lua-codemod"
 LUALS_VERSION       := "3.17.1"
 LUALS_DIR           := DEVTOOLS_DIR / ".devtools" / "lua-language-server"
 LUALS_BIN           := LUALS_DIR / "bin" / "lua-language-server"
@@ -95,6 +97,61 @@ integrations *args: require-bar
 
 # Run all BAR tests (unit + integrations)
 test: units integrations
+
+# Build bar-lua-codemod binary
+codemod-build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    step "Building bar-lua-codemod..."
+    bash "$DEVTOOLS_DIR/scripts/codemod-cargo.sh" build --release
+    ok "Built: {{CODEMOD_BIN}}"
+
+# Run bar-lua-codemod unit tests
+codemod-test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    step "Testing bar-lua-codemod..."
+    bash "$DEVTOOLS_DIR/scripts/codemod-cargo.sh" test
+    ok "All tests passed"
+
+[private]
+require-codemod:
+    #!/usr/bin/env bash
+    [ -x "{{CODEMOD_BIN}}" ] && exit 0
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    step "bar-lua-codemod not found, building..."
+    bash "$DEVTOOLS_DIR/scripts/codemod-cargo.sh" build --release
+    ok "Built bar-lua-codemod"
+
+# Run codemod transforms + stylua (contributors run after rebasing)
+fmt-mig: require-bar require-codemod
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    enter_distrobox
+    step "bracket-to-dot transform..."
+    "{{CODEMOD_BIN}}" bracket-to-dot --path "$BAR_DIR" --exclude common/luaUtilities
+    step "rename-aliases transform..."
+    "{{CODEMOD_BIN}}" rename-aliases --path "$BAR_DIR" --exclude common/luaUtilities
+    step "detach-bar-modules transform..."
+    "{{CODEMOD_BIN}}" detach-bar-modules --path "$BAR_DIR" --exclude common/luaUtilities
+    step "spring-split transform..."
+    "{{CODEMOD_BIN}}" spring-split --path "$BAR_DIR" --library "$BAR_DIR/recoil-lua-library/src" --exclude common/luaUtilities
+    step "stylua..."
+    (cd "$BAR_DIR" && lx --lua-version 5.1 exec stylua .)
+    ok "fmt-mig complete"
+
+[private]
+require-library:
+    just lua::library
+    just lua::link
+
+# Regenerate fmt, mig-*, and mig branches from origin/master
+fmt-mig-generate *args: require-bar require-codemod require-library
+    bash "$DEVTOOLS_DIR/scripts/generate-branches.sh" {{args}}
 
 # Install git pre-commit hook in the BAR repo
 setup-hooks:
