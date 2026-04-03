@@ -30,100 +30,118 @@ Once running:
 
 ## Requirements
 
-- **Linux** (Arch, Debian/Ubuntu, or Fedora)
-- **Docker** with Compose V2
+- **Linux** (Arch, Debian/Ubuntu, Fedora) -- or **Windows** via WSL2 (see below)
+- **Docker** or **Podman** with Compose V2
 - **Git**
+- **Bash 5+**
 - **[just](https://github.com/casey/just)** -- command runner
+- **[distrobox](https://distrobox.it/)** (recommended) -- dev toolchain container
 
 ```bash
 # Install just
 pacman -S just        # Arch
 dnf install just      # Fedora
 apt install just      # Debian/Ubuntu
-brew install just     # Homebrew
 ```
-
-Optional:
-
-- **Node.js** (only needed if running bar-lobby)
 
 `just setup::deps` will detect your distro and install what's missing (except `just` itself).
 
-## Commands
+### Dev environment (distrobox)
 
-Run `just` with no arguments to list everything:
+All dev tools (Lua 5.1, [Lux](https://github.com/lumen-oss/lux), Node.js, Cargo, clangd, StyLua) are defined in [`docker/dev.Containerfile`](docker/dev.Containerfile). This file is the canonical manifest of system dependencies.
 
+Running `just setup::init` will offer to build the image and create a distrobox for you. Recipes that need these tools (`bar::lint`, `bar::fmt`, `bar::units`, `lua::library`, etc.) automatically enter the distrobox when `DEVTOOLS_DISTROBOX` is set in `.env`.
+
+To set up the distrobox standalone:
+
+```bash
+just setup::distrobox
 ```
-$ just
-Available recipes:
-    ...
+
+### Editor integration (VS Code / Cursor)
+
+Language servers like clangd are installed inside the distrobox. To make your editor use them, export the binaries to your host PATH with `distrobox-export`:
+
+```bash
+distrobox enter bar-dev
+
+# Inside the distrobox:
+distrobox-export --bin /usr/bin/clangd --export-path ~/.local/bin
 ```
 
-### Setup
+This creates thin wrapper scripts in `~/.local/bin` that transparently enter the distrobox when called. Your editor finds them on PATH and everything works as if they were installed natively.
 
-| Recipe | Description |
-|--------|-------------|
-| `just setup::init` | Full first-time setup: install deps, clone repos, build images |
-| `just setup::deps` | Install system packages (docker, git, nodejs) |
-| `just setup::check` | Check prerequisites and build Docker images |
+#### VS Code Test Switcher (optional)
 
-### Services
+The [test-switcher](https://marketplace.visualstudio.com/items?itemName=bmalehorn.test-switcher) plugin lets you jump between BAR test and source files with `Cmd+Shift+Y` / `Ctrl+Shift+Y`. Add this to your User Settings (JSON):
 
-| Recipe | Description |
-|--------|-------------|
-| `just services::up [lobby] [spads]` | Start services (options are additive) |
-| `just services::down` | Stop all services |
-| `just services::status` | Show running containers |
-| `just services::logs [service]` | Tail logs (postgres, teiserver, spads, or all) |
-| `just services::lobby` | Start bar-lobby dev server standalone |
-| `just services::shell [service]` | Shell into a container (default: teiserver) |
-| `just services::build` | Build Docker images |
-| `just services::reset` | Destroy all data and rebuild from scratch |
+```json
+"test-switcher.rules": [
+    {
+        "pattern": "spec/(.*)_spec\\.lua",
+        "replacement": "$1.lua"
+    },
+    {
+        "pattern": "spec/builder_specs/(.*)_spec\\.lua",
+        "replacement": "spec/builders/$1.lua"
+    },
+    {
+        "pattern": "spec/builders/(.*)\\.lua",
+        "replacement": "spec/builder_specs/$1_spec.lua"
+    },
+    {
+        "pattern": "(luarules|common|luaui|gamedata)/(.*)\\.lua",
+        "replacement": "spec/$1/$2_spec.lua"
+    }
+]
+```
 
-### Repositories
+### Windows (WSL2)
 
-| Recipe | Description |
-|--------|-------------|
-| `just repos::clone [group]` | Clone/update repos. Groups: `core`, `extra`, `all` |
-| `just repos::status` | Show status of all configured repositories |
-| `just repos::update` | Pull latest on all cloned repos (fast-forward only) |
+Install [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install), then inside your WSL distro install podman and follow the Linux instructions above:
 
-### Engine
+```bash
+# Inside WSL (Ubuntu)
+sudo apt install -y podman distrobox
+```
 
-| Recipe | Description |
-|--------|-------------|
-| `just engine::build <platform> [cmake-args]` | Build Recoil engine via docker-build-v2 |
+Everything -- services, testing, formatting, engine IDE integration -- works unchanged inside WSL2. The `dev.Containerfile` documents every dependency; if you prefer native Windows (MSYS2/mingw), use it as a reference.
 
-### Game Directory
+## Common Workflows
 
-| Recipe | Description |
-|--------|-------------|
-| `just link::status` | Show symlink status |
-| `just link::create <target>` | Symlink a repo into the game directory (engine, chobby, bar) |
+Run `just` with no arguments for the full recipe list.
 
-### Lua Tooling
+### Lua development (widgets, gadgets, AI)
 
-| Recipe | Description |
-|--------|-------------|
-| `just lua::build-lde` | Build lua-doc-extractor from local checkout |
-| `just lua::library` | Extract Lua docs from RecoilEngine, copy into BAR submodule |
-| `just lua::library-reload` | Generate library then restart LuaLS |
+```bash
+just bar::fmt           # format with stylua
+just bar::lint          # lint with luacheck
+just bar::units         # run busted unit tests
+just bar::test-shell    # interactive busted shell, run `busted -t focus` to test specs tagged #focus
+```
+
+### Engine development
+
+```bash
+just engine::build linux        # build Recoil via docker-build-v2
+just link::create engine        # symlink into game directory
+```
 
 ### Documentation
 
-| Recipe | Description |
-|--------|-------------|
-| `just docs::generate` | Generate Lua API doc pages |
-| `just docs::server` | Generate + start Hugo dev server |
-| `just docs::server-only` | Start Hugo dev server without regenerating |
+```bash
+just docs::server       # generate + serve recoil docs locally
+just lua::library       # regenerate lua library from engine sources
+```
 
-### Testing
+### Services (Teiserver, SPADS)
 
-| Recipe | Description |
-|--------|-------------|
-| `just test::all` | Run all BAR tests (units + integrations) |
-| `just test::units` | Run busted unit tests in the BAR container |
-| `just test::integrations` | Run integration tests |
+```bash
+just services::up               # start PostgreSQL + Teiserver
+just services::up lobby spads   # ...with bar-lobby and SPADS
+just services::down             # stop everything
+just services::logs teiserver   # tail logs
+```
 
 ## Using Your Own Forks
 
@@ -197,7 +215,7 @@ BAR-Devtools/
 │   ├── teiserver.dev.Dockerfile     # Teiserver dev image (Elixir + Phoenix)
 │   ├── teiserver-entrypoint.sh      # DB init, seeding, migrations
 │   ├── teiserver.dockerignore       # Build context optimization
-│   ├── bar.Dockerfile               # BAR test environment (Lua 5.1 + lux)
+│   ├── dev.Containerfile             # Distrobox dev environment (Lua 5.1, lux, node, cargo, clangd)
 │   ├── setup-spads-bot.exs          # Creates SPADS bot account in Teiserver
 │   ├── spads-dev-entrypoint.sh      # SPADS startup + game data download
 │   └── spads_dev.conf               # Simplified SPADS config for dev
@@ -218,7 +236,7 @@ BAR-Devtools/
   - Creates a `spadsbot` account with Bot/Moderator roles
 - **SPADS** (optional, `services::up spads`) -- Perl autohost using `badosu/spads:latest`. Downloads game data via `pr-downloader` on first run. Connects to Teiserver via Spring protocol on port 8200.
 - **bar-lobby** -- Electron/Vue.js game client, runs natively on the host (not in Docker)
-- **BAR test runner** (`test` profile) -- Ubuntu container with Lua 5.1 and [lux](https://github.com/lumen-oss/lux) for running busted unit tests against the Beyond-All-Reason codebase
+- **Distrobox dev environment** (`just setup::distrobox`) -- Fedora container with Lua 5.1, [lux](https://github.com/lumen-oss/lux), Node.js, Cargo, clangd, and StyLua for running tests, linting, formatting, and doc generation against the BAR codebase. See [`docker/dev.Containerfile`](docker/dev.Containerfile) for the full dependency manifest.
 
 ### Ports
 
