@@ -32,15 +32,15 @@ pkg_name() {
     arch:docker)           echo "docker" ;;
     arch:docker-compose)   echo "docker-compose" ;;
     arch:git)              echo "git" ;;
-    arch:nodejs)           echo "nodejs npm" ;;
+    arch:distrobox)        echo "distrobox" ;;
     debian:docker)         echo "docker.io" ;;
     debian:docker-compose) echo "docker-compose-plugin" ;;
     debian:git)            echo "git" ;;
-    debian:nodejs)         echo "nodejs npm" ;;
+    debian:distrobox)      echo "distrobox" ;;
     fedora:docker)         echo "docker-ce docker-ce-cli containerd.io" ;;
     fedora:docker-compose) echo "docker-compose-plugin" ;;
     fedora:git)            echo "git" ;;
-    fedora:nodejs)         echo "nodejs npm" ;;
+    fedora:distrobox)      echo "distrobox" ;;
     *)                     echo "$generic" ;;
   esac
 }
@@ -74,12 +74,13 @@ check_docker() {
   ok "Docker $(docker --version | awk '{print $3}' | tr -d ',') + Compose V2 detected"
 }
 
-check_node() {
-  if ! command -v node &>/dev/null; then
-    warn "Node.js not found (needed for bar-lobby only)."
+check_distrobox() {
+  if ! command -v distrobox &>/dev/null; then
+    warn "distrobox not found. Install it for the recommended dev environment."
+    warn "See: https://distrobox.it/#installation"
     return 1
   fi
-  ok "Node.js $(node --version) detected"
+  ok "distrobox $(distrobox version 2>/dev/null | head -1) detected"
 }
 
 check_ports() {
@@ -103,9 +104,9 @@ check_prerequisites() {
   echo -e "${BOLD}Checking prerequisites...${NC}"
   echo ""
   local failed=0
-  check_git    || failed=1
-  check_docker || failed=1
-  check_node   || true
+  check_git       || failed=1
+  check_docker    || failed=1
+  check_distrobox || true
   check_ports
   echo ""
   if [ "$failed" -ne 0 ]; then
@@ -133,7 +134,8 @@ cmd_install_deps() {
   install_cmd="$(pkg_install_cmd)"
 
   if [ "$distro" = "unknown" ] || [ -z "$install_cmd" ]; then
-    err "Unsupported distro. Install these manually: git, docker, docker-compose, nodejs, npm"
+    err "Unsupported distro. Install these manually: git, docker, docker-compose, distrobox"
+    info "See docker/dev.Containerfile for the full list of dev tool dependencies."
     exit 1
   fi
 
@@ -151,8 +153,8 @@ cmd_install_deps() {
   if ! docker compose version &>/dev/null 2>&1; then
     missing+=("docker-compose")
   fi
-  if ! command -v node &>/dev/null; then
-    missing+=("nodejs")
+  if ! command -v distrobox &>/dev/null; then
+    missing+=("distrobox")
   fi
 
   if [ "${#missing[@]}" -eq 0 ]; then
@@ -205,26 +207,106 @@ cmd_install_deps() {
   ok "Dependencies installed successfully."
 }
 
+DEV_IMAGE="bar-dev"
+DEV_BOX="bar-dev"
+
+cmd_setup_distrobox() {
+  echo -e "${BOLD}=== Distrobox Dev Environment ===${NC}"
+  echo ""
+
+  if ! command -v distrobox &>/dev/null; then
+    err "distrobox is not installed. Run 'just setup::deps' first."
+    exit 1
+  fi
+
+  local runtime="podman"
+  command -v podman &>/dev/null || runtime="docker"
+
+  step "Building dev container image ($DEV_IMAGE)..."
+  $runtime build -t "$DEV_IMAGE" -f "$DEVTOOLS_DIR/docker/dev.Containerfile" "$DEVTOOLS_DIR"
+  ok "Image built: $DEV_IMAGE"
+  echo ""
+
+  if distrobox list 2>/dev/null | grep -q "$DEV_BOX"; then
+    warn "Distrobox '$DEV_BOX' already exists. Recreating..."
+    distrobox rm -f "$DEV_BOX"
+  fi
+
+  step "Creating distrobox '$DEV_BOX'..."
+  distrobox create --name "$DEV_BOX" --image "localhost/$DEV_IMAGE" --yes
+  ok "Distrobox created: $DEV_BOX"
+  echo ""
+
+  step "Running first-entry setup (lux lua tree)..."
+  distrobox enter "$DEV_BOX" -- bash -c '
+    lx install-lua 2>/dev/null
+    LUA_BIN=$(command -v lua-5.1 2>/dev/null || command -v lua5.1 2>/dev/null)
+    if [ -n "$LUA_BIN" ]; then
+      LUX_LUA="$HOME/.local/share/lux/tree/5.1/.lua/bin/lua"
+      mkdir -p "$(dirname "$LUX_LUA")"
+      ln -sf "$LUA_BIN" "$LUX_LUA"
+    fi
+  '
+  ok "Lux lua tree configured"
+  echo ""
+
+  local env_file="$DEVTOOLS_DIR/.env"
+  if grep -q "^DEVTOOLS_DISTROBOX=" "$env_file" 2>/dev/null; then
+    info "DEVTOOLS_DISTROBOX already set in .env"
+  else
+    echo "DEVTOOLS_DISTROBOX=$DEV_BOX" >> "$env_file"
+    ok "Added DEVTOOLS_DISTROBOX=$DEV_BOX to .env"
+  fi
+
+  echo ""
+  ok "Distrobox dev environment ready."
+  echo ""
+  echo "  Recipes that need lux/node/cargo will now run inside '$DEV_BOX' automatically."
+  echo "  To enter the box manually:  distrobox enter $DEV_BOX"
+  echo "  To rebuild after changes:   just setup::distrobox"
+}
+
 cmd_init() {
+  local clone_extras=0
+  for arg in "$@"; do
+    case "$arg" in
+      extras|all) clone_extras=1 ;;
+    esac
+  done
+
   echo -e "${BOLD}==========================================${NC}"
   echo -e "${BOLD}  BAR Dev Environment - First Time Setup${NC}"
   echo -e "${BOLD}==========================================${NC}"
   echo ""
 
-  step "1/5  Checking & installing dependencies"
+  step "1/6  Checking & installing dependencies"
   echo ""
   local deps_ok=0
   if check_git &>/dev/null && check_docker &>/dev/null; then
     deps_ok=1
     ok "Core dependencies (git, docker) already installed."
-    check_node || true
   else
     cmd_install_deps || { err "Dependency installation failed. Fix and retry."; exit 1; }
     deps_ok=1
   fi
   echo ""
 
-  step "2/5  Cloning repositories"
+  step "2/6  Dev environment (distrobox)"
+  echo ""
+  if [ -n "${DEVTOOLS_DISTROBOX:-}" ]; then
+    ok "Distrobox already configured: $DEVTOOLS_DISTROBOX"
+  elif command -v distrobox &>/dev/null; then
+    read -rp "Set up a distrobox dev environment? (recommended) [Y/n] " setup_box
+    if [[ ! "$setup_box" =~ ^[Nn]$ ]]; then
+      cmd_setup_distrobox
+    fi
+  else
+    info "distrobox not installed -- skipping dev environment setup."
+    info "Install distrobox and run 'just setup::distrobox' later for the full toolchain."
+  fi
+  echo ""
+
+  step "3/6  Cloning repositories"
   echo ""
   if [ ! -f "$REPOS_CONF" ]; then
     err "repos.conf not found at: $REPOS_CONF"
@@ -233,13 +315,18 @@ cmd_init() {
   cmd_clone core
   echo ""
 
-  read -rp "Also clone extra repositories (game engine, SPADS source, infra)? [y/N] " extras
-  if [[ "$extras" =~ ^[Yy]$ ]]; then
+  if [ "$clone_extras" -eq 1 ]; then
     cmd_clone extra
     echo ""
+  else
+    read -rp "Also clone extra repositories (game engine, SPADS source, infra)? [y/N] " extras
+    if [[ "$extras" =~ ^[Yy]$ ]]; then
+      cmd_clone extra
+      echo ""
+    fi
   fi
 
-  step "3/5  Building Docker images"
+  step "4/6  Building Docker images"
   echo ""
   install_dockerignore
   info "Building Docker images..."
@@ -249,22 +336,28 @@ cmd_init() {
   echo ""
 
   if [ -d "$DEVTOOLS_DIR/RecoilEngine/docker-build-v2" ]; then
-    step "4/5  Engine build"
+    step "5/6  Engine build"
     echo ""
     read -rp "Build engine from source? [y/N] " build_engine
     if [[ "$build_engine" =~ ^[Yy]$ ]]; then
-      info "Building Recoil engine (this may take a while)..."
-      "$DEVTOOLS_DIR/RecoilEngine/docker-build-v2/build.sh" linux
+      local engine_arch
+      case "$(uname -m)" in
+        x86_64)       engine_arch="amd64" ;;
+        aarch64|arm64) engine_arch="arm64" ;;
+        *)            engine_arch="amd64" ;;
+      esac
+      info "Building Recoil engine (${engine_arch}-linux, this may take a while)..."
+      bash "$DEVTOOLS_DIR/RecoilEngine/docker-build-v2/build.sh" --arch "$engine_arch" linux
     fi
     echo ""
   else
-    step "4/5  Engine build"
+    step "5/6  Engine build"
     echo ""
     info "RecoilEngine not cloned -- skipping. Clone with: just repos::clone extra"
     echo ""
   fi
 
-  step "5/5  Symlinks to game directory"
+  step "6/6  Symlinks to game directory"
   echo ""
   local game_dir
   game_dir="$(detect_game_dir 2>/dev/null)" || true

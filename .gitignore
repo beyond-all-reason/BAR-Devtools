@@ -14,6 +14,7 @@ SpringLobbyInterface/
 
 # Personal config overrides
 repos.local.conf
+.env
 
 # Runtime / editor state
 tasks/
