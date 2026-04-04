@@ -15,7 +15,7 @@ apt install just      # Debian/Ubuntu
 
 ```bash
 # Run setup
-git clone https://github.com/thvl3/BAR-Devtools.git
+git clone https://github.com/beyond-all-reason/BAR-Devtools.git
 cd BAR-Devtools
 just setup::init
 just services::up
