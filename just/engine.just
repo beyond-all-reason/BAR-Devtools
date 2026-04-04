@@ -22,4 +22,4 @@ build *args:
         echo "    just engine::build --help"
         exit 1
     fi
-    exec "$build_script" {{args}}
+    exec bash "$build_script" {{args}}
