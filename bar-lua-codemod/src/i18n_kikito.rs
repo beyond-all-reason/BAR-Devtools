@@ -26,7 +26,6 @@ pub fn rewrite_wrapper(content: &str) -> Result<String, String> {
             continue;
         }
         if trimmed.contains("VFS.Include(I18N_PATH") {
-            output.push_str("local i18n = require(\"i18n\")\n\n");
             output.push_str(SERVICE_CODE);
             output.push('\n');
             injected = true;
@@ -304,7 +303,9 @@ local asianFont = 'fallbacks/SourceHanSans-Regular.ttc'
 return i18n
 "#;
         let result = rewrite_wrapper(input).expect("rewrite failed");
-        assert!(result.contains("require(\"i18n\")"));
+        assert!(result.contains("_findI18nBase"));
+        assert!(result.contains("local i18n = require(\"i18n\")"));
+        assert!(result.contains("require = _origRequire"));
         assert!(!result.contains("I18N_PATH"));
         assert!(!result.contains("currentDirectory"));
         assert!(result.contains("i18n.loadFile"));
