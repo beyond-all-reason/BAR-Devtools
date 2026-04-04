@@ -24,7 +24,7 @@ build-lde:
 recoil-lib-path:
     #!/usr/bin/env bash
     set -euo pipefail
-    match=$(find "$BAR_DIR/.lux/5.1" -maxdepth 2 -name 'src' -path '*recoil-lua-library*' -type d 2>/dev/null | head -1)
+    match=$(find "$BAR_DIR/.lux/5.1" -maxdepth 2 -name 'library' -path '*recoil-lua-library*' -type d 2>/dev/null | head -1)
     if [ -z "$match" ]; then
         echo "$BAR_DIR/.lux/5.1/recoil-lua-library" # fallback before first sync
     else
@@ -64,7 +64,7 @@ library *flags: build-lde
 
     info "Extracting Lua docs..."
     $LDE \
-        --src "$RECOIL_DIR/rts/{Lua,Rml/SolLua}/**/*.cpp" \
+        --src "$RECOIL_DIR/rts/{Lua,Rml/SolLua,Sim/Units/Scripts}/**/*.cpp" \
         --dest "$DEST" \
         --repo "https://github.com/beyond-all-reason/RecoilEngine/blob/master" \
         {{flags}}
@@ -72,16 +72,16 @@ library *flags: build-lde
     LUX_LIB=$(just lua::recoil-lib-path 2>/dev/null || echo "")
     if [ -n "$LUX_LIB" ] && [ -d "$LUX_LIB" ]; then
         info "Copying into lux-installed recoil-lua-library..."
-        clean_dir "$LUX_LIB/src"
-        mkdir -p "$LUX_LIB/src"
-        cp -r "$RECOIL_DIR/rts/Lua/library/"* "$LUX_LIB/src/"
-        ok "Updated $LUX_LIB/src/"
+        clean_dir "$LUX_LIB/library"
+        mkdir -p "$LUX_LIB/library"
+        cp -r "$RECOIL_DIR/rts/Lua/library/"* "$LUX_LIB/library/"
+        ok "Updated $LUX_LIB/library/"
         echo "  Run 'just lua::reset' to restore the published version."
     else
         info "Copying into BAR working tree..."
-        mkdir -p "$BAR_DIR/recoil-lua-library/src"
-        cp -r "$RECOIL_DIR/rts/Lua/library/"* "$BAR_DIR/recoil-lua-library/src/"
-        ok "Updated $BAR_DIR/recoil-lua-library/src/"
+        mkdir -p "$BAR_DIR/recoil-lua-library/library"
+        cp -r "$RECOIL_DIR/rts/Lua/library/"* "$BAR_DIR/recoil-lua-library/library/"
+        ok "Updated $BAR_DIR/recoil-lua-library/library/"
     fi
 
 # Generate library then restart LuaLS so the editor picks up changes

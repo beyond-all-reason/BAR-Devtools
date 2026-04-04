@@ -35,7 +35,7 @@ enter_distrobox "$@"
 # Transforms with _prereq cherry-pick that branch before running the codemod.
 # Optional: run_*, describe_*, post_commit_*, generate_*_pr_body functions.
 
-TRANSFORMS=("fmt" "bracket_to_dot" "rename_aliases" "detach_bar_modules" "spring_split" "i18n_kikito")
+TRANSFORMS=("fmt" "bracket_to_dot" "rename_aliases" "detach_bar_modules" "i18n_kikito" "spring_split")
 
 # -- fmt (stylua) -------------------------------------------------------------
 
@@ -135,8 +135,8 @@ spring_split_prereq=""
 spring_split_description='See [RecoilEngine#2799](https://github.com/beyond-all-reason/RecoilEngine/pull/2799) for the SpringSynced/SpringUnsynced/SpringShared type split on the engine side.'
 
 run_spring_split() {
-    local lib="$BAR/recoil-lua-library/src"
-    [ -d "$lib" ] || lib="$BAR/recoil-lua-library/library"
+    local lib="$BAR/recoil-lua-library/library"
+    [ -d "$lib" ] || lib="$BAR/recoil-lua-library/src"
     "$CODEMOD" spring-split --path "$BAR" --library "$lib" --exclude common/luaUtilities
 
     sed -i '/^_G\.GG = /i\
