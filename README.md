@@ -70,7 +70,7 @@ Language servers and formatters live inside the distrobox. One command exports t
 just setup::editor
 ```
 
-This exports `emmylua_ls`, `clangd`, and `stylua` as wrapper scripts in `~/.local/bin` (via `distrobox-export`), and runs `cmake` against RecoilEngine to produce `compile_commands.json` for clangd. Your editor finds the wrappers on PATH and everything works as if installed natively.
+This exports `emmylua_ls`, `emmylua_check`, `clangd`, `stylua`, and `busted` as wrapper scripts in `~/.local/bin` (via `distrobox-export`), and runs `cmake` against RecoilEngine to produce `compile_commands.json` for clangd. Your editor finds the wrappers on PATH and everything works as if installed natively.
 
 ### Git hooks
 
