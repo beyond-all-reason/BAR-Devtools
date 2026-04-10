@@ -79,6 +79,7 @@ library *flags: build-lde
         echo "  Run 'just lua::reset' to restore the published version."
     else
         info "Copying into BAR working tree..."
+        clean_dir "$BAR_DIR/recoil-lua-library/library"
         mkdir -p "$BAR_DIR/recoil-lua-library/library"
         cp -r "$RECOIL_DIR/rts/Lua/library/"* "$BAR_DIR/recoil-lua-library/library/"
         ok "Updated $BAR_DIR/recoil-lua-library/library/"
