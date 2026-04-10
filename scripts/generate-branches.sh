@@ -35,6 +35,9 @@ enter_distrobox "$@"
 # Transforms with _prereq cherry-pick that branch before running the codemod.
 # Optional: run_*, describe_*, post_commit_*, generate_*_pr_body functions.
 
+# Branches cherry-picked onto every leaf and mig branch before any transform.
+PREFIX_BRANCHES=("fix_stylua")
+
 TRANSFORMS=("fmt" "bracket_to_dot" "rename_aliases" "detach_bar_modules" "i18n_kikito" "spring_split")
 
 # -- fmt (stylua) -------------------------------------------------------------
@@ -368,6 +371,10 @@ build_leaf() {
     step "Building leaf: $branch"
     git_bar checkout --force -B "$branch" origin/master
 
+    for prefix in "${PREFIX_BRANCHES[@]}"; do
+        git_bar cherry-pick origin/master.."$prefix"
+    done
+
     if [[ -n "$prereq" ]]; then
         step "Cherry-picking prereq commits from $prereq..."
         git_bar cherry-pick origin/master.."$prereq"
@@ -391,6 +398,10 @@ build_leaf() {
 build_mig() {
     step "Building linear mig branch..."
     git_bar checkout --force -B mig origin/master
+
+    for prefix in "${PREFIX_BRANCHES[@]}"; do
+        git_bar cherry-pick origin/master.."$prefix"
+    done
 
     local -A mig_prereqs_picked
     for transform in "${TRANSFORMS[@]}"; do
@@ -536,7 +547,12 @@ done
 step "Fetching origin..."
 git_bar fetch origin
 
-step "Rebasing prereq branches onto origin/master..."
+step "Rebasing prefix and prereq branches onto origin/master..."
+for prefix in "${PREFIX_BRANCHES[@]}"; do
+    step "  Rebasing $prefix..."
+    git_bar checkout --force "$prefix"
+    git_bar rebase origin/master
+done
 for transform in "${TRANSFORMS[@]}"; do
     prereq=$(tvar "$transform" "prereq")
     if [[ -n "$prereq" ]]; then
