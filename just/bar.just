@@ -7,9 +7,8 @@ BAR_DIR             := DEVTOOLS_DIR / "Beyond-All-Reason"
 INTEGRATION_COMPOSE := "docker compose -f " + BAR_DIR / "tools" / "headless_testing" / "docker-compose.yml"
 CODEMOD_DIR         := DEVTOOLS_DIR / "bar-lua-codemod"
 CODEMOD_BIN         := CODEMOD_DIR / "target" / "release" / "bar-lua-codemod"
-LUALS_VERSION       := "3.17.1"
-LUALS_DIR           := DEVTOOLS_DIR / ".devtools" / "lua-language-server"
-LUALS_BIN           := LUALS_DIR / "bin" / "lua-language-server"
+# Batch check uses `emmylua_check` (Rust EmmyLua analyzer). Install via dev container image or
+# https://github.com/EmmyLuaLs/emmylua-analyzer-rust/releases — `emmylua_ls` is LSP-only (no --check).
 
 [private]
 require-bar:
@@ -21,31 +20,21 @@ require-bar:
     fi
 
 [private]
-require-luals:
+require-emmylua-check:
     #!/usr/bin/env bash
-    [ -x "{{LUALS_BIN}}" ] && exit 0
-    set -euo pipefail
-    source "$DEVTOOLS_DIR/scripts/common.sh"
-    step "lua-language-server not found, downloading v{{LUALS_VERSION}}..."
-    mkdir -p "{{LUALS_DIR}}"
-    ARCH="$(uname -m)"
-    case "$ARCH" in
-        x86_64)  PLAT="linux-x64" ;;
-        aarch64) PLAT="linux-arm64" ;;
-        *)       err "Unsupported arch: $ARCH"; exit 1 ;;
-    esac
-    curl -fsSL "https://github.com/LuaLS/lua-language-server/releases/download/${LUALS_VERSION}/lua-language-server-${LUALS_VERSION}-${PLAT}.tar.gz" \
-        | tar xz -C "{{LUALS_DIR}}"
-    ok "Downloaded lua-language-server v{{LUALS_VERSION}}"
+    if ! command -v emmylua_check >/dev/null 2>&1; then
+        echo "Error: emmylua_check not on PATH (install in the dev container or from https://github.com/EmmyLuaLs/emmylua-analyzer-rust/releases )." >&2
+        exit 1
+    fi
 
-# Type-check BAR Lua code (LuaLS diagnostics)
-check *args: require-bar require-luals
+# Type-check BAR Lua code (EmmyLua analyzer CLI — `-c .emmyrc.json` avoids LuaLS-only keys in `.luarc.json`)
+check *args: require-bar require-emmylua-check
     #!/usr/bin/env bash
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
-    step "Running LuaLS type check..."
+    step "Running emmylua_check (EmmyLua analyzer)..."
     cd "$BAR_DIR"
-    "{{LUALS_BIN}}" --check=. --checklevel=Warning --logpath=/tmp/luals-check {{args}}
+    emmylua_check -c .emmyrc.json . {{args}}
     ok "Type check complete"
 
 # Lint BAR Lua code (luacheck via lux)
