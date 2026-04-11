@@ -189,7 +189,11 @@ Ensure `types/Game.lua` extends the `Game` class with these fields.
 
 ### Category 10: Sandbox Globals (orchestrator)
 
-Ensure ALL engine/sandbox/BAR globals are in `.luarc.json` `diagnostics.globals`. Full list:
+Ensure ALL engine/sandbox/BAR globals are in `.emmyrc.json` `diagnostics.globals`
+(EmmyLua's analyzer is the source of truth for `just bar::check`; `.luarc.json`
+holds lux library paths and is consumed by the sumneko LSP for IDE use). EmmyLua
+treats `undefined-global` as an **error** (not a warning like sumneko did), so a
+missing global multiplies the error count by 10–100x. Full list:
 
 **UnitScript:** `Turn`, `Move`, `Spin`, `StopSpin`, `WaitForTurn`, `WaitForMove`, `Hide`,
 `Show`, `Explode`, `EmitSfx`, `StartThread`, `SetSignalMask`, `Signal`, `Sleep`,
@@ -539,6 +543,92 @@ shader object.
 
 **Fix:** Annotate as `---@type BarLuaShader?` (or non-optional when known initialized).
 Add missing method stubs to `types/BarLuaShader.lua` if LuaLS still complains.
+
+### Category 39: `---@type X <prose>` description after type (subagent)
+
+**Error:** `doc-syntax-error: expect type` / `binary operator not followed by type`
+
+**Cause:** EmmyLua parses everything after `---@type` as a type expression. Bare prose
+words like `in seconds` are parsed as type tokens (`in` is reserved as a binary
+type operator) and produce parse errors.
+
+**Fix:** Use the `#` description delimiter or move the prose to a separate comment line.
+
+```lua
+-- WRONG (prose collides with type parser)
+local doubleClickTime = 0.2 ---@type number in seconds
+---@type integer in pixels, as the Manhattan norm
+local dist = 12
+
+-- RIGHT (# delimiter)
+local doubleClickTime = 0.2 ---@type number # in seconds
+---@type integer # in pixels, as the Manhattan norm
+local dist = 12
+```
+
+The `#` form is supported by LuaLS, EmmyLua, and `lua-language-server`.
+
+### Category 40: `---@field X T [interval]` bracket prose in field doc (subagent)
+
+**Error:** `syntax-error: expected TkRightBracket, but get TkComma`
+
+**Cause:** `---@field name T <description>` allows trailing prose, but a leading `[`
+is parsed as the start of `T[]` array syntax. `integer [0, 1e6) ...` is parsed as
+`integer[`, then `0`, then expects `]` but finds `,`.
+
+**Fix:** Wrap interval notation in backticks AFTER the prose, or push it to the end.
+
+```lua
+-- WRONG (leading bracket parsed as array)
+---@field crushstrength integer [0, 1e6) mass equivalent for crushing
+
+-- RIGHT (backticked, at end)
+---@field crushstrength integer mass equivalent for crushing, in `[0, 1e6)`
+```
+
+### Category 41: `---@type FuncType` on `local function` declaration (subagent)
+
+**Error:** `annotation-usage-error: ` `` `@type X` can't be used here ``
+
+**Cause:** EmmyLua only allows `---@type` on variable assignments, not on
+`local function name(...)` declarations.
+
+**Fix:** Convert to `local name = function(...)` form.
+
+```lua
+-- WRONG
+---@type ShieldPreDamagedCallback
+local function shieldPreDamaged(projectileID, ...) end
+
+-- RIGHT
+---@type ShieldPreDamagedCallback
+local shieldPreDamaged = function(projectileID, ...) end
+```
+
+Alternative (preferred when callback is exported): annotate the function with
+`---@param`/`---@return` directly instead of using a callback type alias.
+
+### Category 42: Misplaced `---@return` or `---@param` (subagent)
+
+**Error:** `annotation-usage-error: ` `` `@return X` can't be used here ``
+
+**Cause:** `---@return` / `---@param` annotations belong immediately above a
+function declaration, not above an unrelated `local x = ...` line.
+
+**Fix:** Move the annotation block to the line directly above the actual function
+it documents.
+
+```lua
+-- WRONG (comment binds to wrong declaration)
+---@return number
+local currentBlueprintUnitID = 0
+local function nextBlueprintUnitID() ... end
+
+-- RIGHT (comment binds to the function)
+local currentBlueprintUnitID = 0
+---@return number
+local function nextBlueprintUnitID() ... end
+```
 
 ---
 
