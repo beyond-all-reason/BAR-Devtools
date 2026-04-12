@@ -86,3 +86,12 @@ check:
     source "$DEVTOOLS_DIR/scripts/repos.sh"
     source "$DEVTOOLS_DIR/scripts/setup.sh"
     cmd_setup
+
+# Diagnose your dev environment (read-only)
+doctor:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    source "$DEVTOOLS_DIR/scripts/repos.sh"
+    source "$DEVTOOLS_DIR/scripts/doctor.sh"
+    cmd_doctor
