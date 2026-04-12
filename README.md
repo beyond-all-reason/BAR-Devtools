@@ -148,6 +148,20 @@ just bar::test-shell    # interactive busted shell,
                         #   for example: `it "should do something #focus", function()`
 ```
 
+### Teiserver development
+
+Tests run in a separate container with `MIX_ENV=test`, so they work whether or not `services::up` is running. The test database is independent from the dev database.
+
+```bash
+just tei::setup-test-db         # initialize/migrate the test database (run once)
+just tei::test                  # run the full test suite
+just tei::test test/teiserver/battle_test.exs  # run a specific test file
+just tei::test-shell            # interactive bash shell with MIX_ENV=test
+                                #   useful for running mix commands directly
+```
+
+If you've pulled new teiserver code with migrations, re-run `just tei::setup-test-db` to apply them.
+
 ### Engine development
 
 ```bash
@@ -169,7 +183,7 @@ just services::up               # start PostgreSQL + Teiserver
 just services::up lobby spads   # ...with bar-lobby and SPADS
 just services::down             # stop everything
 just services::logs teiserver   # tail logs
-just tei::mix                   # run teiserver mix tests
+just services::shell teiserver  # open bash inside the running container
 ```
 
 ## Using Your Own Forks
@@ -233,7 +247,8 @@ BAR-Devtools/
 │   ├── link.just                    # Game directory symlinking
 │   ├── lua.just                     # lua-doc-extractor & Lua library generation
 │   ├── docs.just                    # Hugo documentation server
-│   └── test.just                    # Unit & integration tests
+│   ├── bar.just                     # BAR Lua testing, linting & formatting
+│   └── tei.just                     # Teiserver mix tests
 ├── scripts/
 │   ├── common.sh                    # Shared color/logging helpers
 │   ├── repos.sh                     # repos.conf parsing & git operations
