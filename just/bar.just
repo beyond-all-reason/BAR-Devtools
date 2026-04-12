@@ -71,12 +71,29 @@ test-shell: require-bar
 # Run headless integration tests (x86-64 only)
 integrations *args: require-bar
     #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
     if [[ "$(uname -m)" == arm64 ]]; then
         echo "Error: integration tests require an x86-64 host." >&2
         echo "The Spring engine used by headless tests has no arm64 build." >&2
         exit 1
     fi
-    {{INTEGRATION_COMPOSE}} up --build --abort-on-container-exit {{args}}
+
+    # If the local Recoil build exists under the devtools workspace
+    # (cloned via `just repos::clone extra` + built via `just engine::build
+    # linux`), stack an override so the container uses it instead of the
+    # stock engine download.
+    compose="{{INTEGRATION_COMPOSE}}"
+    local_engine="$DEVTOOLS_DIR/RecoilEngine/build-amd64-linux/install"
+    if [ -x "$local_engine/spring-headless" ]; then
+        info "Using local engine: $local_engine"
+        export BAR_LOCAL_ENGINE="$local_engine"
+        export BAR_DEVTOOLS_DIR="$DEVTOOLS_DIR"
+        compose="$compose -f $DEVTOOLS_DIR/docker-compose.integrations.local.yml"
+    else
+        info "Using stock engine (build RecoilEngine with 'just engine::build linux' to use your local build)"
+    fi
+    $compose up --build --abort-on-container-exit {{args}}
 
 # Run all BAR tests (unit + integrations)
 test: units integrations
