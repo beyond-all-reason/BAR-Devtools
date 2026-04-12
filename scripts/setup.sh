@@ -503,7 +503,13 @@ cmd_link() {
   local source_path link_path
   case "$target" in
     engine)
-      source_path="$DEVTOOLS_DIR/RecoilEngine/build-linux/install"
+      local engine_arch
+      case "$(uname -m)" in
+        x86_64)        engine_arch="amd64" ;;
+        aarch64|arm64) engine_arch="arm64" ;;
+        *)             engine_arch="amd64" ;;
+      esac
+      source_path="$DEVTOOLS_DIR/RecoilEngine/build-${engine_arch}-linux/install"
       link_path="$game_dir/engine/local-build"
       ;;
     chobby)

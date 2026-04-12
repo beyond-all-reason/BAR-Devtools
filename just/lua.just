@@ -15,6 +15,7 @@ build-lde:
         info "Clone it first: just repos::clone extra"
         exit 1
     fi
+    enter_distrobox
     cd "$LDE_DIR"
     npm ci && npm run build
     ok "lua-doc-extractor built"
@@ -95,6 +96,7 @@ reset:
     #!/usr/bin/env bash
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
+    enter_distrobox
     info "Resetting Lua library in RecoilEngine..."
     cd "$RECOIL_DIR"
     git checkout -- rts/Lua/library/

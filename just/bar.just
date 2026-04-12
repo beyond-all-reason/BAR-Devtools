@@ -7,8 +7,9 @@ BAR_DIR             := DEVTOOLS_DIR / "Beyond-All-Reason"
 INTEGRATION_COMPOSE := "docker compose -f " + BAR_DIR / "tools" / "headless_testing" / "docker-compose.yml"
 CODEMOD_DIR         := DEVTOOLS_DIR / "bar-lua-codemod"
 CODEMOD_BIN         := CODEMOD_DIR / "target" / "release" / "bar-lua-codemod"
-# Batch check uses `emmylua_check` (Rust EmmyLua analyzer). Install via dev container image or
-# https://github.com/EmmyLuaLs/emmylua-analyzer-rust/releases — `emmylua_ls` is LSP-only (no --check).
+# Batch check uses `emmylua_check` (Rust EmmyLua analyzer), baked into the dev
+# container image. `emmylua_ls` is LSP-only (no --check) and lives on the host
+# for editor integration — see `just setup::editor`.
 
 [private]
 require-bar:
@@ -19,19 +20,12 @@ require-bar:
         exit 1
     fi
 
-[private]
-require-emmylua-check:
-    #!/usr/bin/env bash
-    if ! command -v emmylua_check >/dev/null 2>&1; then
-        echo "Error: emmylua_check not on PATH (install in the dev container or from https://github.com/EmmyLuaLs/emmylua-analyzer-rust/releases )." >&2
-        exit 1
-    fi
-
 # Type-check BAR Lua code (EmmyLua analyzer CLI — `-c .emmyrc.json` avoids LuaLS-only keys in `.luarc.json`)
-check *args: require-bar require-emmylua-check
+check *args: require-bar
     #!/usr/bin/env bash
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
+    enter_distrobox
     step "Running emmylua_check (EmmyLua analyzer)..."
     cd "$BAR_DIR"
     emmylua_check -c .emmyrc.json . {{args}}
@@ -138,9 +132,46 @@ require-library:
     just lua::library
     just lua::link
 
-# Regenerate fmt, mig-*, and mig branches from origin/master
+# $CREDENTIALS_RUNNER is an opaque command prefix that loads secrets into
+# the environment of whatever it wraps. When set, fmt-mig-generate runs
+# generate-branches.sh through it so subprocesses (notably the parallel
+# `claude --print` workers spawned by scripts/llm-type-triage.sh) inherit
+# the loaded credentials. Without this, the workers would run with the
+# credential-less env that just/bash inherits and fail at auth.
+#
+# Write the prefix however your secrets store wants. Tilde expansion is
+# applied. Examples:
+#
+#   # 1Password CLI
+#   CREDENTIALS_RUNNER="op run --env-file=~/code/ai.env.op --"
+#
+#   # Bitwarden CLI
+#   CREDENTIALS_RUNNER="bw run --envfile ~/secrets/ai.env --"
+#
+#   # direnv loader (treats first arg as a directory whose .envrc to apply)
+#   CREDENTIALS_RUNNER="direnv exec ~/code/secrets"
+#
+#   # raw env injection from a sourceable .env-style file
+#   CREDENTIALS_RUNNER="env $(grep -v '^#' ~/.config/anthropic/key.env | xargs)"
+#
+# When unset, the script runs unwrapped — fine for non-AI invocations
+# (e.g. `--push` only) where no subprocess actually needs credentials.
+
+# Regenerate fmt, mig-*, and mig branches from origin/master (uses $CREDENTIALS_RUNNER for AI auth)
 fmt-mig-generate *args: require-bar require-codemod require-library
-    bash "$DEVTOOLS_DIR/scripts/generate-branches.sh" {{args}}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    script="$DEVTOOLS_DIR/scripts/generate-branches.sh"
+    if [[ -n "${CREDENTIALS_RUNNER:-}" ]]; then
+        # Expand ~ in the prefix (most secrets-wrapper tools don't expand
+        # it themselves when invoked through a non-interactive shell).
+        expanded="${CREDENTIALS_RUNNER//\~/$HOME}"
+        echo "[info] wrapping fmt-mig-generate with: $expanded" >&2
+        # eval re-parses the prefix so multi-token wrappers like
+        # `op run --env-file=path --` keep their structure when prepended.
+        eval "exec $expanded bash \"\$script\" {{args}}"
+    fi
+    exec bash "$script" {{args}}
 
 # Install git pre-commit hook in the BAR repo
 setup-hooks:

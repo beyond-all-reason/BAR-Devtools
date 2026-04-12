@@ -56,12 +56,10 @@ RUN ARCH=$(uname -m) \
            ;; \
          *) echo "unsupported arch for EmmyLua binaries: $ARCH" >&2; exit 1;; \
        esac \
-    && JSON=$(curl -fsSL "https://api.github.com/repos/EmmyLuaLs/emmylua-analyzer-rust/releases/${EMMYLUA_VERSION}") \
-    && LS_URL=$(echo "$JSON" | jq -r --arg n "$LS_ASSET" '.assets[] | select(.name == $n) | .browser_download_url') \
-    && CHECK_URL=$(echo "$JSON" | jq -r --arg n "$CHECK_ASSET" '.assets[] | select(.name == $n) | .browser_download_url') \
-    && curl -fsSL "$LS_URL" | tar xz -C /usr/local/bin \
+    && BASE="https://github.com/EmmyLuaLs/emmylua-analyzer-rust/releases/download/${EMMYLUA_VERSION}" \
+    && curl -fsSL "${BASE}/${LS_ASSET}" | tar xz -C /usr/local/bin \
     && chmod +x /usr/local/bin/emmylua_ls \
-    && curl -fsSL "$CHECK_URL" | tar xz -C /usr/local/bin \
+    && curl -fsSL "${BASE}/${CHECK_ASSET}" | tar xz -C /usr/local/bin \
     && chmod +x /usr/local/bin/emmylua_check
 
 LABEL com.github.containers.toolbox="true"
