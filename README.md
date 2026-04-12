@@ -305,6 +305,14 @@ The SPADS bot account (`spadsbot` / `password`) is created automatically during 
 
 ## Troubleshooting
 
+If something isn't working, start here:
+
+```bash
+just doctor
+```
+
+This runs a read-only check of your system dependencies, environment, ports, repositories, Docker images, and running services. Every failure includes the command to fix it.
+
 **Port 5432/5433 conflict with host PostgreSQL:**
 Either stop your local PostgreSQL (`sudo systemctl stop postgresql`) or change the port:
 ```bash

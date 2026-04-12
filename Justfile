@@ -10,6 +10,10 @@ mod docs     'just/docs.just'
 mod bar      'just/bar.just'
 mod tei      'just/tei.just'
 
+# Diagnose your dev environment (read-only, no side effects)
+doctor:
+    just setup::doctor
+
 default:
     @just --list --list-submodules
 
