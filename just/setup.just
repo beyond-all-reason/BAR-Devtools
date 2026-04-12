@@ -31,7 +31,7 @@ distrobox:
     source "$DEVTOOLS_DIR/scripts/setup.sh"
     cmd_setup_distrobox
 
-# Export distrobox binaries for editor integration (clangd, emmylua_check, stylua)
+# Export distrobox binaries for editor integration (clangd, emmylua_check, stylua, lx)
 # emmylua_ls is downloaded directly to the host instead of exported, because
 # distrobox-enter / rootless podman don't reliably forward SIGTERM to the
 # in-container LSP — VSCode then escalates to SIGKILL on shutdown and the
@@ -48,7 +48,7 @@ editor:
     mkdir -p "$local_bin"
 
     # Export CLI tools from the distrobox (one-shot invocations, no signaling concerns)
-    for bin in /usr/local/bin/emmylua_check /usr/bin/clangd /usr/local/bin/stylua; do
+    for bin in /usr/local/bin/emmylua_check /usr/bin/clangd /usr/local/bin/stylua /usr/bin/lx; do
         name="$(basename "$bin")"
         info "Exporting $name..."
         distrobox enter "$DEVTOOLS_DISTROBOX" -- distrobox-export --bin "$bin" --export-path "$local_bin"

@@ -16,6 +16,15 @@ FORK_OWNER="${FORK_OWNER:-$(git -C "$BAR" remote get-url "$REMOTE" 2>/dev/null |
 
 MIG_PR="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7229"
 
+# Tracking issue that ties all of the type-cleanup PRs together. Each leaf,
+# the mig rollup, and the LLM capstone link to it as "Part of <issue>" so
+# the PR bodies stay focused on their own step.
+TRACKING_ISSUE="https://github.com/beyond-all-reason/Beyond-All-Reason/issues/7408"
+
+# Tooling PR — the BAR-Devtools side that ships generate-branches.sh,
+# llm-type-triage.sh, the codemod transforms, SKILL.md, and the just recipes.
+DEVTOOLS_PR="https://github.com/beyond-all-reason/BAR-Devtools/pull/17"
+
 # LLM capstone — fmt-llm. A single capstone branch that sits on top of mig and
 # combines a deterministic env layer (cherry-picked from a user-maintained source
 # branch) with an LLM-generated type-fix commit.
@@ -34,7 +43,7 @@ MIG_PR="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7229"
 LLM_SOURCE_BRANCH="${LLM_SOURCE_BRANCH:-fmt-llm-source}"
 LLM_BRANCH="fmt-llm"
 LLM_COMMIT_PREFIX="gen(llm): type-error triage"
-LLM_PR=""
+LLM_PR="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7407"
 LLM_PR_TITLE="[Types] LLM-driven type-error transform capstone"
 
 # Dirty check only on the host -- inside distrobox stdin is piped via enter_distrobox.
@@ -204,6 +213,28 @@ tvar() { eval echo "\${${1}_${2}:-}"; }
 
 declare -A TEST_RESULTS
 
+# Path inside BAR's .git/ where the most recent run's test results are
+# cached. --skip-generation reads this so PR-body topology tables can show
+# the last known unit-test status instead of "n/a" everywhere.
+TEST_RESULTS_CACHE="$BAR/.git/test-results.cache"
+
+persist_test_results() {
+    : > "$TEST_RESULTS_CACHE"
+    for branch in "${!TEST_RESULTS[@]}"; do
+        printf '%s\t%s\n' "$branch" "${TEST_RESULTS[$branch]}" >> "$TEST_RESULTS_CACHE"
+    done
+}
+
+load_test_results() {
+    if [[ ! -f "$TEST_RESULTS_CACHE" ]]; then
+        return 1
+    fi
+    local branch status
+    while IFS=$'\t' read -r branch status; do
+        [[ -n "$branch" ]] && TEST_RESULTS["$branch"]="$status"
+    done < "$TEST_RESULTS_CACHE"
+}
+
 host_exec() {
     if [ -f /run/.containerenv ] && command -v distrobox-host-exec &>/dev/null; then
         distrobox-host-exec "$@"
@@ -234,6 +265,17 @@ run_tests() {
 }
 
 diff_stat() {
+    # Bail with a clear marker if either ref is missing locally — happens in
+    # --llm-only mode when the leaves were skipped, or before a full pipeline
+    # has ever run.
+    if ! git_bar rev-parse --verify "$1" >/dev/null 2>&1; then
+        echo "(base $1 not present locally)"
+        return
+    fi
+    if ! git_bar rev-parse --verify "$2" >/dev/null 2>&1; then
+        echo "(branch not built locally)"
+        return
+    fi
     local raw
     raw=$(git_bar diff --shortstat "$1..$2" 2>/dev/null || true)
     if [[ -z "$raw" ]]; then
@@ -279,30 +321,101 @@ unit_status() {
     fi
 }
 
+# ─── Museum table (linear commit walk for rollup PR bodies) ──────────────────
+#
+# Rollup branches (`mig`, `fmt-llm`) carry many commits each from different
+# layers. The museum table renders one row per commit, in order, with a
+# clickable hash linking to the commit on the fork (FORK_OWNER). Reviewers
+# walk the stack like exhibits — descriptions are intentionally one-line so
+# the table is scannable; the umbrella issue carries the rationale.
+
+museum_description() {
+    local subject="$1"
+    case "$subject" in
+        "gen(stylua):"*)
+            echo "stylua across the entire codebase" ;;
+        "gen(bar_codemod): bracket-to-dot")
+            echo 'x["y"] → x.y, ["y"]= → y= via full_moon AST rewrite' ;;
+        "gen(bar_codemod): rename-aliases")
+            echo "deprecated Spring API aliases (GetMyTeamID → GetLocalTeamID, etc.)" ;;
+        "gen(bar_codemod): detach-bar-modules")
+            echo "Spring.{I18N,Utilities,Debug,Lava,GetModOptionsCopy} → bare globals" ;;
+        "gen(bar_codemod): spring-split")
+            echo "Spring.X → SpringSynced/SpringUnsynced/SpringShared.X per @context" ;;
+        "gen(bar_codemod): i18n-kikito")
+            echo "vendored gajop/i18n → kikito/i18n.lua via lux dependency" ;;
+        "git-blame-ignore-revs:"*)
+            echo "register transform commits with git blame" ;;
+        "env(llm):"*)
+            echo ".emmyrc.json globals, types/* stubs, busted mock, CI gate, manual fixes" ;;
+        "gen(llm):"*)
+            echo "parallel LLM workers applying SKILL.md fix recipes per file chunk" ;;
+        "env:"*)
+            # Self-describing prereq commits — strip the prefix.
+            echo "${subject#env: }" ;;
+        "deps:"*)
+            echo "${subject#deps: }" ;;
+        *)
+            echo "—" ;;
+    esac
+}
+
+# Render a markdown table of every commit unique to <branch> vs origin/master,
+# in the order they were applied. Hashes link to the fork (where the branches
+# actually live) so reviewers can click through any individual commit.
+generate_museum_table() {
+    local branch="$1"
+    local pr_url="$2"
+
+    echo "### Commits"
+    echo ""
+    echo "| # | Commit | What it does |"
+    echo "|---|--------|--------------|"
+
+    local i=1
+    while IFS=$'\t' read -r short long subject; do
+        local desc commit_url
+        desc="$(museum_description "$subject")"
+        if [[ -n "$pr_url" ]]; then
+            commit_url="${pr_url}/commits/${long}"
+        else
+            commit_url="https://github.com/${FORK_OWNER}/Beyond-All-Reason/commit/${long}"
+        fi
+        echo "| $i | [\`${short}\`](${commit_url}) \`${subject}\` | ${desc} |"
+        i=$((i + 1))
+    done < <(git_bar log --reverse --format='%h	%H	%s' "origin/master..$branch")
+}
+
 generate_topology() {
     echo "### Branch Topology"
     echo ""
-    echo "All branches regenerated deterministically by [\`just bar::fmt-mig-generate\`](https://github.com/beyond-all-reason/BAR-Devtools/pull/17)."
+    echo "All branches in the [BAR type-error cleanup]($TRACKING_ISSUE) stack. Regenerated deterministically by [\`just bar::fmt-mig-generate\`]($DEVTOOLS_PR). *Generated $(date -u +"%Y-%m-%d %H:%M:%S UTC").*"
     echo ""
-    echo "*Generated $(date -u +"%Y-%m-%d %H:%M:%S UTC")*"
+    echo "**Leaves** — each targets \`master\`, mergeable independently:"
     echo ""
-    echo "**Standalone branches** (each targets \`master\`, can merge independently):"
-    echo ""
-    echo "| Branch | Transform | Diff vs \`master\` | Units |"
-    echo "|--------|-----------|------|-------|"
+    echo "| Branch | Command | Diff vs \`master\` | Units |"
+    echo "|--------|---------|------|-------|"
     for transform in "${TRANSFORMS[@]}"; do
-        local branch pr_url stats
+        local branch pr_url stats command
         branch=$(tvar "$transform" "branch")
         pr_url=$(tvar "$transform" "pr")
         stats=$(diff_stat origin/master "$branch")
-        echo "| $(pr_link "$branch" "$pr_url") | \`${transform//_/-}\` | $stats | $(unit_status "$branch") |"
+        # `fmt` is the only leaf that runs a non-codemod tool. Everything
+        # else is a single `bar-lua-codemod <transform>` invocation.
+        if [[ "$transform" == "fmt" ]]; then
+            command="\`stylua\`"
+        else
+            command="\`bar-lua-codemod ${transform//_/-}\`"
+        fi
+        echo "| $(pr_link "$branch" "$pr_url") | $command | $stats | $(unit_status "$branch") |"
     done
     echo ""
-    echo "**Combined branch** (stylua + all transforms — full preview):"
+    echo "**Rollups** — composite branches stacking the leaves and (for \`fmt-llm\`) the env + LLM layers:"
     echo ""
-    echo "| Branch | Diff vs \`master\` | Units |"
-    echo "|--------|------|-------|"
-    echo "| $(pr_link "mig" "$MIG_PR") | $(diff_stat origin/master mig) | $(unit_status mig) |"
+    echo "| Branch | Diff vs \`master\` | Diff vs \`mig\` | Units |"
+    echo "|--------|------|------|-------|"
+    echo "| $(pr_link "mig" "$MIG_PR") | $(diff_stat origin/master mig) | — | $(unit_status mig) |"
+    echo "| $(pr_link "$LLM_BRANCH" "$LLM_PR") | $(diff_stat origin/master "$LLM_BRANCH") | $(diff_stat mig "$LLM_BRANCH") | $(unit_status "$LLM_BRANCH") |"
 }
 
 generate_leaf_pr_body() {
@@ -310,81 +423,25 @@ generate_leaf_pr_body() {
     local description
     description=$(tvar "$transform" "description")
 
-    echo "Part of [BAR Lua formatting migration]($MIG_PR). Autogenerated by [\`just bar::fmt-mig-generate\`](https://github.com/beyond-all-reason/BAR-Devtools/pull/17)."
+    echo "Part of [BAR type-error cleanup]($TRACKING_ISSUE). Rebuilds idempotently from \`master\` via [\`just bar::fmt-mig-generate\`]($DEVTOOLS_PR)."
     echo ""
-
-    if [[ -n "$description" ]]; then
-        echo "$description"
-        echo ""
-    fi
-
-    cat <<HEADER
-### Generated by
-
-\`\`\`sh
-HEADER
+    echo '```sh'
     "describe_${transform}"
-    cat <<'MIDDLE'
-```
-
-### Rebasing in-flight branches
-
-```bash
-git fetch origin && git rebase origin/master
-# at each conflict:
-git checkout --theirs <conflicted-files>
-just bar::fmt-mig
-git add -A && git rebase --continue
-```
-
-MIDDLE
-
-    echo '### Output'
-    echo ""
     echo '```'
-    cat "$output_file"
-    echo '```'
+    if [[ -n "$description" ]]; then
+        echo ""
+        echo "$description"
+    fi
     echo ""
     generate_topology
 }
 
 generate_mig_pr_body() {
-    local output_file="$1"
+    local _output_file="$1"  # unused; output bundle was previously inlined here
 
-    echo "Combined preview: \`stylua .\` formatting + all AST transforms applied sequentially. Autogenerated by [\`just bar::fmt-mig-generate\`](https://github.com/beyond-all-reason/BAR-Devtools/pull/17)."
+    echo "Part of [BAR type-error cleanup]($TRACKING_ISSUE). Combined deterministic transforms — what \`master\` looks like with every leaf applied sequentially."
     echo ""
-
-    echo "### Transforms"
-    echo ""
-    for transform in "${TRANSFORMS[@]}"; do
-        local pr_url
-        pr_url=$(tvar "$transform" "pr")
-        if [[ -n "$pr_url" ]]; then
-            echo "* [\`${transform//_/-}\`]($pr_url) -- $(describe_${transform} | head -1 | sed 's/^# [^ ]* - //')"
-        else
-            echo "* \`${transform//_/-}\` -- $(describe_${transform} | head -1 | sed 's/^# [^ ]* - //')"
-        fi
-    done
-
-    cat <<'MID'
-
-### Rebasing in-flight branches
-
-```bash
-git fetch origin && git rebase origin/master
-# at each conflict:
-git checkout --theirs <conflicted-files>
-just bar::fmt-mig
-git add -A && git rebase --continue
-```
-
-MID
-
-    echo '### Output'
-    echo ""
-    echo '```'
-    cat "$output_file"
-    echo '```'
+    generate_museum_table mig "$MIG_PR"
     echo ""
     generate_topology
 }
@@ -522,8 +579,8 @@ abort_stuck_git_state() {
 #      is the mig SHA that fmt-llm-source was last rebased onto, tracked in
 #      git config branch.fmt-llm-source.migBase.
 #   2. Checking out fmt-llm from the rebased source branch
-#   3. Invoking the LLM orchestrator (drives just bar::check errors → 0)
-#   4. Committing whatever the orchestrator edited as one gen(llm) commit
+#   3. Running the LLM type-triage fan-out (drives just bar::check errors → 0)
+#   4. Committing whatever the workers edited as one gen(llm) commit
 #   5. Updating the stored migBase to the new mig SHA for next run
 #
 # The source branch is user-maintained, like detach-bar-modules-env / lux-i18n.
@@ -615,30 +672,38 @@ build_fmt_llm() {
     # failure doesn't poison the stored pointer.
     git_bar config "branch.$LLM_SOURCE_BRANCH.migBase" "$new_mig_sha"
 
-    # ── LLM layer: invoke the orchestrator and commit its edits ──
+    # ── LLM layer: run the triage fan-out and commit its edits ──
     local before
     before=$(emmylua_error_count)
-    step "$LLM_BRANCH pre-orchestrator errors: $before"
+    step "$LLM_BRANCH pre-triage errors: $before"
 
     if [[ "$before" == "0" ]]; then
-        ok "$LLM_BRANCH already at zero errors — skipping orchestrator"
+        ok "$LLM_BRANCH already at zero errors — skipping triage"
     else
-        host_exec bash "${DEVTOOLS_DIR}/scripts/llm-type-triage.sh"
+        # Run inside the same container we already entered. NO host_exec —
+        # routing through distrobox-host-exec would drop env vars
+        # (DEVTOOLS_DISTROBOX, _DEVTOOLS_IN_DISTROBOX) and PATH adjustments.
+        bash "${DEVTOOLS_DIR}/scripts/llm-type-triage.sh"
     fi
+
+    # LLM workers don't run stylua — reformat whatever they touched so the
+    # gen(llm) commit is stylua-clean and doesn't introduce formatting drift.
+    stylua_pass
 
     local after
     after=$(emmylua_error_count)
-    step "$LLM_BRANCH post-orchestrator errors: $after"
+    step "$LLM_BRANCH post-triage errors: $after"
 
     git_bar add -A
     if git_bar diff --cached --quiet; then
-        warn "Orchestrator produced no edits — skipping LLM commit"
+        warn "LLM triage produced no edits — skipping LLM commit"
     else
         git_bar commit -m "$LLM_COMMIT_PREFIX ($before → $after errors)
 
-Generated by claude-opus-4-6 orchestrator dispatching parallel
-claude-sonnet-4-6 subagents per SKILL.md fix categories.
-See BAR-Devtools/claude/prompts/orchestrator.md for the workflow."
+Generated by parallel claude-sonnet-4-6 workers dispatched by
+scripts/llm-type-triage.sh, applying fixes per SKILL.md categories.
+Single pass, no iteration — categories that don't shrink the count
+are a signal that SKILL.md needs a new rule."
     fi
 
     run_tests "$LLM_BRANCH"
@@ -677,45 +742,60 @@ generate_all_pr_bodies() {
         pr_body_file="$BAR/.git/${LLM_BRANCH}-pr-body.md"
         generate_llm_pr_body > "$pr_body_file"
         ok "  $LLM_BRANCH PR body: $pr_body_file"
+
+        # Tracking issue body (depends on fmt-llm for the museum table).
+        local tracking_body_file="$BAR/.git/tracking-issue-body.md"
+        generate_tracking_issue_body > "$tracking_body_file"
+        ok "  tracking issue body: $tracking_body_file"
     fi
 }
 
 generate_llm_pr_body() {
-    local final_count summary_file env_commit_count
-    final_count=$(emmylua_error_count)
+    local summary_file
     summary_file="$BAR/.git/llm-triage-summary.txt"
-    env_commit_count=$(git_bar rev-list --count "mig..$LLM_BRANCH" 2>/dev/null || echo "?")
 
-    cat <<EOF
-LLM-driven type-error triage capstone. Stacks two layers on top of [\`mig\`]($MIG_PR):
-
-1. **Env layer** — \`$env_commit_count\` commit(s) cherry-picked from
-   \`$LLM_SOURCE_BRANCH\`, supplying \`.emmyrc.json\` sandbox globals,
-   \`types/*.lua\` stubs, and systemic annotation parser fixes (SKILL.md
-   categories 39–42). Maintained like the existing prereq branches
-   (\`detach-bar-modules-env\`, \`lux-i18n\`).
-2. **LLM layer** — one \`gen(llm)\` commit produced by an Opus 4.6
-   orchestrator dispatching parallel Sonnet 4.6 subagents per the fix
-   categories in [\`claude/skills/codemod-prereq/SKILL.md\`](https://github.com/beyond-all-reason/BAR-Devtools/blob/master/claude/skills/codemod-prereq/SKILL.md).
-
-### Diff vs \`mig\`
-
-$(diff_stat mig "$LLM_BRANCH")
-
-### emmylua_check on this branch
-
-$final_count errors
-
-EOF
-
+    echo "Part of [BAR type-error cleanup]($TRACKING_ISSUE). Final stage: deterministic transforms + env layer + LLM type-fix pass."
+    echo ""
+    generate_museum_table "$LLM_BRANCH" "$LLM_PR"
+    echo ""
     if [[ -f "$summary_file" ]]; then
-        echo '### Run summary'
+        echo '### Triage run'
         echo ''
         echo '```'
         cat "$summary_file"
         echo '```'
         echo ''
     fi
+    generate_topology
+}
+
+generate_tracking_issue_body() {
+    local template="${DEVTOOLS_DIR}/scripts/tracking-issue-template.md"
+    if [[ ! -f "$template" ]]; then
+        warn "Tracking issue template not found: $template"
+        return 1
+    fi
+
+    local museum_table commit_count
+    museum_table=$(generate_museum_table "$LLM_BRANCH" "$LLM_PR")
+    commit_count=$(git_bar rev-list --count "origin/master..$LLM_BRANCH")
+
+    local replacement
+    replacement=$(cat <<EOF
+<details>
+<summary>Commit-by-commit breakdown (${commit_count} commits)</summary>
+
+${museum_table}
+
+</details>
+EOF
+    )
+
+    # Replace the token with the generated table.
+    # Uses awk because sed chokes on multi-line replacements with pipes/backticks.
+    awk -v token="<!-- GENERATED:MUSEUM_TABLE -->" -v replacement="$replacement" \
+        '{if ($0 == token) print replacement; else print}' \
+        "$template"
 }
 
 update_prs() {
@@ -756,6 +836,14 @@ update_prs() {
 
     # fmt-llm capstone PR (only one branch — env layer is folded into it).
     update_capstone_pr "$LLM_BRANCH" "$LLM_PR" "$LLM_PR_TITLE"
+
+    # Tracking issue — update the body with the latest museum table.
+    local tracking_body_file="$BAR/.git/tracking-issue-body.md"
+    if [[ -f "$tracking_body_file" ]] && [[ -n "$TRACKING_ISSUE" ]]; then
+        step "Updating tracking issue $TRACKING_ISSUE..."
+        gh_host issue edit "$TRACKING_ISSUE" --body-file "$tracking_body_file"
+        ok "Tracking issue updated"
+    fi
 }
 
 update_capstone_pr() {
@@ -770,8 +858,10 @@ update_capstone_pr() {
         return 0
     fi
 
-    # fmt-llm targets mig (showing env layer + LLM commit as a unified diff).
-    local base="mig"
+    # fmt-llm targets master because `mig` is local-only — never pushed as a
+    # base branch on origin. The PR body explains the layer structure
+    # (master → mig → env → LLM) so reviewers can read the diff in stages.
+    local base="master"
 
     if [[ -n "$pr_url" ]]; then
         step "Updating PR $pr_url..."
@@ -816,23 +906,34 @@ push_branches() {
 DO_PUSH=false
 DO_UPDATE_PRS=false
 DO_LLM_ONLY=false
+DO_SKIP_GENERATION=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --push)       DO_PUSH=true; shift ;;
-        --update-prs) DO_UPDATE_PRS=true; shift ;;
-        --llm-only)   DO_LLM_ONLY=true; shift ;;
+        --push)             DO_PUSH=true; shift ;;
+        --update-prs)       DO_UPDATE_PRS=true; shift ;;
+        --llm-only)         DO_LLM_ONLY=true; shift ;;
+        --skip-generation)  DO_SKIP_GENERATION=true; shift ;;
         -h|--help)
-            echo "Usage: generate-branches.sh [--push] [--update-prs] [--llm-only]"
-            echo ""
-            echo "Reconstructs fmt, standalone leaf (mig-*), combined mig, and the"
-            echo "fmt-llm capstone branch."
-            echo ""
-            echo "Flags:"
-            echo "  --push        Force-push all branches to $REMOTE"
-            echo "  --update-prs  Update all PR descriptions via gh (creates new PRs for leaves without one)"
-            echo "  --llm-only    Skip leaves and mig rebuild; only rebuild fmt-llm from"
-            echo "                existing mig (fast iteration on the LLM step)"
+            cat <<HELP
+Usage: generate-branches.sh [--push] [--update-prs] [--llm-only|--skip-generation]
+
+Reconstructs fmt, standalone leaf (mig-*), combined mig, and the
+fmt-llm capstone branch.
+
+Flags:
+  --push              Force-push all branches to $REMOTE
+  --update-prs        Update all PR descriptions via gh (creates new PRs
+                      for leaves without one)
+  --llm-only          Skip leaves and mig rebuild; only rebuild fmt-llm
+                      from existing mig (fast iteration on the LLM step)
+  --skip-generation   Skip ALL branch rebuilds — no leaves, no mig, no
+                      fmt-llm. Just regenerate PR bodies (and push/update
+                      PRs if --push/--update-prs is also passed) against
+                      the existing local branches. Use after editing
+                      generate-branches.sh constants like PR URLs or
+                      museum descriptions.
+HELP
             exit 0
             ;;
         *)
@@ -842,18 +943,41 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if [[ "$DO_LLM_ONLY" == "true" ]] && [[ "$DO_SKIP_GENERATION" == "true" ]]; then
+    err "--llm-only and --skip-generation are mutually exclusive"
+    exit 1
+fi
+
 # ─── Run ─────────────────────────────────────────────────────────────────────
 
 step "Fetching origin..."
 git_bar fetch origin
 
-if [[ "$DO_LLM_ONLY" == "true" ]]; then
+if [[ "$DO_SKIP_GENERATION" == "true" ]]; then
+    step "--skip-generation: skipping ALL branch rebuilds (PR bodies only)"
+    # Sanity check: at minimum the LLM capstone has to exist locally for
+    # generate_all_pr_bodies to find anything to render. If even fmt-llm is
+    # missing, the user is clearly trying to use this flag too aggressively.
+    if ! git_bar rev-parse --verify "$LLM_BRANCH" >/dev/null 2>&1; then
+        err "$LLM_BRANCH does not exist locally — run a full pipeline first"
+        exit 1
+    fi
+    if load_test_results; then
+        info "Loaded cached test results from $TEST_RESULTS_CACHE"
+    else
+        warn "No cached test results — topology tables will show 'n/a' for Units"
+    fi
+elif [[ "$DO_LLM_ONLY" == "true" ]]; then
     step "--llm-only: skipping leaves and mig rebuild"
     if ! git_bar rev-parse --verify mig >/dev/null 2>&1; then
         err "mig branch does not exist locally — run a full pipeline first"
         exit 1
     fi
+    # Preserve leaf test results from a previous full run so the topology
+    # tables aren't lying about untested branches.
+    load_test_results || true
     build_fmt_llm
+    persist_test_results
 else
     step "Rebasing prefix and prereq branches onto origin/master..."
     for prefix in "${PREFIX_BRANCHES[@]}"; do
@@ -876,6 +1000,7 @@ else
 
     build_mig
     build_fmt_llm
+    persist_test_results
 fi
 
 generate_all_pr_bodies
@@ -889,8 +1014,12 @@ if [[ "$DO_UPDATE_PRS" == "true" ]]; then
 fi
 
 echo ""
-ok "All branches rebuilt."
-if [[ "$DO_LLM_ONLY" == "true" ]]; then
+if [[ "$DO_SKIP_GENERATION" == "true" ]]; then
+    ok "PR bodies regenerated (no branches rebuilt)."
+else
+    ok "All branches rebuilt."
+fi
+if [[ "$DO_LLM_ONLY" == "true" ]] || [[ "$DO_SKIP_GENERATION" == "true" ]]; then
     info "  $LLM_BRANCH"
 else
     leaf_names=""
