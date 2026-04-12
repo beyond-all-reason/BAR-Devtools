@@ -980,17 +980,36 @@ elif [[ "$DO_LLM_ONLY" == "true" ]]; then
     persist_test_results
 else
     step "Rebasing prefix and prereq branches onto origin/master..."
+    # Prereq/prefix branches are small, hand-maintained (lux-i18n,
+    # detach-bar-modules-env). A merge conflict means upstream changes have
+    # diverged from the branch's assumptions — silently resolving via `-X
+    # theirs` or accepting auto-merge has historically produced bloated
+    # commits that pulled in unrelated upstream changes. Fail fast so the
+    # maintainer can rebuild the branch by hand from origin/master.
+    rebase_or_fail() {
+        local branch="$1"
+        if ! git_bar rebase origin/master; then
+            git_bar rebase --abort 2>/dev/null || true
+            err "Conflict rebasing $branch onto origin/master."
+            err "Resolve by rebuilding the branch manually from origin/master:"
+            err "  git checkout $branch && git reset --hard origin/master"
+            err "  (cherry-pick or re-apply the intended commit, then re-run)"
+            err "Refusing to continue to avoid polluting $branch with unrelated"
+            err "upstream changes (see lux-i18n bloat incident)."
+            exit 1
+        fi
+    }
     for prefix in "${PREFIX_BRANCHES[@]}"; do
         step "  Rebasing $prefix..."
         git_bar checkout --force "$prefix"
-        git_bar rebase origin/master
+        rebase_or_fail "$prefix"
     done
     for transform in "${TRANSFORMS[@]}"; do
         prereq=$(tvar "$transform" "prereq")
         if [[ -n "$prereq" ]]; then
             step "  Rebasing $prereq..."
             git_bar checkout --force "$prereq"
-            git_bar rebase origin/master
+            rebase_or_fail "$prereq"
         fi
     done
 
