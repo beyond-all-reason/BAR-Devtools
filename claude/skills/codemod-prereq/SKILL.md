@@ -947,6 +947,30 @@ local) or Category 43 (self-shadow capture).
 top of the file (those don't work), replace them with a single
 `---@diagnostic disable: undefined-global` (no `-next-line`).
 
+### Category 47: Test-DSL framework globals
+
+**Error:** `undefined global variable: <name>` where `<name>` is a
+busted-style framework function (`describe`, `it`, `before_each`,
+`after_each`, `setup`, `teardown`, `pending`, `insulate`, `expose`,
+`stub`, `mock`, `spy`, `finally`, `pending`, `assert`, `randomize`) OR
+a test-DSL hook in a widget-internal test runner (`skip`, `setup`,
+`test`, `cleanup` when nil-checked and invoked via `pcall`).
+
+**Cause:** busted injects framework functions into the spec's runtime
+environment; BAR's internal test-runner widgets inject test-hook
+functions into the widget sandbox via `_G`. The analyzer can't see
+either injection.
+
+**Match scope:**
+- `spec/**/*.lua` (busted)
+- `luaui/Widgets/dbg_test_runner*.lua` and similar internal test-runner
+  widgets
+
+**Fix:** Single file-top `---@diagnostic disable: undefined-global`
+directive, same mechanics as Category 45. Do NOT add framework names
+back to `.emmyrc.json` globals — that masks the names project-wide and
+defeats the env-layer tightening (see PR review by Watch The Fort).
+
 ---
 
 ## Structural Type Fixes (env-layer reference)
