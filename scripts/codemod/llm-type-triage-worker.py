@@ -6,7 +6,7 @@ One invocation handles one chunk: runs an OpenAI chat loop with two tools
 response or the turn budget is exhausted, then prints the model's
 FIXED/ATTEMPTED/UNCATEGORIZED report to stdout.
 
-Invoked by scripts/llm-type-triage.sh in parallel — one Python process per
+Invoked by scripts/codemod/llm-type-triage.sh in parallel — one Python process per
 chunk. The wrapper bash script handles chunk partitioning, parallel
 dispatch, and the before/after emmylua_check measurement.
 

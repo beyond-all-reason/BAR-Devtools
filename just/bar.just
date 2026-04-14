@@ -152,7 +152,7 @@ require-library:
 # $CREDENTIALS_RUNNER is an opaque command prefix that loads secrets into
 # the environment of whatever it wraps. When set, fmt-mig-generate runs
 # generate-branches.sh through it so subprocesses (notably the parallel
-# `claude --print` workers spawned by scripts/llm-type-triage.sh) inherit
+# `claude --print` workers spawned by scripts/codemod/llm-type-triage.sh) inherit
 # the loaded credentials. Without this, the workers would run with the
 # credential-less env that just/bash inherits and fail at auth.
 #
@@ -178,7 +178,7 @@ require-library:
 fmt-mig-generate *args: require-bar require-codemod require-library
     #!/usr/bin/env bash
     set -euo pipefail
-    script="$DEVTOOLS_DIR/scripts/generate-branches.sh"
+    script="$DEVTOOLS_DIR/scripts/codemod/generate-branches.sh"
     if [[ -n "${CREDENTIALS_RUNNER:-}" ]]; then
         # Expand ~ in the prefix (most secrets-wrapper tools don't expand
         # it themselves when invoked through a non-interactive shell).

@@ -1,7 +1,7 @@
 # Type Triage Worker Prompt (OpenAI variant)
 
-Used by `scripts/llm-type-triage.sh` when `BACKEND=openai`. Dispatched
-through `scripts/llm-type-triage-worker.py`, a self-contained Python
+Used by `scripts/codemod/llm-type-triage.sh` when `BACKEND=openai`. Dispatched
+through `scripts/codemod/llm-type-triage-worker.py`, a self-contained Python
 agent loop that talks to the OpenAI Chat Completions API directly.
 The worker supplies this file as the system prompt and inlines the
 chunk's error blocks in the user message, so this content is
