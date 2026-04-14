@@ -3,7 +3,7 @@ name: bar-codemod-prereq
 description: >-
   Categorize and fix LuaLS type errors in the Beyond-All-Reason Lua codebase.
   Each category maps an `emmylua_check` error pattern to an idempotent fix
-  recipe. Used as the rule reference for `scripts/llm-type-triage.sh` workers
+  recipe. Used as the rule reference for `scripts/codemod/llm-type-triage.sh` workers
   applying per-file annotation fixes after the deterministic codemod transforms.
 ---
 
@@ -15,7 +15,7 @@ Run the pattern matchers in priority order (1 → 42); the first match wins.
 
 ## What this is for
 
-`scripts/llm-type-triage.sh` dispatches parallel `claude --print` workers, one
+`scripts/codemod/llm-type-triage.sh` dispatches parallel `claude --print` workers, one
 per chunk of errors. Each worker uses this document to match its assigned
 errors to a category and apply the fix in-place. Single pass — if a category
 fails to shrink after one run, that's a signal the rules need a new entry,

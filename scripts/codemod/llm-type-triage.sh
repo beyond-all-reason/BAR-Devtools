@@ -8,7 +8,7 @@
 #      type-triage subagent prompt with its chunk content inlined.
 #      Backend is selectable via BACKEND env var:
 #        - claude (default): `claude --print` with Read+Edit tools
-#        - openai:           scripts/llm-type-triage-worker.py — a
+#        - openai:           scripts/codemod/llm-type-triage-worker.py — a
 #                            self-contained Python agent loop using the
 #                            openai SDK directly. Sonnet is slow;
 #                            gpt-5.4-mini-class models are 10-50x cheaper
@@ -32,7 +32,7 @@
 #   chunks) so the prefix is cached after the first chunk warms it up.
 #   Within a chunk, accumulated read_file results are also cached on every
 #   turn after they first appear, keeping multi-turn cost roughly linear.
-# - The OpenAI agent loop lives in scripts/llm-type-triage-worker.py
+# - The OpenAI agent loop lives in scripts/codemod/llm-type-triage-worker.py
 #   (separate file, not a heredoc) so it's testable, lintable, and easy
 #   to debug. The bash script just dispatches one Python process per chunk.
 #
@@ -158,7 +158,7 @@ case "$BACKEND" in
             exit 1
         fi
         ensure_openai_sdk
-        OPENAI_WORKER="${DEVTOOLS_DIR}/scripts/llm-type-triage-worker.py"
+        OPENAI_WORKER="${DEVTOOLS_DIR}/scripts/codemod/llm-type-triage-worker.py"
         if [[ ! -x "$OPENAI_WORKER" ]]; then
             err "OpenAI worker script not found or not executable: $OPENAI_WORKER"
             exit 1

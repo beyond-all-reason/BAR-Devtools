@@ -1,6 +1,6 @@
 # Type Triage Worker Prompt
 
-Used by `scripts/llm-type-triage.sh` to dispatch a parallel fan-out of
+Used by `scripts/codemod/llm-type-triage.sh` to dispatch a parallel fan-out of
 `claude-sonnet-4-6` workers. The script substitutes the literal token
 `CHUNK_PATH` with an absolute path to a file containing the chunk's
 `emmylua_check` error blocks before invoking `claude --print`.
