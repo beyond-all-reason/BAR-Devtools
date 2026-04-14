@@ -68,7 +68,7 @@ enter_distrobox "$@"
 # Branches cherry-picked onto every leaf and mig branch before any transform.
 PREFIX_BRANCHES=("fix_stylua")
 
-TRANSFORMS=("fmt" "bracket_to_dot" "rename_aliases" "detach_bar_modules" "i18n_kikito" "spring_split")
+TRANSFORMS=("fmt" "bracket_to_dot" "rename_aliases" "detach_bar_modules" "i18n_kikito" "spring_split" "integration_tests" "busted_types")
 
 # -- fmt (stylua) -------------------------------------------------------------
 
@@ -91,15 +91,11 @@ EOF
 }
 
 post_commit_fmt() {
-    local fmt_hash
-    fmt_hash=$(git_bar rev-parse HEAD)
-    step "Creating .git-blame-ignore-revs..."
-    printf '%s\n' \
-        "# $fmt_commit $fmt_pr" \
-        "$fmt_hash" \
-        > "$BAR/.git-blame-ignore-revs"
-    git_bar add .git-blame-ignore-revs
-    git_bar commit -m "git-blame-ignore-revs"
+    # .git-blame-ignore-revs is no longer written here. It's deferred to the
+    # final fmt-llm rollup (commit_blame_ignore_revs) so the file doesn't
+    # conflict when the LLM env commits are replayed onto fresh mig builds
+    # with different transform SHAs.
+    :
 }
 
 # -- bracket-to-dot -----------------------------------------------------------
@@ -204,6 +200,60 @@ describe_i18n_kikito() {
     cat <<'EOF'
 # i18n-kikito - replace vendored gajop/i18n fork with kikito/i18n.lua, rewrite call sites
 bar-lua-codemod i18n-kikito --path "$BAR_DIR"
+EOF
+}
+
+# -- integration-tests ---------------------------------------------------------
+# Carried-commit leaf (not a codemod). The curated branch contains a single
+# hand-authored commit that restructures the integration tests under
+# luaui/Tests and luaui/TestsExamples from bare-global hook declarations to
+# a return-table shape, plus patches dbg_test_runner.lua to read hooks from
+# the returned table. run_*() is a no-op — build_leaf's prereq cherry-pick
+# brings the content in, and the trailing git commit is skipped because the
+# working tree has no additional changes (see build_leaf guard).
+
+integration_tests_branch="mig-integration-tests"
+integration_tests_commit="gen(hand): integration tests return-table shape"
+integration_tests_pr=""
+integration_tests_pr_title="[Tests] Restructure integration tests to table-return shape"
+integration_tests_prereq="integration-tests-curated"
+integration_tests_description='Carried-commit leaf. Restructures `luaui/Tests/` and `luaui/TestsExamples/` (20 files) from bare-global hook declarations to a `return { ... }` shape, and patches `dbg_test_runner.lua` to read hooks from the returned table. Isolated so the convention change can be discussed/reverted independently.'
+
+run_integration_tests() {
+    : # carried-commit leaf; prereq cherry-pick is the entire payload
+}
+
+describe_integration_tests() {
+    cat <<'EOF'
+# integration-tests - restructure luaui/Tests and luaui/TestsExamples files
+# from bare-global hook declarations to a return-table shape; patch the
+# dbg_test_runner widget to read hooks from the returned table. Carried-
+# commit leaf — no codemod; curated branch holds the hand-authored commit.
+EOF
+}
+
+# -- busted-types --------------------------------------------------------------
+# Carried-commit leaf (not a codemod). The curated branch contains a single
+# hand-authored commit that vendors LuaCATS busted + luassert type annotations
+# under types/busted and types/luassert with per-directory provenance.md. Same
+# no-op pattern as integration_tests.
+
+busted_types_branch="mig-busted-types"
+busted_types_commit="gen(hand): inline luassert and busted LuaCATS types"
+busted_types_pr=""
+busted_types_pr_title="[Types] Inline LuaCATS busted+luassert type annotations"
+busted_types_prereq="busted-types-curated"
+busted_types_description='Carried-commit leaf. Vendors [LuaCATS/busted](https://github.com/LuaCATS/busted) and [LuaCATS/luassert](https://github.com/LuaCATS/luassert) type annotations under `types/busted/` and `types/luassert/`. Waits on [lumen-oss/lux#953](https://github.com/lumen-oss/lux/issues/953) to replace with a Lux dev-dep declaration.'
+
+run_busted_types() {
+    : # carried-commit leaf; prereq cherry-pick is the entire payload
+}
+
+describe_busted_types() {
+    cat <<'EOF'
+# busted-types - vendor LuaCATS busted + luassert type annotations under
+# types/busted and types/luassert with per-directory provenance.md. Carried-
+# commit leaf — no codemod; curated branch holds the hand-authored commit.
 EOF
 }
 
@@ -344,6 +394,10 @@ museum_description() {
             echo "Spring.X → SpringSynced/SpringUnsynced/SpringShared.X per @context" ;;
         "gen(bar_codemod): i18n-kikito")
             echo "vendored gajop/i18n → kikito/i18n.lua via lux dependency" ;;
+        "gen(hand): integration tests return-table shape")
+            echo "luaui/Tests + luaui/TestsExamples → return-table shape; dbg_test_runner reads hooks from the returned table" ;;
+        "gen(hand): inline luassert and busted LuaCATS types")
+            echo "vendored LuaCATS/busted + LuaCATS/luassert type annotations under types/ (pending lumen-oss/lux#953)" ;;
         "git-blame-ignore-revs:"*)
             echo "register transform commits with git blame" ;;
         "env(llm):"*)
@@ -486,7 +540,15 @@ build_leaf() {
     "run_${transform}" 2>&1 | tee "$output_file"
 
     git_bar add -A
-    git_bar commit -m "$commit_msg"
+    # Carried-commit leaves (e.g. integration_tests, busted_types) have a
+    # no-op run_*() and rely entirely on the prereq cherry-pick for content.
+    # Skip the trailing commit in that case — the prereq commit's message
+    # stands as the leaf tip and "nothing to commit" would abort the script.
+    if git_bar diff --cached --quiet; then
+        info "  (skip) run_${transform} produced no changes — prereq commit stands as $branch tip"
+    else
+        git_bar commit -m "$commit_msg"
+    fi
 
     if type "post_commit_${transform}" &>/dev/null; then
         "post_commit_${transform}"
@@ -527,25 +589,33 @@ build_mig() {
         "run_${transform}" 2>&1 | tee -a "$mig_output_file"
         stylua_pass
         git_bar add -A
-        git_bar commit -m "$commit_msg"
+        # Carried-commit leaves contributed their content via the prereq
+        # cherry-pick earlier (and stylua left it alone). Skip an empty
+        # commit here — otherwise git aborts build_mig on "nothing to commit"
+        # and the transform hash recorded below would be stale.
+        if git_bar diff --cached --quiet; then
+            info "  (skip) mig: $transform produced no changes — prereq commit already in mig"
+        else
+            git_bar commit -m "$commit_msg"
+        fi
         transform_hashes+=("$(git_bar rev-parse HEAD)")
     done
 
-    step "Adding transform commits to .git-blame-ignore-revs..."
-    : > "$BAR/.git-blame-ignore-revs"
+    # Cache transform hashes for the final blame-ignore commit on fmt-llm.
+    # Committing the file here would conflict when fmt-llm-source env commits
+    # are replayed onto new mig builds with different transform SHAs.
+    local blame_cache="$BAR/.git/mig-blame-hashes.txt"
+    : > "$blame_cache"
     for i in "${!TRANSFORMS[@]}"; do
         local transform="${TRANSFORMS[$i]}"
         local commit_msg
         commit_msg=$(tvar "$transform" "commit")
-        printf '# %s\n%s\n\n' "$commit_msg" "${transform_hashes[$i]}" \
-            >> "$BAR/.git-blame-ignore-revs"
+        printf '%s\t%s\n' "${transform_hashes[$i]}" "$commit_msg" >> "$blame_cache"
     done
-    git_bar add .git-blame-ignore-revs
-    git_bar commit -m "git-blame-ignore-revs: add transform commits"
 
     run_tests "mig"
 
-    ok "mig branch ready ($((${#TRANSFORMS[@]} + 1)) commits)"
+    ok "mig branch ready (${#TRANSFORMS[@]} commits)"
 }
 
 # ─── LLM capstone (runs after build_mig) ─────────────────────────────────────
@@ -631,45 +701,53 @@ build_fmt_llm() {
 
     local env_commit_count
     env_commit_count=$(git_bar rev-list --count "$stored_base..$LLM_SOURCE_BRANCH")
-    step "Rebasing $env_commit_count env commit(s) from $LLM_SOURCE_BRANCH onto mig..."
+    step "Cherry-picking $env_commit_count env commit(s) from $LLM_SOURCE_BRANCH onto mig..."
     step "  old base: $stored_base"
     step "  new mig:  $new_mig_sha"
 
+    # Build fmt-llm fresh from mig, then cherry-pick the env commits on top.
+    # fmt-llm-source itself is NOT mutated — same fail-fast philosophy as the
+    # prereq rebase guard: if cherry-pick conflicts, a transform on mig has
+    # diverged from what the env commit expects. The maintainer rebuilds
+    # fmt-llm-source by hand rather than silently merging unrelated changes.
+    # (See the lux-i18n bloat incident for why in-place rebase/merge was bad.)
+    git_bar checkout --force -B "$LLM_BRANCH" mig
+
     if [[ "$env_commit_count" == "0" ]]; then
         warn "$LLM_SOURCE_BRANCH has no env commits (migBase == source tip) — env layer is empty"
-        git_bar checkout --force -B "$LLM_BRANCH" mig
     else
-        # Replay env commits onto new mig. --onto uses the stored base as the
-        # "upstream" so only commits AFTER it are replayed.
-        if ! git_bar rebase --onto mig "$stored_base" "$LLM_SOURCE_BRANCH"; then
+        if ! git_bar cherry-pick "$stored_base..$LLM_SOURCE_BRANCH"; then
+            local conflicted
+            conflicted=$(git_bar diff --name-only --diff-filter=U | sed 's/^/    /')
             err ""
-            err "Rebase conflict replaying $LLM_SOURCE_BRANCH env commits onto mig."
-            err "This usually means an env-layer file (e.g. types/Spring.lua) was"
-            err "also modified by a transform on mig. Resolve in place:"
+            err "Cherry-pick conflict replaying $LLM_SOURCE_BRANCH env commits onto mig."
+            err "A transform on mig modified file(s) also touched by the env commit:"
             err ""
+            err "$conflicted"
+            err ""
+            err "Option 1 — resolve and continue (stays on $LLM_BRANCH):"
             err "  cd $BAR"
-            err "  # ...resolve conflicts in marked files..."
-            err "  git add -A && git rebase --continue"
+            err "  # ...edit conflicted files, pick the right side..."
+            err "  git add -A && git cherry-pick --continue"
+            err "  git checkout $LLM_SOURCE_BRANCH && git cherry-pick $LLM_BRANCH~..$LLM_BRANCH  # propagate the fix"
             err "  git config branch.$LLM_SOURCE_BRANCH.migBase $new_mig_sha"
             err "  cd $DEVTOOLS_DIR && just bar::fmt-mig-generate --llm-only"
             err ""
-            err "Or abort the rebase and re-create the env commit on top of new mig:"
-            err "  cd $BAR && git rebase --abort"
-            err "  git branch -f $LLM_SOURCE_BRANCH mig"
-            err "  git checkout $LLM_SOURCE_BRANCH"
+            err "Option 2 — abort and rebuild $LLM_SOURCE_BRANCH from scratch (safer, avoids"
+            err "pulling unrelated upstream changes into the env commit — see the lux-i18n"
+            err "bloat incident):"
+            err "  cd $BAR && git cherry-pick --abort"
+            err "  git checkout $LLM_SOURCE_BRANCH && git reset --hard mig"
             err "  # ...re-apply env edits..."
             err "  git commit -am 'env(llm): emmylua config + type stubs'"
             err "  git config branch.$LLM_SOURCE_BRANCH.migBase mig"
+            err "  cd $DEVTOOLS_DIR && just bar::fmt-mig-generate --llm-only"
             exit 1
         fi
-
-        # fmt-llm-source is now a clean "mig + env" branch. fmt-llm starts
-        # from it directly — no further cherry-picking needed.
-        git_bar checkout --force -B "$LLM_BRANCH" "$LLM_SOURCE_BRANCH"
     fi
 
-    # Record the new base for next run. Done AFTER successful rebase so a
-    # failure doesn't poison the stored pointer.
+    # Record the new base for next run. Done AFTER successful cherry-pick so
+    # a failure doesn't poison the stored pointer.
     git_bar config "branch.$LLM_SOURCE_BRANCH.migBase" "$new_mig_sha"
 
     # ── LLM layer: run the triage fan-out and commit its edits ──
@@ -706,9 +784,31 @@ Single pass, no iteration — categories that don't shrink the count
 are a signal that SKILL.md needs a new rule."
     fi
 
+    commit_blame_ignore_revs
+
     run_tests "$LLM_BRANCH"
 
     ok "$LLM_BRANCH ready"
+}
+
+# Writes .git-blame-ignore-revs with every transform commit SHA (cached by
+# build_mig) and commits it on the current branch. Deferred to fmt-llm so the
+# file never conflicts during env-commit cherry-picks onto fresh mig builds.
+commit_blame_ignore_revs() {
+    local blame_cache="$BAR/.git/mig-blame-hashes.txt"
+    if [[ ! -f "$blame_cache" ]]; then
+        warn "No cached transform hashes at $blame_cache — skipping blame-ignore-revs"
+        return
+    fi
+
+    step "Committing .git-blame-ignore-revs on $LLM_BRANCH..."
+    : > "$BAR/.git-blame-ignore-revs"
+    while IFS=$'\t' read -r sha msg; do
+        [[ -z "$sha" ]] && continue
+        printf '# %s\n%s\n\n' "$msg" "$sha" >> "$BAR/.git-blame-ignore-revs"
+    done < "$blame_cache"
+    git_bar add .git-blame-ignore-revs
+    git_bar commit -m "git-blame-ignore-revs: add transform commits"
 }
 
 # ─── PR body + update phase (runs after all branches exist) ──────────────────
