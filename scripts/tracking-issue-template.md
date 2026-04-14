@@ -22,6 +22,33 @@ The BAR type-error cleanup is done. I've moved all three PRs out of draft and te
 - A new BAR PR workflow gate, "Type Check", which runs the equivalent of `just bar::check`.
 - Dogfooded the new tools and ripped out LuaLS/Sumneko in favor of [EmmyLua](https://marketplace.visualstudio.com/items?itemName=tangzx.emmylua) (~100x faster, but the configuration is unfortunately mutually exclusive). Added `.emmyrc.json` to the project and `just setup::editor` to wire it all up in one command. **Never use the Sumneko VS Code plugin.**
 
+<details>
+<summary>Branch topology (8 leaves + 2 rollups)</summary>
+
+### Leaves — each targets `master`, mergeable independently
+
+| Branch | Command | What it does |
+|--------|---------|--------------|
+| [`fmt`](https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7199) | `stylua .` | initial stylua formatting across the entire codebase |
+| [`mig-bracket`](https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7287) | `bar-lua-codemod bracket-to-dot` | `x["y"]` → `x.y`, `["y"]=` → `y=` via full_moon AST rewrite |
+| [`mig-rename-aliases`](https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7288) | `bar-lua-codemod rename-aliases` | deprecated Spring API aliases (`GetMyTeamID` → `GetLocalTeamID`, etc.) |
+| [`mig-detach-bar-modules`](https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7289) | `bar-lua-codemod detach-bar-modules` | `Spring.{I18N,Utilities,Debug,Lava,GetModOptionsCopy}` → bare globals |
+| [`mig-i18n`](https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7291) | `bar-lua-codemod i18n-kikito` | vendored gajop/i18n → kikito/i18n.lua via lux dependency |
+| [`mig-spring-split`](https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7290) | `bar-lua-codemod spring-split` | `Spring.X` → `SpringSynced`/`SpringUnsynced`/`SpringShared.X` per `@context` |
+| `mig-integration-tests` | carried commit | `luaui/Tests` + `luaui/TestsExamples` → return-table shape; `dbg_test_runner` reads hooks from returned table |
+| `mig-busted-types` | carried commit | vendored LuaCATS/busted + LuaCATS/luassert type annotations under `types/` (pending [lumen-oss/lux#953](https://github.com/lumen-oss/lux/issues/953)) |
+
+### Rollups — composite branches stacking the leaves and (for `fmt-llm`) the env + LLM layers
+
+| Branch | Notes |
+|--------|-------|
+| `mig` | all leaves combined; deterministic rebuild from `master` |
+| [`fmt-llm`](https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7407) | `mig` + env commit (`.emmyrc.json`, `types/*` stubs, CI gate, misc source fixes) + one LLM triage commit |
+
+Regenerated deterministically by [`just bar::fmt-mig-generate`](https://github.com/beyond-all-reason/BAR-Devtools/pull/17).
+
+</details>
+
 <!-- GENERATED:MUSEUM_TABLE -->
 
 ## New developer commands
