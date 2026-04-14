@@ -531,6 +531,7 @@ build_leaf() {
     prereq=$(tvar "$transform" "prereq")
 
     step "Building leaf: $branch"
+    abort_stuck_git_state
     git_bar checkout --force -B "$branch" origin/master
 
     for prefix in "${PREFIX_BRANCHES[@]}"; do
@@ -567,6 +568,7 @@ build_leaf() {
 
 build_mig() {
     step "Building linear mig branch..."
+    abort_stuck_git_state
     git_bar checkout --force -B mig origin/master
 
     for prefix in "${PREFIX_BRANCHES[@]}"; do
