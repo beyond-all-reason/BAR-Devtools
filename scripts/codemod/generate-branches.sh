@@ -652,66 +652,59 @@ abort_stuck_git_state() {
 }
 
 # Build fmt-llm by:
-#   1. Replaying env commits from $LLM_SOURCE_BRANCH onto current mig using
-#      `git rebase --onto mig <stored_base> fmt-llm-source`. The stored base
-#      is the mig SHA that fmt-llm-source was last rebased onto, tracked in
-#      git config branch.fmt-llm-source.migBase.
-#   2. Checking out fmt-llm from the rebased source branch
-#   3. Running the LLM type-triage fan-out (drives just bar::check errors → 0)
-#   4. Committing whatever the workers edited as one gen(llm) commit
-#   5. Updating the stored migBase to the new mig SHA for next run
+#   1. Auto-detecting the env anchor on $LLM_SOURCE_BRANCH (walk from tip down,
+#      first commit whose subject does NOT start with `env(llm):` is the anchor;
+#      everything above it is env content, replayed onto current mig).
+#   2. Cherry-picking only those env commits onto a fresh fmt-llm off mig.
+#   3. Running the LLM type-triage fan-out (drives just bar::check errors → 0).
+#   4. Committing whatever the workers edited as one gen(llm) commit.
 #
 # The source branch is user-maintained, like detach-bar-modules-env / lux-i18n.
-# Bootstrap once with:
-#     git -C $BAR branch fmt-llm-source <env-commit-sha>
-#     git -C $BAR config branch.fmt-llm-source.migBase <parent-of-env-commit>
+# Bootstrap: just author env(llm): commits on top of some existing mig-ish
+# base. The only shape requirement is that env commits live contiguously at
+# the tip of $LLM_SOURCE_BRANCH with subjects prefixed `env(llm):`.
 #
-# Subsequent env edits: check out fmt-llm-source, amend or add commits on top.
-# No need to manually rebase — this function handles mig drift automatically.
+# Subsequent env edits: check out $LLM_SOURCE_BRANCH, amend or add more
+# env(llm): commits on top. Mig drift below the anchor is automatically
+# ignored — the replay range is computed from subjects each run, not stored.
 build_fmt_llm() {
     abort_stuck_git_state
 
     if ! git_bar rev-parse --verify "$LLM_SOURCE_BRANCH" >/dev/null 2>&1; then
         err "LLM source branch '$LLM_SOURCE_BRANCH' not found in BAR repo"
         err ""
-        err "Bootstrap it from an existing env commit (one-time setup), e.g.:"
-        err "  git -C $BAR branch $LLM_SOURCE_BRANCH <env-commit-sha>"
-        err "  git -C $BAR config branch.$LLM_SOURCE_BRANCH.migBase <parent-sha>"
-        err ""
-        err "Or create a fresh env commit on top of mig:"
+        err "Bootstrap it by authoring env commits on top of mig:"
         err "  git -C $BAR checkout -b $LLM_SOURCE_BRANCH mig"
         err "  # ...edit .emmyrc.json, types/*, etc..."
         err "  git -C $BAR commit -am 'env(llm): emmylua config + type stubs'"
-        err "  git -C $BAR config branch.$LLM_SOURCE_BRANCH.migBase mig"
+        err ""
+        err "Env commits must have subjects prefixed 'env(llm):' and live"
+        err "contiguously at the branch tip. The replay anchor is auto-detected"
+        err "as the first non-env(llm): commit walking down from the tip."
         exit 1
     fi
 
-    # Look up the stored mig base (the mig SHA fmt-llm-source was last rebased
-    # onto). This lets `rebase --onto` cleanly replay just the env commits even
-    # when every transform SHA has changed.
-    local stored_base new_mig_sha
-    stored_base=$(git_bar config --get "branch.$LLM_SOURCE_BRANCH.migBase" 2>/dev/null || true)
+    local new_mig_sha env_anchor env_commit_count
     new_mig_sha=$(git_bar rev-parse mig)
 
-    if [[ -z "$stored_base" ]]; then
-        # Fall back: assume the env commits are the single tip of the source
-        # branch (the typical case). Base = parent of the source branch tip.
-        stored_base=$(git_bar rev-parse "$LLM_SOURCE_BRANCH^" 2>/dev/null || true)
-        if [[ -z "$stored_base" ]]; then
-            err "Cannot determine env-commit base for $LLM_SOURCE_BRANCH"
-            err "Set it manually:"
-            err "  git -C $BAR config branch.$LLM_SOURCE_BRANCH.migBase <parent-of-env-commit-sha>"
-            exit 1
-        fi
-        warn "No migBase config for $LLM_SOURCE_BRANCH; assuming single-commit env layer"
-        warn "  inferred base: $stored_base (parent of $LLM_SOURCE_BRANCH tip)"
+    # Walk $LLM_SOURCE_BRANCH from tip downward; stop at the first commit whose
+    # subject is NOT `env(llm): ...`. That commit is the anchor. Using `|` as
+    # an awk field separator (unlikely to appear in subjects) so the whole
+    # subject stays in $2.
+    env_anchor=$(git_bar log --format='%H|%s' "$LLM_SOURCE_BRANCH" | \
+        awk -F'|' '$2 !~ /^env\(llm\):/ {print $1; exit}')
+
+    if [[ -z "$env_anchor" ]]; then
+        err "Could not detect an env anchor on $LLM_SOURCE_BRANCH — no commit"
+        err "with a non-'env(llm):' subject was found walking from the tip."
+        err "Is $LLM_SOURCE_BRANCH rooted at origin/master (or a mig variant)?"
+        exit 1
     fi
 
-    local env_commit_count
-    env_commit_count=$(git_bar rev-list --count "$stored_base..$LLM_SOURCE_BRANCH")
+    env_commit_count=$(git_bar rev-list --count "$env_anchor..$LLM_SOURCE_BRANCH")
     step "Cherry-picking $env_commit_count env commit(s) from $LLM_SOURCE_BRANCH onto mig..."
-    step "  old base: $stored_base"
-    step "  new mig:  $new_mig_sha"
+    step "  env anchor: $env_anchor ($(git_bar log -1 --format=%s "$env_anchor"))"
+    step "  new mig:    $new_mig_sha"
 
     # Build fmt-llm fresh from mig, then cherry-pick the env commits on top.
     # fmt-llm-source itself is NOT mutated — same fail-fast philosophy as the
@@ -722,14 +715,14 @@ build_fmt_llm() {
     git_bar checkout --force -B "$LLM_BRANCH" mig
 
     if [[ "$env_commit_count" == "0" ]]; then
-        warn "$LLM_SOURCE_BRANCH has no env commits (migBase == source tip) — env layer is empty"
+        warn "$LLM_SOURCE_BRANCH has no env commits above the anchor — env layer is empty"
     else
-        if ! git_bar cherry-pick "$stored_base..$LLM_SOURCE_BRANCH"; then
+        if ! git_bar cherry-pick "$env_anchor..$LLM_SOURCE_BRANCH"; then
             local conflicted
             conflicted=$(git_bar diff --name-only --diff-filter=U | sed 's/^/    /')
             err ""
             err "Cherry-pick conflict replaying $LLM_SOURCE_BRANCH env commits onto mig."
-            err "A transform on mig modified file(s) also touched by the env commit:"
+            err "A transform on mig modified file(s) also touched by an env commit:"
             err ""
             err "$conflicted"
             err ""
@@ -738,7 +731,6 @@ build_fmt_llm() {
             err "  # ...edit conflicted files, pick the right side..."
             err "  git add -A && git cherry-pick --continue"
             err "  git checkout $LLM_SOURCE_BRANCH && git cherry-pick $LLM_BRANCH~..$LLM_BRANCH  # propagate the fix"
-            err "  git config branch.$LLM_SOURCE_BRANCH.migBase $new_mig_sha"
             err "  cd $DEVTOOLS_DIR && just bar::fmt-mig-generate --llm-only"
             err ""
             err "Option 2 — abort and rebuild $LLM_SOURCE_BRANCH from scratch (safer, avoids"
@@ -748,15 +740,10 @@ build_fmt_llm() {
             err "  git checkout $LLM_SOURCE_BRANCH && git reset --hard mig"
             err "  # ...re-apply env edits..."
             err "  git commit -am 'env(llm): emmylua config + type stubs'"
-            err "  git config branch.$LLM_SOURCE_BRANCH.migBase mig"
             err "  cd $DEVTOOLS_DIR && just bar::fmt-mig-generate --llm-only"
             exit 1
         fi
     fi
-
-    # Record the new base for next run. Done AFTER successful cherry-pick so
-    # a failure doesn't poison the stored pointer.
-    git_bar config "branch.$LLM_SOURCE_BRANCH.migBase" "$new_mig_sha"
 
     # ── LLM layer: run the triage fan-out and commit its edits ──
     local before
