@@ -214,7 +214,7 @@ EOF
 
 integration_tests_branch="mig-integration-tests"
 integration_tests_commit="gen(hand): integration tests return-table shape"
-integration_tests_pr=""
+integration_tests_pr="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7437"
 integration_tests_pr_title="[Tests] Restructure integration tests to table-return shape"
 integration_tests_prereq="integration-tests-curated"
 integration_tests_description='Carried-commit leaf. Restructures `luaui/Tests/` and `luaui/TestsExamples/` (20 files) from bare-global hook declarations to a `return { ... }` shape, and patches `dbg_test_runner.lua` to read hooks from the returned table. Isolated so the convention change can be discussed/reverted independently.'
@@ -240,7 +240,7 @@ EOF
 
 busted_types_branch="mig-busted-types"
 busted_types_commit="gen(hand): inline luassert and busted LuaCATS types"
-busted_types_pr=""
+busted_types_pr="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7438"
 busted_types_pr_title="[Types] Inline LuaCATS busted+luassert type annotations"
 busted_types_prereq="busted-types-curated"
 busted_types_description='Carried-commit leaf. Vendors [LuaCATS/busted](https://github.com/LuaCATS/busted) and [LuaCATS/luassert](https://github.com/LuaCATS/luassert) type annotations under `types/busted/` and `types/luassert/`. Waits on [lumen-oss/lux#953](https://github.com/lumen-oss/lux/issues/953) to replace with a Lux dev-dep declaration.'
@@ -454,13 +454,19 @@ generate_topology() {
         branch=$(tvar "$transform" "branch")
         pr_url=$(tvar "$transform" "pr")
         stats=$(diff_stat origin/master "$branch")
-        # `fmt` is the only leaf that runs a non-codemod tool. Everything
-        # else is a single `bar-lua-codemod <transform>` invocation.
-        if [[ "$transform" == "fmt" ]]; then
-            command="\`stylua\`"
-        else
-            command="\`bar-lua-codemod ${transform//_/-}\`"
-        fi
+        # Most transforms invoke `bar-lua-codemod <name>`. Exceptions are
+        # hand-maintained:
+        #   - fmt: runs stylua, not the codemod
+        #   - carried-commit leaves (integration_tests, busted_types): content
+        #     comes from a curated prereq branch; no codemod or automation
+        case "$transform" in
+            fmt)
+                command="\`stylua\`" ;;
+            integration_tests|busted_types)
+                command="\`<hand curated>\`" ;;
+            *)
+                command="\`bar-lua-codemod ${transform//_/-}\`" ;;
+        esac
         echo "| $(pr_link "$branch" "$pr_url") | $command | $stats | $(unit_status "$branch") |"
     done
     echo ""
@@ -869,6 +875,46 @@ generate_llm_pr_body() {
     generate_topology
 }
 
+# Simpler variant of generate_topology for the tracking issue — drops the
+# diff-stat + unit-status columns and the timestamp/regen-link preamble. Uses
+# current *_pr URLs so the template picks up newly-created PRs on re-run.
+generate_issue_branch_topology() {
+    local leaf_count=${#TRANSFORMS[@]}
+    echo "<details>"
+    echo "<summary>Branch topology (${leaf_count} leaves + 2 rollups)</summary>"
+    echo ""
+    echo "### Leaves — each targets \`master\`, mergeable independently"
+    echo ""
+    echo "| Branch | Command | What it does |"
+    echo "|--------|---------|--------------|"
+    for transform in "${TRANSFORMS[@]}"; do
+        local branch pr_url command desc
+        branch=$(tvar "$transform" "branch")
+        pr_url=$(tvar "$transform" "pr")
+        case "$transform" in
+            fmt)
+                command="\`stylua\`" ;;
+            integration_tests|busted_types)
+                command="\`<hand curated>\`" ;;
+            *)
+                command="\`bar-lua-codemod ${transform//_/-}\`" ;;
+        esac
+        desc=$(museum_description "$(tvar "$transform" "commit")")
+        echo "| $(pr_link "$branch" "$pr_url") | $command | $desc |"
+    done
+    echo ""
+    echo "### Rollups — composite branches stacking the leaves and (for \`fmt-llm\`) the env + LLM layers"
+    echo ""
+    echo "| Branch | Notes |"
+    echo "|--------|-------|"
+    echo "| $(pr_link "mig" "$MIG_PR") | all leaves combined; deterministic rebuild from \`master\` |"
+    echo "| $(pr_link "$LLM_BRANCH" "$LLM_PR") | \`mig\` + env commit (\`.emmyrc.json\`, \`types/*\` stubs, CI gate, misc source fixes) + one LLM triage commit |"
+    echo ""
+    echo "Regenerated deterministically by [\`just bar::fmt-mig-generate\`]($DEVTOOLS_PR)."
+    echo ""
+    echo "</details>"
+}
+
 generate_tracking_issue_body() {
     local template="${DEVTOOLS_DIR}/scripts/codemod/tracking-issue-template.md"
     if [[ ! -f "$template" ]]; then
@@ -880,8 +926,8 @@ generate_tracking_issue_body() {
     museum_table=$(generate_museum_table "$LLM_BRANCH" "$LLM_PR")
     commit_count=$(git_bar rev-list --count "origin/master..$LLM_BRANCH")
 
-    local replacement
-    replacement=$(cat <<EOF
+    local museum_replacement
+    museum_replacement=$(cat <<EOF
 <details>
 <summary>Commit-by-commit breakdown (${commit_count} commits)</summary>
 
@@ -891,10 +937,21 @@ ${museum_table}
 EOF
     )
 
-    # Replace the token with the generated table.
-    # Uses awk because sed chokes on multi-line replacements with pipes/backticks.
-    awk -v token="<!-- GENERATED:MUSEUM_TABLE -->" -v replacement="$replacement" \
-        '{if ($0 == token) print replacement; else print}' \
+    local topology_replacement
+    topology_replacement=$(generate_issue_branch_topology)
+
+    # Replace each token with its generated block. awk because sed chokes on
+    # multi-line replacements with pipes/backticks.
+    awk \
+        -v museum_token="<!-- GENERATED:MUSEUM_TABLE -->" \
+        -v museum_replacement="$museum_replacement" \
+        -v topology_token="<!-- GENERATED:BRANCH_TOPOLOGY -->" \
+        -v topology_replacement="$topology_replacement" \
+        '{
+            if ($0 == museum_token) print museum_replacement
+            else if ($0 == topology_token) print topology_replacement
+            else print
+        }' \
         "$template"
 }
 
