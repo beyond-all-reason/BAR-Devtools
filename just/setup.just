@@ -131,8 +131,12 @@ editor:
 
     if [ "$have_code" -eq 1 ] && grep -qixF sumneko.lua <<<"$installed"; then
         echo ""
-        warn "sumneko.lua is installed — it conflicts with tangzx.emmylua."
-        info "  Two Lua language servers produce duplicate diagnostics and competing completions."
+        warn 'The "LuaLS" (sumneko.lua) extension should go. Reasons:'
+        info '  - We officially recommend tangzx.emmylua. This is The Will Of The Project.'
+        info '  - Running both LSPs at once means duplicate diagnostics, fighting completions,'
+        info '    and your hover popups developing trust issues.'
+        info '  - sumneko on this codebase is slower than caramelized molasses uphill in January.'
+        info '  - You will not miss it. Promise.'
         if [ -t 0 ]; then
             read -r -p "Uninstall sumneko.lua? [y/N] " reply
             if [[ "$reply" =~ ^[Yy]$ ]]; then
