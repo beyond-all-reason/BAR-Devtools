@@ -1,0 +1,12 @@
+{
+  "files.exclude": {
+    "**/.devtools": false,
+    "**/.devtools/**": false,
+    "**/.lux": false,
+    "**/.lux/**": false
+  },
+  "[lua]": {
+    "editor.defaultFormatter": "JohnnyMorganz.stylua",
+    "editor.formatOnSave": true
+  }
+}

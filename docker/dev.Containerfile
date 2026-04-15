@@ -42,8 +42,8 @@ RUN ARCH=$(uname -m) \
     && chmod +x /usr/local/bin/stylua \
     && rm /tmp/stylua.zip
 
-# Pinned so the host-side emmylua_ls (downloaded by `just setup::editor`)
-# always matches the version in this image. Bump both at the same time.
+# emmylua_ls and emmylua_check are distrobox-exported by `just setup::editor`,
+# so the host-side wrappers always use this exact version.
 ARG EMMYLUA_VERSION=0.22.0
 RUN ARCH=$(uname -m) \
     && case "$ARCH" in \
