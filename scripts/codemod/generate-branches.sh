@@ -688,11 +688,15 @@ build_fmt_llm() {
     new_mig_sha=$(git_bar rev-parse mig)
 
     # Walk $LLM_SOURCE_BRANCH from tip downward; stop at the first commit whose
-    # subject is NOT `env(llm): ...`. That commit is the anchor. Using `|` as
-    # an awk field separator (unlikely to appear in subjects) so the whole
-    # subject stays in $2.
-    env_anchor=$(git_bar log --format='%H|%s' "$LLM_SOURCE_BRANCH" | \
-        awk -F'|' '$2 !~ /^env\(llm\):/ {print $1; exit}')
+    # subject is NOT `env(llm): ...`. That commit is the anchor. Pure-shell
+    # implementation (no awk) so the script works in minimal distroboxes.
+    env_anchor=""
+    while IFS=$'\t' read -r sha subject; do
+        case "$subject" in
+            "env(llm):"*) continue ;;
+            *) env_anchor="$sha"; break ;;
+        esac
+    done < <(git_bar log --format='%H%x09%s' "$LLM_SOURCE_BRANCH")
 
     if [[ -z "$env_anchor" ]]; then
         err "Could not detect an env anchor on $LLM_SOURCE_BRANCH — no commit"
