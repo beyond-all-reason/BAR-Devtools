@@ -86,17 +86,11 @@ just setup::hooks
 * [StyLua](https://marketplace.visualstudio.com/items?itemName=JohnnyMorganz.stylua) (Lua formatter)
 * [clangd](https://marketplace.visualstudio.com/items?itemName=llvm-vs-code-extensions.vscode-clangd) (C/C++ for engine work)
 
-**Settings** (JSON):
-
-```json
-{
-  "emmylua.ls.executablePath": "~/.local/bin/emmylua_ls",
-  "[lua]": {
-    "editor.defaultFormatter": "JohnnyMorganz.stylua",
-    "editor.formatOnSave": true
-  }
-}
-```
+`just setup::editor` writes a workspace `.vscode/settings.json` into the BAR
+repo (gitignored, per-checkout) that configures `JohnnyMorganz.stylua` as the
+Lua formatter with format-on-save. Both VS Code and Cursor read this
+automatically. If the file already exists, setup shows a diff against the
+recommended defaults and leaves yours intact.
 
 #### VS Code Test Switcher (optional)
 

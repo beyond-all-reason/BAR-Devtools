@@ -31,11 +31,7 @@ distrobox:
     source "$DEVTOOLS_DIR/scripts/setup.sh"
     cmd_setup_distrobox
 
-# Export distrobox binaries for editor integration (clangd, emmylua_check, stylua, lx)
-# emmylua_ls is downloaded directly to the host instead of exported, because
-# distrobox-enter / rootless podman don't reliably forward SIGTERM to the
-# in-container LSP — VSCode then escalates to SIGKILL on shutdown and the
-# extension reports "Server process exited with signal SIGKILL".
+# Export distrobox binaries for editor integration (emmylua_ls, emmylua_check, clangd, stylua, lx)
 editor:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -47,28 +43,11 @@ editor:
     local_bin="$HOME/.local/bin"
     mkdir -p "$local_bin"
 
-    # Export CLI tools from the distrobox (one-shot invocations, no signaling concerns)
-    for bin in /usr/local/bin/emmylua_check /usr/bin/clangd /usr/local/bin/stylua /usr/bin/lx; do
+    for bin in /usr/local/bin/emmylua_ls /usr/local/bin/emmylua_check /usr/bin/clangd /usr/local/bin/stylua /usr/bin/lx; do
         name="$(basename "$bin")"
         info "Exporting $name..."
         distrobox enter "$DEVTOOLS_DISTROBOX" -- distrobox-export --bin "$bin" --export-path "$local_bin"
     done
-
-    # Download emmylua_ls directly to the host, pinned to the same version
-    # baked into dev.Containerfile so the LSP and the project tooling stay in sync.
-    emmylua_version="$(grep -oP '(?<=^ARG EMMYLUA_VERSION=).*' "$DEVTOOLS_DIR/docker/dev.Containerfile")"
-    case "$(uname -m)" in
-        x86_64)  ls_asset="emmylua_ls-linux-x64.tar.gz" ;;
-        aarch64) ls_asset="emmylua_ls-linux-arm64-glibc.2.17.tar.gz" ;;
-        *) err "unsupported arch for emmylua_ls: $(uname -m)"; exit 1 ;;
-    esac
-    info "Downloading emmylua_ls $emmylua_version to $local_bin..."
-    tmp="$(mktemp -d)"
-    trap 'rm -rf "$tmp"' EXIT
-    curl -fsSL "https://github.com/EmmyLuaLs/emmylua-analyzer-rust/releases/download/${emmylua_version}/${ls_asset}" \
-        | tar xz -C "$tmp"
-    install -m 0755 "$tmp/emmylua_ls" "$local_bin/emmylua_ls"
-    ok "emmylua_ls $("$local_bin/emmylua_ls" --version | awk '{print $2}') installed"
     echo ""
     if [ -f "$DEVTOOLS_DIR/RecoilEngine/CMakeLists.txt" ]; then
         step "Generating compile_commands.json for clangd..."
@@ -84,17 +63,119 @@ editor:
         info "RecoilEngine not cloned — skipping compile_commands.json"
     fi
     echo ""
+
+    # Show recommended extensions and (if `code` is on PATH) offer to install
+    # the missing ones. Also offer to uninstall sumneko.lua, which conflicts
+    # with tangzx.emmylua — two Lua LSPs produce duplicate diagnostics and
+    # competing completions.
+    echo ""
+    recommended=(
+        "tangzx.emmylua|EmmyLua (Lua language server)"
+        "JohnnyMorganz.stylua|StyLua (Lua formatter)"
+        "llvm-vs-code-extensions.vscode-clangd|clangd (C/C++ for engine work)"
+    )
+    have_code=0
+    installed=""
+    command -v code >/dev/null 2>&1 && have_code=1 && installed="$(code --list-extensions 2>/dev/null || true)"
+
+    state_for() {
+        local ext="$1"
+        if [ "$have_code" -eq 0 ]; then echo unknown; return; fi
+        grep -qixF "$ext" <<<"$installed" && echo installed || echo missing
+    }
+    render() {
+        local ext="$1" label="$2" state="$3"
+        case "$state" in
+            installed)     printf "  ${CYAN}✓ %-40s${NC} %s  ${DIM}(installed)${NC}\n"        "$ext" "$label" ;;
+            just_installed)printf "  ${GREEN}+ %-40s${NC} %s  ${DIM}(just installed)${NC}\n"  "$ext" "$label" ;;
+            missing)       printf "  ${RED}✗ %-40s${NC} %s  ${DIM}(missing)${NC}\n"           "$ext" "$label" ;;
+            unknown)       printf "  ${DIM}? %-40s${NC} %s\n"                                  "$ext" "$label" ;;
+        esac
+    }
+
+    declare -A state
+    info "Recommended VS Code / Cursor extensions:"
+    for entry in "${recommended[@]}"; do
+        ext="${entry%%|*}"; label="${entry#*|}"
+        state["$ext"]="$(state_for "$ext")"
+        render "$ext" "$label" "${state[$ext]}"
+    done
+
+    if [ "$have_code" -eq 1 ] && [ -t 0 ]; then
+        missing=()
+        for entry in "${recommended[@]}"; do
+            ext="${entry%%|*}"
+            [ "${state[$ext]}" = missing ] && missing+=("$ext")
+        done
+        if [ ${#missing[@]} -gt 0 ]; then
+            echo ""
+            read -r -p "Install the missing extensions into VS Code? [y/N] " reply
+            if [[ "$reply" =~ ^[Yy]$ ]]; then
+                for ext in "${missing[@]}"; do
+                    code --install-extension "$ext" --force >/dev/null
+                    state["$ext"]=just_installed
+                    info "Installed $ext"
+                done
+                echo ""
+                info "Updated state:"
+                for entry in "${recommended[@]}"; do
+                    ext="${entry%%|*}"; label="${entry#*|}"
+                    render "$ext" "$label" "${state[$ext]}"
+                done
+            fi
+        fi
+    elif [ "$have_code" -eq 0 ]; then
+        info "Install 'code' CLI (Command Palette → 'Shell Command: Install code command in PATH') to manage these automatically."
+        info "Cursor users: install tangzx.emmylua from VSIX — marketplace version is outdated."
+    fi
+
+    if [ "$have_code" -eq 1 ] && grep -qixF sumneko.lua <<<"$installed"; then
+        echo ""
+        warn "sumneko.lua is installed — it conflicts with tangzx.emmylua."
+        info "  Two Lua language servers produce duplicate diagnostics and competing completions."
+        if [ -t 0 ]; then
+            read -r -p "Uninstall sumneko.lua? [y/N] " reply
+            if [[ "$reply" =~ ^[Yy]$ ]]; then
+                code --uninstall-extension sumneko.lua >/dev/null
+                ok "sumneko.lua uninstalled"
+            fi
+        fi
+    fi
+
+    echo ""
+    info "Binaries exported to ~/.local/bin:"
+    for bin in emmylua_ls emmylua_check clangd stylua lx; do
+        if [ -x "$HOME/.local/bin/$bin" ]; then
+            printf "  ${CYAN}✓ %s${NC}\n" "$bin"
+        else
+            printf "  ${RED}✗ %s${NC}  ${DIM}(missing — rerun setup::editor)${NC}\n" "$bin"
+        fi
+    done
+    echo ""
+
+    # BAR's .vscode/ is gitignored, so workspace settings have to be created
+    # per-checkout. Write defaults if absent; otherwise diff and leave alone.
+    bar_vscode="$DEVTOOLS_DIR/Beyond-All-Reason/.vscode/settings.json"
+    bar_vscode_template="$DEVTOOLS_DIR/templates/bar-vscode-settings.json"
+    if [ -d "$DEVTOOLS_DIR/Beyond-All-Reason" ]; then
+        if [ ! -f "$bar_vscode" ]; then
+            mkdir -p "$(dirname "$bar_vscode")"
+            cp "$bar_vscode_template" "$bar_vscode"
+            ok "Wrote $bar_vscode"
+        elif ! diff -q "$bar_vscode_template" "$bar_vscode" >/dev/null 2>&1; then
+            warn "$bar_vscode differs from recommended defaults:"
+            diff -u "$bar_vscode" "$bar_vscode_template" | sed 's/^/  /' || true
+            info "Merge the '[lua]' block (and any missing files.exclude entries) manually if you want format-on-save."
+        else
+            info "$bar_vscode matches recommended defaults"
+        fi
+    fi
+    echo ""
     ok "Editor integration ready."
     echo ""
-    info "Install these VS Code / Cursor extensions:"
-    echo "  - EmmyLua (tangzx.emmylua) — Cursor users: install from VSIX, marketplace version is outdated"
-    echo "    https://marketplace.visualstudio.com/items?itemName=tangzx.emmylua"
-    echo "  - StyLua (JohnnyMorganz.stylua)"
-    echo "  - clangd (llvm-vs-code-extensions.vscode-clangd) — for engine C++ work"
-    echo ""
-    info "Add to your editor settings (JSON):"
-    echo '  "emmylua.ls.executablePath": "~/.local/bin/emmylua_ls",'
-    echo '  "[lua]": { "editor.defaultFormatter": "JohnnyMorganz.stylua", "editor.formatOnSave": true }'
+    info "If your editor was already open, reload the window (or run"
+    info "'EmmyLua: Restart Server' and 'clangd: Restart language server')"
+    info "so both extensions pick up the new binaries."
 
 # Install git pre-commit hooks (stylua + luacheck) in BAR repo
 hooks:
