@@ -64,16 +64,17 @@ editor:
     fi
     echo ""
 
-    # Show recommended extensions and (if `code` is on PATH) offer to install
-    # the missing ones. Also offer to uninstall sumneko.lua, which conflicts
-    # with tangzx.emmylua — two Lua LSPs produce duplicate diagnostics and
-    # competing completions.
+    # Show current extension state and offer a single action to reconcile.
+    # sumneko.lua (LuaLS) conflicts with tangzx.emmylua — two Lua LSPs
+    # produce duplicate diagnostics and fighting completions. We remove it
+    # as part of the same action that installs the recommended set.
     echo ""
     recommended=(
         "tangzx.emmylua|EmmyLua (Lua language server)"
         "JohnnyMorganz.stylua|StyLua (Lua formatter)"
         "llvm-vs-code-extensions.vscode-clangd|clangd (C/C++ for engine work)"
     )
+    conflicts=("sumneko.lua")
     have_code=0
     installed=""
     command -v code >/dev/null 2>&1 && have_code=1 && installed="$(code --list-extensions 2>/dev/null || true)"
@@ -88,62 +89,62 @@ editor:
         case "$state" in
             installed)     printf "  ${CYAN}✓ %-40s${NC} %s  ${DIM}(installed)${NC}\n"        "$ext" "$label" ;;
             just_installed)printf "  ${GREEN}+ %-40s${NC} %s  ${DIM}(just installed)${NC}\n"  "$ext" "$label" ;;
+            removed)       printf "  ${YELLOW}− %-40s${NC} %s  ${DIM}(just removed)${NC}\n"  "$ext" "$label" ;;
+            conflict)      printf "  ${RED}✗ %-40s${NC} %s  ${DIM}(conflicts — will remove)${NC}\n" "$ext" "$label" ;;
             missing)       printf "  ${RED}✗ %-40s${NC} %s  ${DIM}(missing)${NC}\n"           "$ext" "$label" ;;
             unknown)       printf "  ${DIM}? %-40s${NC} %s\n"                                  "$ext" "$label" ;;
         esac
     }
 
     declare -A state
-    info "Recommended VS Code / Cursor extensions:"
+    to_install=(); to_remove=()
+
+    info "VS Code / Cursor extensions:"
     for entry in "${recommended[@]}"; do
         ext="${entry%%|*}"; label="${entry#*|}"
         state["$ext"]="$(state_for "$ext")"
+        [ "${state[$ext]}" = missing ] && to_install+=("$ext")
         render "$ext" "$label" "${state[$ext]}"
     done
+    for ext in "${conflicts[@]}"; do
+        if [ "$have_code" -eq 1 ] && grep -qixF "$ext" <<<"$installed"; then
+            state["$ext"]=conflict; to_remove+=("$ext")
+            render "$ext" "LuaLS — conflicts with EmmyLua (duplicate diagnostics, slower)" "${state[$ext]}"
+        fi
+    done
 
-    if [ "$have_code" -eq 1 ] && [ -t 0 ]; then
-        missing=()
-        for entry in "${recommended[@]}"; do
-            ext="${entry%%|*}"
-            [ "${state[$ext]}" = missing ] && missing+=("$ext")
-        done
-        if [ ${#missing[@]} -gt 0 ]; then
+    need_action=$(( ${#to_install[@]} + ${#to_remove[@]} ))
+    if [ "$have_code" -eq 1 ] && [ "$need_action" -gt 0 ] && [ -t 0 ]; then
+        echo ""
+        summary=""
+        [ ${#to_install[@]} -gt 0 ] && summary="install ${#to_install[@]}"
+        [ ${#to_remove[@]} -gt 0 ] && { [ -n "$summary" ] && summary="$summary, "; summary="${summary}remove ${#to_remove[@]}"; }
+        read -r -p "Apply changes ($summary)? [y/N] " reply
+        if [[ "$reply" =~ ^[Yy]$ ]]; then
+            for ext in "${to_install[@]}"; do
+                code --install-extension "$ext" --force >/dev/null
+                state["$ext"]=just_installed
+                info "Installed $ext"
+            done
+            for ext in "${to_remove[@]}"; do
+                code --uninstall-extension "$ext" >/dev/null
+                state["$ext"]=removed
+                info "Removed $ext"
+            done
             echo ""
-            read -r -p "Install the missing extensions into VS Code? [y/N] " reply
-            if [[ "$reply" =~ ^[Yy]$ ]]; then
-                for ext in "${missing[@]}"; do
-                    code --install-extension "$ext" --force >/dev/null
-                    state["$ext"]=just_installed
-                    info "Installed $ext"
-                done
-                echo ""
-                info "Updated state:"
-                for entry in "${recommended[@]}"; do
-                    ext="${entry%%|*}"; label="${entry#*|}"
-                    render "$ext" "$label" "${state[$ext]}"
-                done
-            fi
+            info "Updated state:"
+            for entry in "${recommended[@]}"; do
+                ext="${entry%%|*}"; label="${entry#*|}"
+                render "$ext" "$label" "${state[$ext]}"
+            done
+            for ext in "${conflicts[@]}"; do
+                [ -n "${state[$ext]+x}" ] && [ "${state[$ext]}" = removed ] && \
+                    render "$ext" "LuaLS" "${state[$ext]}"
+            done
         fi
     elif [ "$have_code" -eq 0 ]; then
         info "Install 'code' CLI (Command Palette → 'Shell Command: Install code command in PATH') to manage these automatically."
         info "Cursor users: install tangzx.emmylua from VSIX — marketplace version is outdated."
-    fi
-
-    if [ "$have_code" -eq 1 ] && grep -qixF sumneko.lua <<<"$installed"; then
-        echo ""
-        warn 'The "LuaLS" (sumneko.lua) extension should go. Reasons:'
-        info '  - We officially recommend tangzx.emmylua. This is The Will Of The Project.'
-        info '  - Running both LSPs at once means duplicate diagnostics, fighting completions,'
-        info '    and your hover popups developing trust issues.'
-        info '  - sumneko on this codebase is slower than caramelized molasses uphill in January.'
-        info '  - You will not miss it. Promise.'
-        if [ -t 0 ]; then
-            read -r -p "Uninstall sumneko.lua? [y/N] " reply
-            if [[ "$reply" =~ ^[Yy]$ ]]; then
-                code --uninstall-extension sumneko.lua >/dev/null
-                ok "sumneko.lua uninstalled"
-            fi
-        fi
     fi
 
     echo ""
