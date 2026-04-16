@@ -31,6 +31,25 @@ check *args: require-bar
     emmylua_check -c .emmyrc.json . {{args}}
     ok "Type check complete"
 
+# Type-check but only surface errors — warnings/hints dropped. Exits 0 iff no errors
+# (emmylua_check itself exits non-zero on any diagnostic, so we re-derive exit code from the error count).
+check-errors: require-bar
+    #!/usr/bin/env bash
+    set -uo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    enter_distrobox
+    step "Running emmylua_check (errors only)..."
+    cd "$BAR_DIR"
+    json="$(emmylua_check -c .emmyrc.json -f json . 2>/dev/null || true)"
+    printf '%s\n' "$json" | jq -r '.[] | . as $f | .diagnostics[] | select(.severity == 1) |
+        "\($f.file):\(.range.start.line + 1):\(.range.start.character + 1): \(.code): \(.message)"'
+    count="$(printf '%s\n' "$json" | jq '[.[] | .diagnostics[] | select(.severity == 1)] | length')"
+    if [[ "$count" -gt 0 ]]; then
+        err "$count error(s)"
+        exit 1
+    fi
+    ok "No errors"
+
 # Lint BAR Lua code (luacheck via lux)
 lint *args: require-bar
     #!/usr/bin/env bash
