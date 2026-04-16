@@ -48,6 +48,26 @@ LLM_COMMIT_PREFIX="gen(llm): type-error triage"
 LLM_PR="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7407"
 LLM_PR_TITLE="[Types] LLM-driven type-error transform capstone"
 
+# ─── Stacked-PR base overrides ──────────────────────────────────────────────
+# Desired merge chain: master <- fmt <- mig <- fmt-llm-source <- fmt-llm
+# Branches not listed here default to "master" in update_prs/update_capstone_pr.
+#
+# BLOCKED: GitHub requires base branches to exist on the *target* repo (origin),
+# not just the fork. Since we push to a fork, `gh pr edit --base fmt` fails with
+# "Proposed base branch 'fmt' was not found" unless someone with origin write
+# access pushes these branches there first. Leaving the map empty (all PRs
+# target master) until origin has the branches. To enable:
+#
+#   # Someone with write access to beyond-all-reason/Beyond-All-Reason:
+#   git push origin fmt mig fmt-llm-source
+#
+# Then uncomment the map below and re-run with --update-prs.
+declare -A PR_BASE=(
+    # [mig]="fmt"
+    # ["$LLM_SOURCE_BRANCH"]="mig"
+    # ["$LLM_BRANCH"]="$LLM_SOURCE_BRANCH"
+)
+
 # Dirty check only on the host -- inside distrobox stdin is piped via enter_distrobox.
 if [[ -z "${_DEVTOOLS_IN_DISTROBOX:-}" ]] && [[ -n "$(git -C "$BAR" status --porcelain 2>/dev/null)" ]]; then
     warn "BAR working tree has uncommitted changes."
@@ -478,7 +498,7 @@ generate_topology() {
     echo "|--------|------|------|-------|"
     echo "| $(pr_link "mig" "$MIG_PR") | $(diff_stat origin/master mig) | — | $(unit_status mig) |"
     echo "| $(pr_link "$LLM_SOURCE_BRANCH" "$LLM_SOURCE_PR") | $(diff_stat origin/master "$LLM_SOURCE_BRANCH") | $(diff_stat mig "$LLM_SOURCE_BRANCH") | $(unit_status "$LLM_SOURCE_BRANCH") |"
-    echo "| $(pr_link "$LLM_BRANCH" "$LLM_PR") | $(diff_stat origin/master "$LLM_BRANCH") | $(diff_stat mig "$LLM_BRANCH") | $(unit_status "$LLM_BRANCH") |"
+    echo "| $(pr_link "$LLM_BRANCH" "$LLM_PR") | $(diff_stat origin/master "$LLM_BRANCH") | $(diff_stat "$LLM_SOURCE_BRANCH" "$LLM_BRANCH") | $(unit_status "$LLM_BRANCH") |"
 }
 
 generate_leaf_pr_body() {
@@ -690,14 +710,16 @@ build_fmt_llm() {
     local new_mig_sha env_anchor env_commit_count
     new_mig_sha=$(git_bar rev-parse mig)
 
-    # Walk $LLM_SOURCE_BRANCH from tip downward; stop at the first commit whose
-    # subject is NOT `env(llm): ...`. That commit is the anchor. Pure-shell
-    # implementation (no awk) so the script works in minimal distroboxes.
+    # Walk $LLM_SOURCE_BRANCH from tip downward; stop at the first commit that
+    # looks like it came from the mig pipeline (gen(…), git-blame-ignore-revs,
+    # or a known prereq prefix). Everything above that is user-authored env
+    # content to be cherry-picked onto the fresh mig. Pure-shell implementation
+    # (no awk) so the script works in minimal distroboxes.
     env_anchor=""
     while IFS=$'\t' read -r sha subject; do
         case "$subject" in
-            "env(llm):"*) continue ;;
-            *) env_anchor="$sha"; break ;;
+            "gen("*|"git-blame-ignore-revs:"*|"deps:"*|"env: "*) env_anchor="$sha"; break ;;
+            *) continue ;;
         esac
     done < <(git_bar log --format='%H%x09%s' "$LLM_SOURCE_BRANCH")
 
@@ -865,12 +887,9 @@ generate_llm_source_pr_body() {
     echo "This branch carries:"
     echo "- \`.emmyrc.json\` globals and analyzer config"
     echo "- \`types/*\` stubs for vendored/generated declarations"
+    echo "- Explicit type ignores for known dead code"
     echo "- CI gate configuration"
     echo "- Manual source fixes that require human judgement"
-    echo ""
-    echo "Maintained independently — rebased onto \`mig\` each pipeline run. The [fmt-llm capstone]($LLM_PR) cherry-picks these commits then runs the LLM triage on top."
-    echo ""
-    generate_museum_table "$LLM_SOURCE_BRANCH" "$LLM_SOURCE_PR"
     echo ""
     generate_topology
 }
@@ -900,7 +919,7 @@ generate_llm_pr_body() {
 generate_issue_branch_topology() {
     local leaf_count=${#TRANSFORMS[@]}
     echo "<details>"
-    echo "<summary>Branch topology (${leaf_count} leaves + 2 rollups)</summary>"
+    echo "<summary>Branch topology (${leaf_count} leaves + 3 rollups)</summary>"
     echo ""
     echo "### Leaves — each targets \`master\`, mergeable independently"
     echo ""
@@ -927,7 +946,7 @@ generate_issue_branch_topology() {
     echo "| Branch | Notes |"
     echo "|--------|-------|"
     echo "| $(pr_link "mig" "$MIG_PR") | all leaves combined; deterministic rebuild from \`master\` |"
-    echo "| $(pr_link "$LLM_SOURCE_BRANCH" "$LLM_SOURCE_PR") | \`mig\` + human-curated env layer (\`.emmyrc.json\`, \`types/*\` stubs, CI gate, manual fixes) |"
+    echo "| $(pr_link "$LLM_SOURCE_BRANCH" "$LLM_SOURCE_PR") | human-curated env layer (\`.emmyrc.json\`, \`types/*\` stubs, explicit type ignores, CI gate, manual fixes) |"
     echo "| $(pr_link "$LLM_BRANCH" "$LLM_PR") | \`$LLM_SOURCE_BRANCH\` + one LLM triage commit |"
     echo ""
     echo "Regenerated deterministically by [\`just bar::fmt-mig-generate\`]($DEVTOOLS_PR)."
@@ -985,9 +1004,10 @@ update_prs() {
             pr_title=$(tvar "$transform" "pr_title")
             : "${pr_title:="[Types] ${transform//_/-}"}"
 
+            local base="${PR_BASE[$branch]:-master}"
             if [[ -n "$pr_url" ]]; then
                 step "Updating PR $pr_url..."
-                gh_host pr edit "$pr_url" --body-file "$pr_body_file"
+                gh_host pr edit "$pr_url" --body-file "$pr_body_file" --base "$base"
                 ok "PR updated"
             else
                 step "Creating PR for $branch..."
@@ -995,7 +1015,7 @@ update_prs() {
                 new_url=$(gh_host pr create \
                     --repo "$ORIGIN_REPO" \
                     --head "$FORK_OWNER:$branch" \
-                    --base master \
+                    --base "$base" \
                     --title "$pr_title" \
                     --body-file "$pr_body_file" \
                     --draft)
@@ -1006,7 +1026,7 @@ update_prs() {
 
         if [[ -n "$MIG_PR" ]]; then
             step "Updating mig PR $MIG_PR..."
-            gh_host pr edit "$MIG_PR" --body-file "$BAR/.git/mig-pr-body.md"
+            gh_host pr edit "$MIG_PR" --body-file "$BAR/.git/mig-pr-body.md" --base "${PR_BASE[mig]:-master}"
             ok "mig PR updated"
         fi
     fi
@@ -1014,7 +1034,7 @@ update_prs() {
     # fmt-llm-source env layer PR.
     update_capstone_pr "$LLM_SOURCE_BRANCH" "$LLM_SOURCE_PR" "$LLM_SOURCE_PR_TITLE"
 
-    # fmt-llm capstone PR (only one branch — env layer is folded into it).
+    # fmt-llm capstone PR.
     update_capstone_pr "$LLM_BRANCH" "$LLM_PR" "$LLM_PR_TITLE"
 
     # Tracking issue — update the body with the latest museum table.
@@ -1038,14 +1058,13 @@ update_capstone_pr() {
         return 0
     fi
 
-    # fmt-llm targets master because `mig` is local-only — never pushed as a
-    # base branch on origin. The PR body explains the layer structure
-    # (master → mig → env → LLM) so reviewers can read the diff in stages.
-    local base="master"
+    # Stacked PRs: base branch from PR_BASE, defaults to master.
+    # Merge chain: master <- fmt <- mig <- fmt-llm-source <- fmt-llm
+    local base="${PR_BASE[$branch]:-master}"
 
     if [[ -n "$pr_url" ]]; then
         step "Updating PR $pr_url..."
-        gh_host pr edit "$pr_url" --body-file "$pr_body_file"
+        gh_host pr edit "$pr_url" --body-file "$pr_body_file" --base "$base"
         ok "$branch PR updated"
     else
         step "Creating PR for $branch (base: $base)..."

@@ -20,35 +20,7 @@ build-lde:
     npm ci && npm run build
     ok "lua-doc-extractor built"
 
-# Resolve the lux-installed path for recoil-lua-library
-[private]
-recoil-lib-path:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    match=$(find "$BAR_DIR/.lux/5.1" -maxdepth 2 -name 'library' -path '*recoil-lua-library*' -type d 2>/dev/null | head -1)
-    if [ -z "$match" ]; then
-        echo "$BAR_DIR/.lux/5.1/recoil-lua-library" # fallback before first sync
-    else
-        dirname "$match"
-    fi
-
-# Create symlink from BAR/recoil-lua-library -> lux-installed package
-link: recoil-lib-path
-    #!/usr/bin/env bash
-    set -euo pipefail
-    source "$DEVTOOLS_DIR/scripts/common.sh"
-    target=$(just lua::recoil-lib-path)
-    link="$BAR_DIR/recoil-lua-library"
-    if [ -L "$link" ]; then
-        rm "$link"
-    elif [ -e "$link" ]; then
-        warn "$link exists and is not a symlink, skipping"
-        exit 0
-    fi
-    ln -s "$target" "$link"
-    ok "Symlinked $link -> $target"
-
-# Generate Lua library from RecoilEngine sources, copy into lux-installed path
+# Generate Lua library from RecoilEngine sources, copy into BAR submodule
 library *flags: build-lde
     #!/usr/bin/env bash
     set -euo pipefail
@@ -70,39 +42,22 @@ library *flags: build-lde
         --repo "https://github.com/beyond-all-reason/RecoilEngine/blob/master" \
         {{flags}}
 
-    LUX_LIB=$(just lua::recoil-lib-path 2>/dev/null || echo "")
-    if [ -n "$LUX_LIB" ] && [ -d "$LUX_LIB" ]; then
-        info "Copying into lux-installed recoil-lua-library..."
-        clean_dir "$LUX_LIB/library"
-        mkdir -p "$LUX_LIB/library"
-        cp -r "$RECOIL_DIR/rts/Lua/library/"* "$LUX_LIB/library/"
-        ok "Updated $LUX_LIB/library/"
-        echo "  Run 'just lua::reset' to restore the published version."
-    else
-        info "Copying into BAR working tree..."
-        clean_dir "$BAR_DIR/recoil-lua-library/library"
-        mkdir -p "$BAR_DIR/recoil-lua-library/library"
-        cp -r "$RECOIL_DIR/rts/Lua/library/"* "$BAR_DIR/recoil-lua-library/library/"
-        ok "Updated $BAR_DIR/recoil-lua-library/library/"
-    fi
+    info "Copying into BAR submodule..."
+    clean_dir "$BAR_DIR/recoil-lua-library/library"
+    mkdir -p "$BAR_DIR/recoil-lua-library/library"
+    cp -r "$RECOIL_DIR/rts/Lua/library/"* "$BAR_DIR/recoil-lua-library/library/"
+    ok "Updated $BAR_DIR/recoil-lua-library/library/"
 
-# Generate library then restart LuaLS so the editor picks up changes
-library-reload *flags: (library flags)
-    -pkill -f lua-language-server
-    @echo "LuaLS restarting (editor extension will respawn it)"
-
-# Reset generated Lua library files and restore lux-installed version
+# Reset generated Lua library files to submodule state
 reset:
     #!/usr/bin/env bash
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
-    enter_distrobox
     info "Resetting Lua library in RecoilEngine..."
     cd "$RECOIL_DIR"
     git checkout -- rts/Lua/library/
     git clean -fd rts/Lua/library/
-    info "Restoring lux-installed recoil-lua-library..."
+    info "Resetting BAR submodule..."
     cd "$BAR_DIR"
-    lx sync
-    just lua::link
+    git checkout -- recoil-lua-library/
     ok "Lua library reset."

@@ -166,7 +166,6 @@ fmt-mig: require-bar require-codemod
 [private]
 require-library:
     just lua::library
-    just lua::link
 
 # $CREDENTIALS_RUNNER is an opaque command prefix that loads secrets into
 # the environment of whatever it wraps. When set, fmt-mig-generate runs
