@@ -41,6 +41,8 @@ DEVTOOLS_PR="https://github.com/beyond-all-reason/BAR-Devtools/pull/17"
 # script fails fast and the user resolves them on the source branch (rebase
 # onto mig) before re-running with --llm-only.
 LLM_SOURCE_BRANCH="${LLM_SOURCE_BRANCH:-fmt-llm-source}"
+LLM_SOURCE_PR=""
+LLM_SOURCE_PR_TITLE="[Types] LLM env layer (emmylua config, type stubs, manual fixes)"
 LLM_BRANCH="fmt-llm"
 LLM_COMMIT_PREFIX="gen(llm): type-error triage"
 LLM_PR="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7407"
@@ -475,6 +477,7 @@ generate_topology() {
     echo "| Branch | Diff vs \`master\` | Diff vs \`mig\` | Units |"
     echo "|--------|------|------|-------|"
     echo "| $(pr_link "mig" "$MIG_PR") | $(diff_stat origin/master mig) | — | $(unit_status mig) |"
+    echo "| $(pr_link "$LLM_SOURCE_BRANCH" "$LLM_SOURCE_PR") | $(diff_stat origin/master "$LLM_SOURCE_BRANCH") | $(diff_stat mig "$LLM_SOURCE_BRANCH") | $(unit_status "$LLM_SOURCE_BRANCH") |"
     echo "| $(pr_link "$LLM_BRANCH" "$LLM_PR") | $(diff_stat origin/master "$LLM_BRANCH") | $(diff_stat mig "$LLM_BRANCH") | $(unit_status "$LLM_BRANCH") |"
 }
 
@@ -836,6 +839,13 @@ generate_all_pr_bodies() {
         ok "  mig PR body: $pr_body_file"
     fi
 
+    # fmt-llm-source env layer PR body.
+    if git_bar rev-parse --verify "$LLM_SOURCE_BRANCH" >/dev/null 2>&1; then
+        pr_body_file="$BAR/.git/${LLM_SOURCE_BRANCH}-pr-body.md"
+        generate_llm_source_pr_body > "$pr_body_file"
+        ok "  $LLM_SOURCE_BRANCH PR body: $pr_body_file"
+    fi
+
     # LLM capstone PR body (only generated when fmt-llm exists).
     if git_bar rev-parse --verify "$LLM_BRANCH" >/dev/null 2>&1; then
         pr_body_file="$BAR/.git/${LLM_BRANCH}-pr-body.md"
@@ -847,6 +857,22 @@ generate_all_pr_bodies() {
         generate_tracking_issue_body > "$tracking_body_file"
         ok "  tracking issue body: $tracking_body_file"
     fi
+}
+
+generate_llm_source_pr_body() {
+    echo "Part of [BAR type-error cleanup]($TRACKING_ISSUE). Human-curated env layer that prepares the codebase for the LLM type-fix pass."
+    echo ""
+    echo "This branch carries:"
+    echo "- \`.emmyrc.json\` globals and analyzer config"
+    echo "- \`types/*\` stubs for vendored/generated declarations"
+    echo "- CI gate configuration"
+    echo "- Manual source fixes that require human judgement"
+    echo ""
+    echo "Maintained independently — rebased onto \`mig\` each pipeline run. The [fmt-llm capstone]($LLM_PR) cherry-picks these commits then runs the LLM triage on top."
+    echo ""
+    generate_museum_table "$LLM_SOURCE_BRANCH" "$LLM_SOURCE_PR"
+    echo ""
+    generate_topology
 }
 
 generate_llm_pr_body() {
@@ -901,7 +927,8 @@ generate_issue_branch_topology() {
     echo "| Branch | Notes |"
     echo "|--------|-------|"
     echo "| $(pr_link "mig" "$MIG_PR") | all leaves combined; deterministic rebuild from \`master\` |"
-    echo "| $(pr_link "$LLM_BRANCH" "$LLM_PR") | \`mig\` + env commit (\`.emmyrc.json\`, \`types/*\` stubs, CI gate, misc source fixes) + one LLM triage commit |"
+    echo "| $(pr_link "$LLM_SOURCE_BRANCH" "$LLM_SOURCE_PR") | \`mig\` + human-curated env layer (\`.emmyrc.json\`, \`types/*\` stubs, CI gate, manual fixes) |"
+    echo "| $(pr_link "$LLM_BRANCH" "$LLM_PR") | \`$LLM_SOURCE_BRANCH\` + one LLM triage commit |"
     echo ""
     echo "Regenerated deterministically by [\`just bar::fmt-mig-generate\`]($DEVTOOLS_PR)."
     echo ""
@@ -984,6 +1011,9 @@ update_prs() {
         fi
     fi
 
+    # fmt-llm-source env layer PR.
+    update_capstone_pr "$LLM_SOURCE_BRANCH" "$LLM_SOURCE_PR" "$LLM_SOURCE_PR_TITLE"
+
     # fmt-llm capstone PR (only one branch — env layer is folded into it).
     update_capstone_pr "$LLM_BRANCH" "$LLM_PR" "$LLM_PR_TITLE"
 
@@ -1033,7 +1063,7 @@ update_capstone_pr() {
 }
 
 push_branches() {
-    local branches=("mig" "$LLM_BRANCH")
+    local branches=("mig" "$LLM_SOURCE_BRANCH" "$LLM_BRANCH")
     for transform in "${TRANSFORMS[@]}"; do
         branches+=("$(tvar "$transform" "branch")")
     done

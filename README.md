@@ -14,22 +14,30 @@ apt install just      # Debian/Ubuntu
 ```bash
 git clone https://github.com/beyond-all-reason/BAR-Devtools.git
 cd BAR-Devtools
-just setup::init      # walks you through deps, clones repos, builds Docker images
-just setup::editor    # exports language servers, configures VS Code
-just setup::hooks     # installs formatting git hooks
+just setup::init      # interactive — installs deps, clones repos, configures editor & hooks
 ```
-
-`setup::init` is interactive and only needs to run once. It detects your OS, installs missing dependencies, clones repositories, and builds Docker images.
 
 Run `just` with no arguments for the full recipe list.
 
-> **⚠️ Merge conflicts with master?** The project ships deterministic code transforms (formatting, API renames, etc.) that can be replayed onto any branch. If your branch has conflicts after a transform PR lands, run `just bar::fmt-mig` to replay all transforms idempotently — this is the fastest way to catch up:
+> **⚠️ Merge conflicts with master?** The project ships deterministic code transforms (formatting, API renames, etc.) that can be replayed onto any branch. If your branch has conflicts after a transform PR lands:
 > ```bash
 > git fetch origin
 > git rebase origin/master    # resolve conflicts, then:
 > just bar::fmt-mig           # re-apply formatting + transforms on top
 > ```
-> (This includes `bar::fmt` — no need to run it separately.)
+> This is idempotent — safe to run multiple times. Includes `bar::fmt`, so no need to run it separately.
+
+## Common Commands
+
+```bash
+just bar::test            # run BAR tests (busted unit + headless integration)
+just bar::check           # type-check Lua code (EmmyLua)
+just bar::fmt             # format Lua code (StyLua)
+just tei::test            # run Teiserver mix tests
+just services::up         # start PostgreSQL + Teiserver
+just services::down       # stop all services
+just engine::build linux  # build Recoil engine from source
+```
 
 ## Requirements
 
@@ -37,7 +45,7 @@ Run `just` with no arguments for the full recipe list.
 - **Docker** or **Podman** with Compose V2
 - **Git**, **Bash 5+**
 - **[just](https://github.com/casey/just)** — command runner (`just setup::deps` installs everything else)
-- **[distrobox](https://distrobox.it/)** (recommended) — dev toolchain container
+- **[distrobox](https://distrobox.it/)** — dev toolchain container
 
 All dev tools (Lua 5.1, Lux, Node.js, Cargo, clangd, StyLua, EmmyLua) live inside a distrobox built from [`docker/dev.Containerfile`](docker/dev.Containerfile). Recipes that need them enter the distrobox automatically.
 
@@ -46,8 +54,25 @@ All dev tools (Lua 5.1, Lux, Node.js, Cargo, clangd, StyLua, EmmyLua) live insid
 Install [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install), then inside your WSL distro:
 
 ```bash
-sudo apt install -y podman distrobox just
+sudo apt install -y podman distrobox just git
 ```
+
+**VS Code Remote — WSL:** Install the [WSL extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-wsl), then open your WSL workspace with `code .` from the WSL terminal. This gives VS Code native access to WSL files and tools. If `code` isn't on your WSL PATH, open VS Code on Windows and run `Remote-WSL: New Window` from the Command Palette.
+
+**SSH agent forwarding** (for GitHub push access inside WSL):
+
+```bash
+# In your Windows PowerShell profile (~\Documents\PowerShell\Microsoft.PowerShell_profile.ps1):
+Get-Service ssh-agent | Set-Service -StartupType Automatic
+Start-Service ssh-agent
+ssh-add ~\.ssh\id_ed25519   # or your key path
+
+# In WSL ~/.bashrc or ~/.zshrc:
+eval "$(ssh-agent -s)" > /dev/null 2>&1
+# OR use socat to forward the Windows agent — see https://stuartleeks.com/posts/wsl-ssh-key-forward-to-windows/
+```
+
+Verify with `ssh -T git@github.com` from WSL before running `setup::init`.
 
 Everything — services, testing, formatting, engine IDE integration — works unchanged inside WSL2.
 
@@ -55,30 +80,21 @@ Everything — services, testing, formatting, engine IDE integration — works u
 
 Widgets, gadgets, AI scripts, game config.
 
-### Daily workflow
-
 ```bash
-just bar::check         # type-check (EmmyLua analyzer)
-just bar::check-errors  # same, but only errors — no warnings/hints
+just bar::check-errors  # type-check, errors only (no warnings/hints)
 just bar::lint          # lint with luacheck
-just bar::fmt           # format with stylua
-just bar::units         # run busted unit tests
 just bar::test-shell    # interactive busted shell (use `busted -t focus`)
 ```
 
 ### Editor integration (VS Code / Cursor)
 
+`setup::init` configures editor integration automatically. To re-run it later:
+
 ```bash
-just setup::editor
+just setup::editor      # exports language servers, installs extensions, writes settings
 ```
 
-This command:
-- Exports `emmylua_ls`, `emmylua_check`, `clangd`, `stylua` to `~/.local/bin`
-- Installs recommended VS Code extensions (EmmyLua, StyLua, clangd)
-- Removes conflicting extensions (LuaLS/sumneko — it fights EmmyLua and is dramatically slower on this codebase)
-- Writes a workspace `.vscode/settings.json` with format-on-save configured
-
-If your settings file already exists, it shows a diff against recommended defaults and leaves yours intact.
+This exports `emmylua_ls`, `emmylua_check`, `clangd`, `stylua` to `~/.local/bin`, installs recommended VS Code extensions (EmmyLua, StyLua, clangd), removes conflicting ones (LuaLS/sumneko), and writes workspace `.vscode/settings.json` with format-on-save.
 
 #### VS Code Test Switcher (optional)
 
@@ -106,15 +122,14 @@ just docs::server               # generate + serve Recoil docs locally
 
 ## For Teiserver / SPADS Developers
 
+Start the services first — on first run, Teiserver seeds the database with test data and creates default accounts (~2-3 min):
+
 ```bash
 just services::up               # start PostgreSQL + Teiserver
 just services::up lobby spads   # ...with bar-lobby and SPADS
 just services::down             # stop everything
 just services::logs teiserver   # tail logs
-just tei::mix                   # run Teiserver mix tests
 ```
-
-On first run, Teiserver seeds the database with test data and creates default accounts (~2-3 min). Subsequent starts are fast.
 
 | Service | URL |
 |---------|-----|
