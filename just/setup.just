@@ -73,6 +73,7 @@ editor:
         "tangzx.emmylua|EmmyLua (Lua language server)"
         "JohnnyMorganz.stylua|StyLua (Lua formatter)"
         "llvm-vs-code-extensions.vscode-clangd|clangd (C/C++ for engine work)"
+        "bmalehorn.test-switcher|Test Switcher (Ctrl+Shift+Y to jump between test/source)"
     )
     conflicts=("sumneko.lua")
     have_code=0

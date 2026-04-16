@@ -42,19 +42,19 @@ just engine::build linux  # build Recoil engine from source
 ## Requirements
 
 - **Linux** (Arch, Debian/Ubuntu, Fedora) or **Windows** via WSL2
-- **Docker** or **Podman** with Compose V2
-- **Git**, **Bash 5+**
-- **[just](https://github.com/casey/just)** — command runner (`just setup::deps` installs everything else)
+- **[just](https://github.com/casey/just)** — command runner
+- **Podman** or **Docker** (with Compose V2)
 - **[distrobox](https://distrobox.it/)** — dev toolchain container
+- **Git** — for cloning repos
 
-All dev tools (Lua 5.1, Lux, Node.js, Cargo, clangd, StyLua, EmmyLua) live inside a distrobox built from [`docker/dev.Containerfile`](docker/dev.Containerfile). Recipes that need them enter the distrobox automatically.
+Everything else (Lua 5.1, Lux, Node.js, Cargo, clangd, StyLua, EmmyLua) lives inside a distrobox built from [`docker/dev.Containerfile`](docker/dev.Containerfile). Recipes enter the distrobox automatically.
 
 ### Windows (WSL2)
 
 Install [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install), then inside your WSL distro:
 
 ```bash
-sudo apt install -y podman distrobox just git
+sudo apt install -y just podman distrobox git
 ```
 
 **VS Code Remote — WSL:** Install the [WSL extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-wsl), then open your WSL workspace with `code .` from the WSL terminal. This gives VS Code native access to WSL files and tools. If `code` isn't on your WSL PATH, open VS Code on Windows and run `Remote-WSL: New Window` from the Command Palette.
@@ -96,18 +96,7 @@ just setup::editor      # exports language servers, installs extensions, writes 
 
 This exports `emmylua_ls`, `emmylua_check`, `clangd`, `stylua` to `~/.local/bin`, installs recommended VS Code extensions (EmmyLua, StyLua, clangd), removes conflicting ones (LuaLS/sumneko), and writes workspace `.vscode/settings.json` with format-on-save.
 
-#### VS Code Test Switcher (optional)
-
-The [test-switcher](https://marketplace.visualstudio.com/items?itemName=bmalehorn.test-switcher) plugin lets you jump between test and source files with `Cmd+Shift+Y` / `Ctrl+Shift+Y`. Add this to your User Settings (JSON):
-
-```json
-"test-switcher.rules": [
-    { "pattern": "spec/(.*)_spec\\.lua", "replacement": "$1.lua" },
-    { "pattern": "spec/builder_specs/(.*)_spec\\.lua", "replacement": "spec/builders/$1.lua" },
-    { "pattern": "spec/builders/(.*)\\.lua", "replacement": "spec/builder_specs/$1_spec.lua" },
-    { "pattern": "(luarules|common|luaui|gamedata)/(.*)\\.lua", "replacement": "spec/$1/$2_spec.lua" }
-]
-```
+`setup::editor` also installs [test-switcher](https://marketplace.visualstudio.com/items?itemName=bmalehorn.test-switcher) and configures the rules in `.vscode/settings.json` — use `Ctrl+Shift+Y` / `Cmd+Shift+Y` to jump between test and source files.
 
 ## For Recoil Engine Developers (C++)
 
