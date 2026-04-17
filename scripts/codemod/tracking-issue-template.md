@@ -42,7 +42,7 @@ See the [BAR-Devtools README](https://github.com/beyond-all-reason/BAR-Devtools#
 - [lua-doc-extractor refinements](https://github.com/rhys-vdw/lua-doc-extractor/pull/77) enabling `SpringSynced` / `SpringUnsynced` / `SpringShared` as mutually exclusive engine API wrappers
 - Updated [Recoil](https://github.com/beyond-all-reason/RecoilEngine/pull/2799) with new extractor + missing type decorators
 - Replaced bespoke i18n with [kikito-i18n](https://github.com/kikito/i18n.lua) via lux — first forced dependency, hidden behind `just setup::distrobox`
-- New PR gate: "Type Check" (`just bar::check`)
+- New PR gate: "Type Check" (`just bar::check-errors`)
 - Replaced LuaLS/Sumneko with [EmmyLua](https://marketplace.visualstudio.com/items?itemName=tangzx.emmylua) (~100x faster). **Never use the Sumneko VS Code plugin.**
 
 <!-- GENERATED:BRANCH_TOPOLOGY -->
