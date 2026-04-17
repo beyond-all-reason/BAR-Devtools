@@ -98,7 +98,32 @@ This exports `emmylua_ls`, `emmylua_check`, `clangd`, `stylua` to `~/.local/bin`
 
 `setup::editor` also installs [test-switcher](https://marketplace.visualstudio.com/items?itemName=bmalehorn.test-switcher) and configures the rules in `.vscode/settings.json` — use `Ctrl+Shift+Y` / `Cmd+Shift+Y` to jump between test and source files.
 
-## For Recoil Engine Developers (C++)
+### Lua development (widgets, gadgets, AI)
+
+```bash
+just bar::fmt           # format with stylua
+just bar::lint          # lint with luacheck
+just bar::units         # run busted unit tests
+just bar::test-shell    # interactive busted shell,
+                        #   run `busted -t focus` to test specs tagged "#focus"
+                        #   for example: `it "should do something #focus", function()`
+```
+
+### Teiserver development
+
+Tests run in a separate container with `MIX_ENV=test`, so they work whether or not `services::up` is running. The test database is independent from the dev database.
+
+```bash
+just tei::setup-test-db         # initialize/migrate the test database (run once)
+just tei::test                  # run the full test suite
+just tei::test test/teiserver/battle_test.exs  # run a specific test file
+just tei::test-shell            # interactive bash shell with MIX_ENV=test
+                                #   useful for running mix commands directly
+```
+
+If you've pulled new teiserver code with migrations, re-run `just tei::setup-test-db` to apply them.
+
+### Engine development
 
 ```bash
 just engine::build linux        # build Recoil via docker-build-v2
@@ -118,6 +143,7 @@ just services::up               # start PostgreSQL + Teiserver
 just services::up lobby spads   # ...with bar-lobby and SPADS
 just services::down             # stop everything
 just services::logs teiserver   # tail logs
+just services::shell teiserver  # open bash inside the running container
 ```
 
 | Service | URL |
@@ -176,9 +202,12 @@ BAR-Devtools/
 │   ├── link.just                    # Game directory symlinking
 │   ├── lua.just                     # lua-doc-extractor & Lua library generation
 │   ├── docs.just                    # Hugo documentation server
-│   └── tei.just                     # Teiserver tests
-├── scripts/                         # Shared shell helpers
-├── claude/                          # AI agent rules for codemod work
+│   ├── bar.just                     # BAR Lua testing, linting & formatting
+│   └── tei.just                     # Teiserver mix tests
+├── scripts/
+│   ├── common.sh                    # Shared color/logging helpers
+│   ├── repos.sh                     # repos.conf parsing & git operations
+│   └── setup.sh                     # Distro detection, deps, prerequisite checks
 ├── repos.conf                       # Repository sources & branches
 ├── docker-compose.dev.yml           # Service definitions
 ├── docker/
@@ -194,6 +223,16 @@ BAR-Devtools/
 ## Troubleshooting
 
 **Port conflict with host PostgreSQL:**
+If something isn't working, start here:
+
+```bash
+just doctor
+```
+
+This runs a read-only check of your system dependencies, environment, ports, repositories, Docker images, and running services. Every failure includes the command to fix it.
+
+**Port 5432/5433 conflict with host PostgreSQL:**
+Either stop your local PostgreSQL (`sudo systemctl stop postgresql`) or change the port:
 ```bash
 BAR_POSTGRES_PORT=5434 just services::up
 ```
