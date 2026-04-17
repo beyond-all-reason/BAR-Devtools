@@ -10,18 +10,26 @@ master ← fmt ← mig ← fmt-llm-source ← fmt-llm
 
 | Layer | What it does | Merge when |
 |-------|-------------|------------|
-| **fmt** | `stylua .` across the entire codebase | Ready now — merge once Windows testing confirms `setup::init` works in WSL2 |
-| **mig** | All automated transforms — heavier changes (spring-split, i18n-kikito) plus simpler mechanical ones (bracket-to-dot, rename-aliases, busted-types, etc.) | After `fmt` lands and contributors have run `just bar::fmt-mig` on their branches |
+| **fmt** | `stylua .` across the entire codebase | First — large diff but purely style, no logic changes. Contributors should **not** run `bar::fmt-mig` until this lands. |
+| **mig** | All automated transforms — heavier changes (spring-split, i18n-kikito) plus simpler mechanical ones (bracket-to-dot, rename-aliases, busted-types, etc.) | After `fmt` lands — contributors run `just bar::fmt-mig` to catch up |
 | **fmt-llm-source** | Human-curated env layer (`.emmyrc.json`, `types/*` stubs, explicit type ignores, CI gate, manual fixes) | After `mig` — this is the reviewable env prep |
 | **fmt-llm** | LLM type-fix pass + `.git-blame-ignore-revs` | After `fmt-llm-source` — final layer, drives type errors to zero |
 
-**For contributors:** Run `just bar::fmt-mig` after rebasing onto master. This replays all transforms idempotently. See the [BAR-Devtools README](https://github.com/beyond-all-reason/BAR-Devtools#readme) for setup.
+> **Important:** Do not run `just bar::fmt-mig` until `fmt` has merged into master. Running it before will reformat the entire codebase on your branch (197k line diff).
+
+**For contributors — after `fmt` merges, update your open branches:**
+```bash
+just bar::fmt-mig                       # transform your branch first
+git commit -am "apply code transforms"  # squashed away when PR merges
+git merge origin/master                 # conflicts are now real conflicts only
+```
+See the [BAR-Devtools README](https://github.com/beyond-all-reason/BAR-Devtools#readme) for setup.
 
 ## PRs
 
 - [ ] **fmt** — [StyLua formatting](https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7199)
 - [ ] **mig** — [Combined transforms](https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7229) (base: `fmt`)
-- [ ] **fmt-llm-source** — env layer (base: `mig`)
+- [ ] **fmt-llm-source** [Hand curated type fixes](https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7447) — env layer (base: `mig`)
 - [ ] **fmt-llm** — [LLM capstone](https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7407) (base: `fmt-llm-source`)
 - [ ] [Script / tooling PR (BAR-Devtools)](https://github.com/beyond-all-reason/BAR-Devtools/pull/17)
 - [ ] [Recoil PR (lua-doc-extractor wiring + missing type decorators)](https://github.com/beyond-all-reason/RecoilEngine/pull/2799)
