@@ -41,7 +41,7 @@ DEVTOOLS_PR="https://github.com/beyond-all-reason/BAR-Devtools/pull/17"
 # script fails fast and the user resolves them on the source branch (rebase
 # onto mig) before re-running with --llm-only.
 LLM_SOURCE_BRANCH="${LLM_SOURCE_BRANCH:-fmt-llm-source}"
-LLM_SOURCE_PR=""
+LLM_SOURCE_PR="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7447"
 LLM_SOURCE_PR_TITLE="[Types] LLM env layer (emmylua config, type stubs, manual fixes)"
 LLM_BRANCH="fmt-llm"
 LLM_COMMIT_PREFIX="gen(llm): type-error triage"

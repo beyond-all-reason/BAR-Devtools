@@ -19,11 +19,11 @@ just setup::init      # interactive — installs deps, clones repos, configures 
 
 Run `just` with no arguments for the full recipe list.
 
-> **⚠️ Merge conflicts with master?** The project ships deterministic code transforms (formatting, API renames, etc.) that can be replayed onto any branch. If your branch has conflicts after a transform PR lands:
+> **⚠️ Merge conflicts with master?** The project ships deterministic code transforms (formatting, API renames, Spring split) that can be replayed onto any branch. Transform your branch first, then merge:
 > ```bash
-> git fetch origin
-> git rebase origin/master    # resolve conflicts, then:
-> just bar::fmt-mig           # re-apply formatting + transforms on top
+> just bar::fmt-mig                       # transform your branch first
+> git commit -am "apply code transforms"  # squashed away when PR merges
+> git merge origin/master                 # conflicts are now real conflicts only
 > ```
 > This is idempotent — safe to run multiple times. Includes `bar::fmt`, so no need to run it separately.
 
