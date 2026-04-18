@@ -159,7 +159,7 @@ check_doctor_images() {
 
   local project_name
   project_name="$(basename "$DEVTOOLS_DIR" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]_-')"
-  if docker compose -f "$DEVTOOLS_DIR/docker-compose.dev.yml" images teiserver --format '{{.Repository}}' 2>/dev/null | grep -q .; then
+  if docker compose -f "$DEVTOOLS_DIR/docker-compose.dev.yml" images teiserver 2>/dev/null | grep -i teiserver | grep -q .; then
     _pass "Teiserver image built"
   elif [ ! -d "$DEVTOOLS_DIR/teiserver" ]; then
     _fail "Teiserver image not built (teiserver repo not cloned)"
