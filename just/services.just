@@ -38,7 +38,7 @@ up *args:
     attempts=0
     max_attempts=120
     while [ $attempts -lt $max_attempts ]; do
-        health=$($COMPOSE ps teiserver --format '{{{{.Health}}}}' 2>/dev/null || echo "unknown")
+        health=$($COMPOSE ps teiserver --format '{{{{.Health}}}}' 2>/dev/null | tr -cd '[:alpha:]' || echo "unknown")
         case "$health" in
             healthy)
                 ok "Teiserver is healthy!"
