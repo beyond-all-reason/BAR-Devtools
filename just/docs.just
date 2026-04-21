@@ -9,11 +9,16 @@ COMPOSE      := "docker compose -f " + COMPOSE_FILE
 generate:
     {{COMPOSE}} run --rm recoil-docs lua_pages
 
-# Generate everything then start Hugo dev server
+# Extract Lua library locally (contexts branch), regen pages, start Hugo dev server.
 server:
+    just lua::library
+    {{COMPOSE}} run --rm --service-ports recoil-docs server_dev -- --bind 0.0.0.0
+
+# Re-extract Lua library with the container's lua-doc-extractor, then start Hugo.
+server-regen:
     {{COMPOSE}} run --rm --service-ports recoil-docs server_full -- --bind 0.0.0.0
 
-# Start Hugo dev server without regenerating
+# Start Hugo dev server without regenerating anything
 server-only:
     {{COMPOSE}} run --rm --service-ports recoil-docs server -- --bind 0.0.0.0
 

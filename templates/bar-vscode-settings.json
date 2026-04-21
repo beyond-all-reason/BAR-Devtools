@@ -1,0 +1,19 @@
+{
+  "search.exclude": {
+    "**/.lux": true,
+    "**/.lux/**": true,
+    "**/.devtools": true,
+    "**/.devtools/**": true,
+    "**/common/luaUtilities/**": true
+  },
+  "[lua]": {
+    "editor.defaultFormatter": "JohnnyMorganz.stylua",
+    "editor.formatOnSave": true
+  },
+  "test-switcher.rules": [
+    { "pattern": "spec/(.*)_spec\\.lua", "replacement": "$1.lua" },
+    { "pattern": "spec/builder_specs/(.*)_spec\\.lua", "replacement": "spec/builders/$1.lua" },
+    { "pattern": "spec/builders/(.*)\\.lua", "replacement": "spec/builder_specs/$1_spec.lua" },
+    { "pattern": "(luarules|common|luaui|gamedata)/(.*)\\.lua", "replacement": "spec/$1/$2_spec.lua" }
+  ]
+}

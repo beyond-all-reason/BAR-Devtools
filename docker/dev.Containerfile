@@ -10,6 +10,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
         clang-tools-extra cmake \
         just \
         gcc gcc-c++ make git curl jq unzip binutils \
+        gawk \
         SDL2-devel DevIL-devel glew-devel openal-soft-devel \
         libvorbis-devel freetype-devel fontconfig-devel \
         libunwind-devel libcurl-devel jsoncpp-devel minizip-devel \
@@ -41,12 +42,25 @@ RUN ARCH=$(uname -m) \
     && chmod +x /usr/local/bin/stylua \
     && rm /tmp/stylua.zip
 
-ARG EMMYLUA_VERSION=latest
+# emmylua_ls and emmylua_check are distrobox-exported by `just setup::editor`,
+# so the host-side wrappers always use this exact version.
+ARG EMMYLUA_VERSION=0.22.0
 RUN ARCH=$(uname -m) \
-    && case "$ARCH" in x86_64) PLAT=linux-x64;; aarch64) PLAT=linux-arm64;; esac \
-    && URL=$(curl -fsSL "https://api.github.com/repos/EmmyLuaLs/emmylua-analyzer-rust/releases/${EMMYLUA_VERSION}" \
-       | jq -r --arg plat "emmylua_ls-${PLAT}.tar.gz" '.assets[] | select(.name == $plat) | .browser_download_url') \
-    && curl -fsSL "$URL" | tar xz -C /usr/local/bin \
-    && chmod +x /usr/local/bin/emmylua_ls
+    && case "$ARCH" in \
+         x86_64) \
+           LS_ASSET="emmylua_ls-linux-x64.tar.gz" \
+           CHECK_ASSET="emmylua_check-linux-x64.tar.gz" \
+           ;; \
+         aarch64) \
+           LS_ASSET="emmylua_ls-linux-arm64-glibc.2.17.tar.gz" \
+           CHECK_ASSET="emmylua_check-linux-arm64-glibc.2.17.tar.gz" \
+           ;; \
+         *) echo "unsupported arch for EmmyLua binaries: $ARCH" >&2; exit 1;; \
+       esac \
+    && BASE="https://github.com/EmmyLuaLs/emmylua-analyzer-rust/releases/download/${EMMYLUA_VERSION}" \
+    && curl -fsSL "${BASE}/${LS_ASSET}" | tar xz -C /usr/local/bin \
+    && chmod +x /usr/local/bin/emmylua_ls \
+    && curl -fsSL "${BASE}/${CHECK_ASSET}" | tar xz -C /usr/local/bin \
+    && chmod +x /usr/local/bin/emmylua_check
 
 LABEL com.github.containers.toolbox="true"

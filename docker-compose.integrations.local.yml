@@ -1,0 +1,10 @@
+services:
+  bar:
+    volumes:
+      # Mount the user's local Recoil build at /bar/engine/_local, and
+      # override the start script to prefer it over the stock engine
+      # downloaded during image build. Both env vars are set by the
+      # `just bar::integrations` recipe from the link::create engine
+      # symlink and this devtools directory.
+      - ${BAR_LOCAL_ENGINE}:/bar/engine/_local:ro,z
+      - ${BAR_DEVTOOLS_DIR}/docker-compose.integrations.local.sh:/bar/start.sh:ro,z

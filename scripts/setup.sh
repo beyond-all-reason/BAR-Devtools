@@ -76,8 +76,8 @@ check_docker() {
 
 check_distrobox() {
   if ! command -v distrobox &>/dev/null; then
-    warn "distrobox not found. Install it for the recommended dev environment."
-    warn "See: https://distrobox.it/#installation"
+    err "distrobox not found. Required for the dev toolchain (lux, stylua, emmylua, clangd)."
+    err "See: https://distrobox.it/#installation"
     return 1
   fi
   ok "distrobox $(distrobox version 2>/dev/null | head -1) detected"
@@ -106,7 +106,7 @@ check_prerequisites() {
   local failed=0
   check_git       || failed=1
   check_docker    || failed=1
-  check_distrobox || true
+  check_distrobox || failed=1
   check_ports
   echo ""
   if [ "$failed" -ne 0 ]; then
@@ -279,34 +279,31 @@ cmd_init() {
   echo -e "${BOLD}==========================================${NC}"
   echo ""
 
-  step "1/6  Checking & installing dependencies"
+  step "1/8  Checking & installing dependencies"
   echo ""
-  local deps_ok=0
   if check_git &>/dev/null && check_docker &>/dev/null; then
-    deps_ok=1
     ok "Core dependencies (git, docker) already installed."
   else
     cmd_install_deps || { err "Dependency installation failed. Fix and retry."; exit 1; }
-    deps_ok=1
   fi
+  if ! command -v distrobox &>/dev/null; then
+    err "distrobox is required but not installed."
+    err "See: https://distrobox.it/#installation"
+    exit 1
+  fi
+  ok "distrobox $(distrobox version 2>/dev/null | head -1) detected"
   echo ""
 
-  step "2/6  Dev environment (distrobox)"
+  step "2/8  Dev environment (distrobox)"
   echo ""
   if [ -n "${DEVTOOLS_DISTROBOX:-}" ]; then
     ok "Distrobox already configured: $DEVTOOLS_DISTROBOX"
-  elif command -v distrobox &>/dev/null; then
-    read -rp "Set up a distrobox dev environment? (recommended) [Y/n] " setup_box
-    if [[ ! "$setup_box" =~ ^[Nn]$ ]]; then
-      cmd_setup_distrobox
-    fi
   else
-    info "distrobox not installed -- skipping dev environment setup."
-    info "Install distrobox and run 'just setup::distrobox' later for the full toolchain."
+    cmd_setup_distrobox
   fi
   echo ""
 
-  step "3/6  Cloning repositories"
+  step "3/8  Cloning repositories"
   echo ""
   if [ ! -f "$REPOS_CONF" ]; then
     err "repos.conf not found at: $REPOS_CONF"
@@ -326,7 +323,7 @@ cmd_init() {
     fi
   fi
 
-  step "4/6  Building Docker images"
+  step "4/8  Building Docker images"
   echo ""
   install_dockerignore
   info "Building Docker images..."
@@ -336,7 +333,7 @@ cmd_init() {
   echo ""
 
   if [ -d "$DEVTOOLS_DIR/RecoilEngine/docker-build-v2" ]; then
-    step "5/6  Engine build"
+    step "5/8  Engine build"
     echo ""
     read -rp "Build engine from source? [y/N] " build_engine
     if [[ "$build_engine" =~ ^[Yy]$ ]]; then
@@ -351,13 +348,13 @@ cmd_init() {
     fi
     echo ""
   else
-    step "5/6  Engine build"
+    step "5/8  Engine build"
     echo ""
     info "RecoilEngine not cloned -- skipping. Clone with: just repos::clone extra"
     echo ""
   fi
 
-  step "6/6  Symlinks to game directory"
+  step "6/8  Symlinks to game directory"
   echo ""
   local game_dir
   game_dir="$(detect_game_dir 2>/dev/null)" || true
@@ -391,6 +388,26 @@ cmd_init() {
     else
       info "No linkable repos cloned yet."
     fi
+  fi
+  echo ""
+
+  step "7/8  Editor integration"
+  echo ""
+  read -rp "Configure editor integration (language servers, VS Code extensions)? [Y/n] " do_editor
+  if [[ ! "$do_editor" =~ ^[Nn]$ ]]; then
+    just setup::editor
+  fi
+  echo ""
+
+  step "8/8  Git hooks"
+  echo ""
+  if [ -d "$DEVTOOLS_DIR/Beyond-All-Reason/.git" ]; then
+    read -rp "Install formatting pre-commit hooks in BAR repo? [Y/n] " do_hooks
+    if [[ ! "$do_hooks" =~ ^[Nn]$ ]]; then
+      just bar::setup-hooks
+    fi
+  else
+    info "Skipping git hooks (BAR repo not cloned)."
   fi
   echo ""
 
@@ -503,7 +520,13 @@ cmd_link() {
   local source_path link_path
   case "$target" in
     engine)
-      source_path="$DEVTOOLS_DIR/RecoilEngine/build-linux/install"
+      local engine_arch
+      case "$(uname -m)" in
+        x86_64)        engine_arch="amd64" ;;
+        aarch64|arm64) engine_arch="arm64" ;;
+        *)             engine_arch="amd64" ;;
+      esac
+      source_path="$DEVTOOLS_DIR/RecoilEngine/build-${engine_arch}-linux/install"
       link_path="$game_dir/engine/local-build"
       ;;
     chobby)
