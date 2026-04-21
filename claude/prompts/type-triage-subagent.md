@@ -31,7 +31,7 @@ root, so all paths in your chunk file are relative to it.
    ```
 
 2. Read the canonical fix procedures at
-   `/var/home/daniel/code/BAR-Devtools/claude/skills/codemod-prereq/SKILL.md`.
+   `claude/skills/codemod-prereq/SKILL.md`.
    Every category in there is in scope. If you encounter an error that
    doesn't match any category, flag it as UNCATEGORIZED in your report
    so a human can add a new rule and re-run.
