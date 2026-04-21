@@ -66,7 +66,7 @@ impl DetachBarModules {
             }
             self.conversions += 1;
             let new_first = Suffix::Index(Index::Dot {
-                dot: TokenReference::symbol(".").unwrap(),
+                dot: TokenReference::symbol(".").expect("'.' is a valid Lua symbol"),
                 name: TokenReference::new(
                     vec![],
                     Token::new(TokenType::Identifier {
