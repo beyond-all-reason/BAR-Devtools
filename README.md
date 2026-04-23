@@ -61,6 +61,8 @@ To set up a new distrobox standalone:
 just setup::distrobox
 ```
 
+> **Windows contributors:** run the tooling inside WSL2 while BAR itself runs natively on Windows from the normal installer. `setup::init` detects WSL and cross-compiles the engine to Windows; `link::create` links the artifacts into the Windows install dir. See [`docs/windows-wsl2.md`](docs/windows-wsl2.md) for the full walkthrough.
+
 ### Editor integration (VS Code / Cursor)
 
 Language servers and formatters live inside the distrobox. One command exports them to your host and generates `compile_commands.json` for engine C++ support:

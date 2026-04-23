@@ -15,6 +15,10 @@ detect_distro() {
   fi
 }
 
+is_wsl() {
+  [ -n "${WSL_DISTRO_NAME:-}" ] || [ -f /proc/sys/fs/binfmt_misc/WSLInterop ]
+}
+
 pkg_install_cmd() {
   case "$(detect_distro)" in
     arch)   echo "sudo pacman -S --needed" ;;
@@ -340,14 +344,15 @@ cmd_init() {
     echo ""
     read -rp "Build engine from source? [y/N] " build_engine
     if [[ "$build_engine" =~ ^[Yy]$ ]]; then
-      local engine_arch
+      local engine_arch engine_os="linux"
       case "$(uname -m)" in
         x86_64)       engine_arch="amd64" ;;
         aarch64|arm64) engine_arch="arm64" ;;
         *)            engine_arch="amd64" ;;
       esac
-      info "Building Recoil engine (${engine_arch}-linux, this may take a while)..."
-      bash "$DEVTOOLS_DIR/RecoilEngine/docker-build-v2/build.sh" --arch "$engine_arch" linux
+      is_wsl && engine_os="windows"
+      info "Building Recoil engine (${engine_arch}-${engine_os}, this may take a while)..."
+      bash "$DEVTOOLS_DIR/RecoilEngine/docker-build-v2/build.sh" --arch "$engine_arch" "$engine_os"
     fi
     echo ""
   else
@@ -455,6 +460,17 @@ detect_game_dir() {
     echo "$candidate"
     return 0
   fi
+  if is_wsl && command -v wslpath &>/dev/null && command -v cmd.exe &>/dev/null; then
+    local win_userprofile
+    win_userprofile="$(cmd.exe /c 'echo %USERPROFILE%' 2>/dev/null | tr -d '\r\n')"
+    if [ -n "$win_userprofile" ]; then
+      candidate="$(wslpath "$win_userprofile")/AppData/Local/Programs/Beyond-All-Reason/data"
+      if [ -d "$candidate" ]; then
+        echo "$candidate"
+        return 0
+      fi
+    fi
+  fi
   return 1
 }
 
@@ -503,7 +519,14 @@ cmd_link() {
   local source_path link_path
   case "$target" in
     engine)
-      source_path="$DEVTOOLS_DIR/RecoilEngine/build-linux/install"
+      local engine_arch engine_os="linux"
+      case "$(uname -m)" in
+        x86_64)        engine_arch="amd64" ;;
+        aarch64|arm64) engine_arch="arm64" ;;
+        *)             engine_arch="amd64" ;;
+      esac
+      is_wsl && engine_os="windows"
+      source_path="$DEVTOOLS_DIR/RecoilEngine/build-${engine_arch}-${engine_os}/install"
       link_path="$game_dir/engine/local-build"
       ;;
     chobby)
@@ -524,7 +547,11 @@ cmd_link() {
   if [ ! -e "$source_path" ] && [ ! -L "$source_path" ]; then
     err "Source not found: $source_path"
     if [ "$target" = "engine" ]; then
-      echo "  Build the engine first: just engine::build linux"
+      if is_wsl; then
+        echo "  Build the engine first: just engine::build windows"
+      else
+        echo "  Build the engine first: just engine::build linux"
+      fi
     else
       echo "  Clone the repo first: just repos::clone extra"
     fi
