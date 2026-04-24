@@ -243,6 +243,38 @@ uniformFloat = { shaderparams = { alpha, 0.5, 0.5, 0.5 } }
 ```
 For scoping bugs, hoist the `local` declaration before the block.
 
+**CRITICAL — `X or default` at the use site does NOT fix `undefined-global`.**
+The analyzer flags the bare *identifier*, not the value. Adding `or 0`
+defends against nil at runtime but leaves the error intact:
+
+```lua
+-- WRONG (still errors — noRushTime is still an undefined identifier)
+startPolygonShader:SetUniform("noRushTimer", noRushTime or 0)
+
+-- RIGHT (declare at file scope above any reference)
+local noRushTime = 0
+-- ...later...
+startPolygonShader:SetUniform("noRushTimer", noRushTime or 0)
+```
+
+If you find yourself writing `<undefined-name> or <default>` as the "fix",
+you're not done — scroll up and add `local <name> = <default>` at an
+appropriate scope. Real example: `noRushTime` is only declared as a local
+inside `gfx_norush_timer_gl4.lua`; other widgets (`map_startbox.lua`,
+`map_startpolygon_gl4.lua`) read it as a bare identifier at runtime and
+get `nil`. The correct fix is declaring the default in each reader file,
+not adding `or 0` at the call site.
+
+**Narrow anti-pattern — don't swap an in-scope local for a fresh name.**
+Typo fixes *are* allowed (see the `subunitDef`/`subUnitDef` sub-pattern
+below and the real-bug recipes above). What's forbidden is replacing a
+reference to a correct, in-scope local with a *different* identifier that
+you think reads better — that just trades one `undefined-global` for
+another. Concrete regression: a worker changed `isClientPaused` (a local
+declared 29 lines above in the same function) to `pausedByThisWidget` on
+one usage, introducing a new `undefined-global`. If the existing name
+resolves to a visible local in the same scope, leave it.
+
 **Sub-pattern — destructured assignment self-reference:**
 
 ```lua
@@ -712,6 +744,19 @@ hoping they'll cover later lines — `disable-next-line` only affects the
 **single line directly below** the comment. If a file has many such
 captures, put one disable above each one.
 
+**Do NOT** write `local X = X` inside a function body when no same-named
+global or upvalue exists. This pattern *only* works when the right-hand
+`X` already resolves to something the analyzer can see (a global, an
+outer-scope local). If `X` is truly undefined everywhere in the file,
+`local X = X` just produces a nil-valued local and the analyzer still
+errors on the right-hand side. The code is now dirtier and the bug is
+masked. Real-world regression: a worker "fixed" `tracy.ZoneBeginN(fname)`
+inside `AIBase:tracyZoneBeginMem()` by inserting `local fname = fname`
+on the line above — but `fname` was never declared anywhere, the real
+bug was a missing function parameter. If you can't find where `X` is
+supposed to come from, flag UNCATEGORIZED and let a maintainer add the
+missing parameter / declaration / import.
+
 ### Category 44: `---@param`/`---@return` on a function re-export site
 
 **Error:** `` `@param X T` can't be used here `` /
@@ -814,6 +859,18 @@ the file is dirtier, and the original annotation is lost. The
 to the function definition. If you can't find the function definition
 in the same file, flag UNCATEGORIZED and stop. Do not edit the line
 unless you are moving annotations to a real function declaration.
+
+**CRITICAL pitfall — DO NOT insert `local X = X` between the
+annotations and the re-export** to "give the @params something to
+attach to". That line is a no-op (the outer `local X` is already in
+scope — you're shadowing it with itself), it doesn't attach the
+annotations to anything the analyzer recognizes, and the
+annotation-usage-error persists. Worse, it adds dead code that a
+future reader has to puzzle over. Real-world regression: a worker did
+`local tableToString = tableToString` right before
+`table.toString = tableToString` in `common/tablefunctions.lua` and
+the error never cleared. The only working fix is moving the
+annotations; no shim line makes the re-export site valid.
 
 ### Category 46: Hoisted-local forward declaration
 
@@ -926,18 +983,36 @@ analyzer has no way to know which pieces a given unit declares.
 - The file lives under `scripts/headers/**/*.lua` (shared unit-script
   header that gets `include`d into scripts and references piece globals)
 
-**Fix:** Add a single file-level diagnostic disable at the top of the
-file (NOT `disable-next-line` — that only affects one line, useless
-when there are dozens of references). Idempotent.
+**Fix:** Add a single file-level `---@diagnostic disable: undefined-global`
+at the **very top of the file** (line 1, before any code). This is
+idempotent and covers every reference in the file — always use this
+form in unit scripts, even when the error list shows only 1 or 2
+undefined-global references. More references may exist that weren't in
+this worker's chunk, and even for a truly 2-reference file the
+file-level form is still shorter than placing a `disable-next-line`
+above each.
 
 ```lua
 ---@diagnostic disable: undefined-global
+
 function DrawWeapon(id)
     Turn(lloarm, 1, ang(-90), ang(300))
     Turn(rloarm, 1, ang(-90), ang(300))
     ...
 end
 ```
+
+**CRITICAL anti-pattern — DO NOT place `disable-next-line` above a
+`function` declaration hoping to cover the body.** `disable-next-line`
+disables only the single line directly below — that's the `function`
+declaration line, not the body. The undefined-global references inside
+the body (often dozens of lines later) still error. Real-world
+regression: a worker put `---@diagnostic disable-next-line:
+undefined-global` above `function ResumeBuilding()` in
+`scripts/Units/corcom_lus.lua` trying to silence `buildheading`/
+`buildpitch` in the body — the errors persisted because those
+references are on the *next next* lines, not the function declaration
+line. Always use the file-level form.
 
 For files outside the unit-script path, prefer Category 13 (declare a
 local) or Category 43 (self-shadow capture).

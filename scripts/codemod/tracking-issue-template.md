@@ -1,21 +1,19 @@
 # BAR type-error cleanup: coordinated merge
 
-## Merge plan — stacked PRs
+## PRs
 
-Each PR shows only its own layer's diff. When a parent merges, GitHub auto-retargets the child to `master`.
+Stacked — merge bottom-up. Each PR's own diff is scoped to its layer; stack navigation is on each PR.
 
-```
-master ← fmt ← mig ← fmt-llm-source ← fmt-llm
-```
+- [ ] [**fmt** — StyLua formatting](https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7199)
+- [ ] [**mig** — combined deterministic transforms](https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7229)
+- [ ] [**fmt-llm-source** — hand-curated env layer (emmylua config, types, manual fixes)](https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7447)
+- [ ] [**fmt-llm** — LLM type-fix capstone](https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7407)
+- [ ] [Script / tooling PR (BAR-Devtools)](https://github.com/beyond-all-reason/BAR-Devtools/pull/17)
+- [ ] [Recoil PR (lua-doc-extractor wiring + missing type decorators)](https://github.com/beyond-all-reason/RecoilEngine/pull/2799)
+    - [ ] [CircuitAI — `zk` branch](https://github.com/rlcevg/CircuitAI/pull/136)
+    - [ ] [CircuitAI — `barbarian` branch](https://github.com/rlcevg/CircuitAI/pull/137)
 
-| Layer | What it does | Merge when |
-|-------|-------------|------------|
-| **fmt** | `stylua .` across the entire codebase | First — large diff but purely style, no logic changes. Contributors should **not** run `bar::fmt-mig` until this lands. |
-| **mig** | All automated transforms — heavier changes (spring-split, i18n-kikito) plus simpler mechanical ones (bracket-to-dot, rename-aliases, busted-types, etc.) | After `fmt` lands — contributors run `just bar::fmt-mig` to catch up |
-| **fmt-llm-source** | Human-curated env layer (`.emmyrc.json`, `types/*` stubs, explicit type ignores, CI gate, manual fixes) | After `mig` — this is the reviewable env prep |
-| **fmt-llm** | LLM type-fix pass + `.git-blame-ignore-revs` | After `fmt-llm-source` — final layer, drives type errors to zero |
-
-> **Important:** Do not run `just bar::fmt-mig` until `fmt` has merged into master. Running it before will reformat the entire codebase on your branch (197k line diff).
+> **Important:** Do not run `just bar::fmt-mig` until `fmt` has merged. Running it earlier reformats the entire codebase on your branch (~200k lines).
 
 **For contributors — after `fmt` merges, update your open branches:**
 ```bash
@@ -24,17 +22,6 @@ git commit -am "apply code transforms"  # squashed away when PR merges
 git merge origin/master                 # conflicts are now real conflicts only
 ```
 See the [BAR-Devtools README](https://github.com/beyond-all-reason/BAR-Devtools#readme) for setup.
-
-## PRs
-
-- [ ] **fmt** — [StyLua formatting](https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7199)
-- [ ] **mig** — [Combined transforms](https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7229) (base: `fmt`)
-- [ ] **fmt-llm-source** [Hand curated type fixes](https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7447) — env layer (base: `mig`)
-- [ ] **fmt-llm** — [LLM capstone](https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7407) (base: `fmt-llm-source`)
-- [ ] [Script / tooling PR (BAR-Devtools)](https://github.com/beyond-all-reason/BAR-Devtools/pull/17)
-- [ ] [Recoil PR (lua-doc-extractor wiring + missing type decorators)](https://github.com/beyond-all-reason/RecoilEngine/pull/2799)
-    - [ ] [CircuitAI — `zk` branch](https://github.com/rlcevg/CircuitAI/pull/136)
-    - [ ] [CircuitAI — `barbarian` branch](https://github.com/rlcevg/CircuitAI/pull/137)
 
 ## What this contains
 

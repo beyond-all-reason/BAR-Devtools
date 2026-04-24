@@ -9,10 +9,36 @@ source "${DEVTOOLS_DIR}/scripts/common.sh"
 
 CODEMOD="${CODEMOD_BIN:-${DEVTOOLS_DIR}/bar-lua-codemod/target/release/bar-lua-codemod}"
 BAR="${BAR_DIR:-${DEVTOOLS_DIR}/Beyond-All-Reason}"
-REMOTE="${PUSH_REMOTE:-upstream}"
+ORIGIN_REMOTE="${ORIGIN_REMOTE:-origin}"
+FORK_REMOTE="${FORK_REMOTE:-upstream}"
 
 ORIGIN_REPO="beyond-all-reason/Beyond-All-Reason"
-FORK_OWNER="${FORK_OWNER:-$(git -C "$BAR" remote get-url "$REMOTE" 2>/dev/null | sed -n 's|.*[:/]\([^/]*\)/.*|\1|p')}"
+FORK_OWNER="${FORK_OWNER:-$(git -C "$BAR" remote get-url "$FORK_REMOTE" 2>/dev/null | sed -n 's|.*[:/]\([^/]*\)/.*|\1|p')}"
+
+# Branches hosted directly on origin (beyond-all-reason). Everything else lives
+# on the fork and its PRs are cross-repo.
+ORIGIN_BRANCHES_RE='^(fmt|mig|fmt-llm)$'
+
+# Return the --head value for a gh pr create invocation: bare branch name for
+# same-repo PRs, owner:branch for cross-repo PRs from the fork.
+head_for() {
+    local branch="$1"
+    if [[ "$branch" =~ $ORIGIN_BRANCHES_RE ]]; then
+        echo "$branch"
+    else
+        echo "$FORK_OWNER:$branch"
+    fi
+}
+
+# Remote a branch should be pushed to.
+remote_for() {
+    local branch="$1"
+    if [[ "$branch" =~ $ORIGIN_BRANCHES_RE ]]; then
+        echo "$ORIGIN_REMOTE"
+    else
+        echo "$FORK_REMOTE"
+    fi
+}
 
 MIG_PR="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7229"
 
@@ -25,6 +51,10 @@ TRACKING_ISSUE="https://github.com/beyond-all-reason/Beyond-All-Reason/issues/74
 # llm-type-triage.sh, the codemod transforms, SKILL.md, and the just recipes.
 DEVTOOLS_PR="https://github.com/beyond-all-reason/BAR-Devtools/pull/17"
 
+# SKILL.md on the BAR-Devtools tooling PR (stays live as the PR updates,
+# unlike a commit-pinned fork URL).
+SKILL_MD_URL="https://github.com/beyond-all-reason/BAR-Devtools/pull/17/changes#diff-03a30b0197306b790f86b384d585b6d1aff0f23cc38a8545e73c027e3d090ddf"
+
 # LLM capstone — fmt-llm. A single capstone branch that sits on top of mig and
 # combines a deterministic env layer (cherry-picked from a user-maintained source
 # branch) with an LLM-generated type-fix commit.
@@ -33,13 +63,17 @@ DEVTOOLS_PR="https://github.com/beyond-all-reason/BAR-Devtools/pull/17"
 #   mig                      ← rollup of all transforms (existing)
 #   └─ fmt-llm               ← mig + env commits + gen(llm) commit
 #
-# The env layer lives in the BAR repo on `$LLM_SOURCE_BRANCH` (default:
-# fmt-llm-source), maintained like the existing prereq branches
-# (detach-bar-modules-env, lux-i18n). build_fmt_llm cherry-picks every commit
-# unique to that branch onto a fresh checkout of mig before invoking the LLM.
-# If the source branch has drifted from current mig, conflicts surface — the
-# script fails fast and the user resolves them on the source branch (rebase
-# onto mig) before re-running with --llm-only.
+# $LLM_SOURCE_BRANCH: user-maintained env layer (emmylua config, type stubs,
+# manual fixes). Its env commits have mig-specific dependencies (e.g. types/*
+# files that only exist after detach-bar-modules), so they can't be rooted on
+# master. Instead, build_fmt_llm_source force-rebuilds the branch each run:
+# resets to current mig and re-cherry-picks the env commits (detected by the
+# same anchor walk the old build_fmt_llm used), with -Xtheirs + stylua_pass
+# to reconcile formatting divergence.
+#
+# PR #7447 (base=mig) shows just the env layer. PR #7407 (base=fmt-llm-source)
+# shows just the LLM commit, because build_fmt_llm branches $LLM_BRANCH off
+# $LLM_SOURCE_BRANCH rather than cherry-picking onto mig.
 LLM_SOURCE_BRANCH="${LLM_SOURCE_BRANCH:-fmt-llm-source}"
 LLM_SOURCE_PR="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7447"
 LLM_SOURCE_PR_TITLE="[Types] LLM env layer (emmylua config, type stubs, manual fixes)"
@@ -51,21 +85,19 @@ LLM_PR_TITLE="[Types] LLM-driven type-error transform capstone"
 # ─── Stacked-PR base overrides ──────────────────────────────────────────────
 # Desired merge chain: master <- fmt <- mig <- fmt-llm-source <- fmt-llm
 # Branches not listed here default to "master" in update_prs/update_capstone_pr.
-#
-# BLOCKED: GitHub requires base branches to exist on the *target* repo (origin),
-# not just the fork. Since we push to a fork, `gh pr edit --base fmt` fails with
-# "Proposed base branch 'fmt' was not found" unless someone with origin write
-# access pushes these branches there first. Leaving the map empty (all PRs
-# target master) until origin has the branches. To enable:
-#
-#   # Someone with write access to beyond-all-reason/Beyond-All-Reason:
-#   git push origin fmt mig fmt-llm-source
-#
-# Then uncomment the map below and re-run with --update-prs.
 declare -A PR_BASE=(
-    # [mig]="fmt"
-    # ["$LLM_SOURCE_BRANCH"]="mig"
-    # ["$LLM_BRANCH"]="$LLM_SOURCE_BRANCH"
+    [mig]="fmt"
+    ["$LLM_SOURCE_BRANCH"]="mig"
+    ["$LLM_BRANCH"]="$LLM_SOURCE_BRANCH"
+    # Each leaf = fmt + one transform; basing on fmt scopes the GitHub diff
+    # to just the transform's changes.
+    [mig-bracket]="fmt"
+    [mig-rename-aliases]="fmt"
+    [mig-detach-bar-modules]="fmt"
+    [mig-i18n]="fmt"
+    [mig-spring-split]="fmt"
+    [mig-integration-tests]="fmt"
+    [mig-busted-types]="fmt"
 )
 
 # Dirty check only on the host -- inside distrobox stdin is piped via enter_distrobox.
@@ -494,9 +526,9 @@ generate_topology() {
     echo ""
     echo "**Rollups** — composite branches stacking the leaves and (for \`fmt-llm\`) the env + LLM layers:"
     echo ""
-    echo "| Branch | Diff vs \`master\` | Diff vs \`mig\` | Units |"
+    echo "| Branch | Diff vs \`master\` | Diff vs parent | Units |"
     echo "|--------|------|------|-------|"
-    echo "| $(pr_link "mig" "$MIG_PR") | $(diff_stat origin/master mig) | — | $(unit_status mig) |"
+    echo "| $(pr_link "mig" "$MIG_PR") | $(diff_stat origin/master mig) | $(diff_stat fmt mig) | $(unit_status mig) |"
     echo "| $(pr_link "$LLM_SOURCE_BRANCH" "$LLM_SOURCE_PR") | $(diff_stat origin/master "$LLM_SOURCE_BRANCH") | $(diff_stat mig "$LLM_SOURCE_BRANCH") | $(unit_status "$LLM_SOURCE_BRANCH") |"
     echo "| $(pr_link "$LLM_BRANCH" "$LLM_PR") | $(diff_stat origin/master "$LLM_BRANCH") | $(diff_stat "$LLM_SOURCE_BRANCH" "$LLM_BRANCH") | $(unit_status "$LLM_BRANCH") |"
 }
@@ -524,17 +556,70 @@ generate_mig_pr_body() {
 
     echo "Part of [BAR type-error cleanup]($TRACKING_ISSUE). Combined deterministic transforms — what \`master\` looks like with every leaf applied sequentially."
     echo ""
-    generate_museum_table mig "$MIG_PR"
-    echo ""
     generate_topology
 }
 
 # ─── Build phase (no PR body generation — branches must all exist first) ─────
 
+# Memoization for ensure_fmt_prereq — build each $prefix-fmt at most once per run.
+declare -A _FMT_PREREQ_BUILT=()
+
+# Rebuild $prefix's unique commits on top of fmt as an ephemeral `$prefix-fmt`
+# branch, then re-run stylua so the result is internally consistent with fmt's
+# formatting. Used by cherry_pick_prefix when the target tree is fmt-rooted —
+# without this, the prereq's master-era whitespace conflicts with stylua's
+# reformatting and the cherry-pick explodes.
+ensure_fmt_prereq() {
+    local prefix="$1"
+    local fmt_ref="${prefix}-fmt"
+
+    if [[ -n "${_FMT_PREREQ_BUILT[$prefix]:-}" ]]; then
+        return 0
+    fi
+    _FMT_PREREQ_BUILT[$prefix]=1
+
+    local count
+    count=$(git_bar rev-list --count "origin/master..$prefix" 2>/dev/null || echo 0)
+    if [[ "$count" == "0" ]]; then
+        return 0
+    fi
+
+    step "Building fmt-rooted prereq: $fmt_ref"
+    local saved_branch saved_sha
+    saved_sha=$(git_bar rev-parse HEAD)
+    saved_branch=$(git_bar symbolic-ref --short HEAD 2>/dev/null || echo "")
+
+    git_bar checkout --force -B "$fmt_ref" fmt
+    # -Xtheirs: on conflicts between fmt's stylua reformatting and the prereq's
+    # content edits, keep the prereq's content. stylua_pass below then
+    # re-normalizes formatting so the final tree is fmt-consistent. This relies
+    # on the prereq branches being "content-only" vs master — if a prereq ever
+    # encodes a formatting intent that disagrees with stylua, we'd silently
+    # lose it. That's acceptable for the curated prereqs we have today
+    # (integration-tests-curated, busted-types-curated, lux-i18n,
+    # detach-bar-modules-env).
+    git_bar cherry-pick -Xtheirs "origin/master..$prefix"
+    stylua_pass
+    git_bar add -A
+    if ! git_bar diff --cached --quiet; then
+        git_bar commit --amend --no-edit
+    fi
+
+    if [[ -n "$saved_branch" ]]; then
+        git_bar checkout --force "$saved_branch"
+    else
+        git_bar checkout --force "$saved_sha"
+    fi
+}
+
 # Cherry-pick origin/master..<branch>, but skip silently if the branch has no
 # commits unique vs origin/master (e.g. a prefix branch that has been merged
 # upstream and rebased to empty). Without this guard `git cherry-pick` aborts
 # the entire pipeline with "empty commit set passed".
+#
+# When the current tree is fmt-rooted, routes through an ephemeral fmt-rooted
+# replay of the prereq (see ensure_fmt_prereq) so stylua-vs-master whitespace
+# doesn't conflict.
 cherry_pick_prefix() {
     local prefix="$1"
     local count
@@ -543,7 +628,12 @@ cherry_pick_prefix() {
         info "  (skip) $prefix has no commits unique vs origin/master"
         return 0
     fi
-    git_bar cherry-pick "origin/master..$prefix"
+    if git_bar merge-base --is-ancestor fmt HEAD 2>/dev/null; then
+        ensure_fmt_prereq "$prefix"
+        git_bar cherry-pick "fmt..${prefix}-fmt"
+    else
+        git_bar cherry-pick "origin/master..$prefix"
+    fi
 }
 
 build_leaf() {
@@ -555,11 +645,18 @@ build_leaf() {
 
     step "Building leaf: $branch"
     abort_stuck_git_state
-    git_bar checkout --force -B "$branch" origin/master
-
-    for prefix in "${PREFIX_BRANCHES[@]}"; do
-        cherry_pick_prefix "$prefix"
-    done
+    # Non-fmt leaves root on fmt so they literally contain fmt's commit SHA.
+    # This keeps GitHub's `fmt...$branch` PR diff scoped to the transform
+    # only (without this, identical-content-but-different-SHA stylua commits
+    # on each leaf blow the diff up to ~200k lines).
+    if [[ "$transform" == "fmt" ]]; then
+        git_bar checkout --force -B "$branch" origin/master
+        for prefix in "${PREFIX_BRANCHES[@]}"; do
+            cherry_pick_prefix "$prefix"
+        done
+    else
+        git_bar checkout --force -B "$branch" fmt
+    fi
 
     if [[ -n "$prereq" ]]; then
         step "Cherry-picking prereq commits from $prereq..."
@@ -592,11 +689,10 @@ build_leaf() {
 build_mig() {
     step "Building linear mig branch..."
     abort_stuck_git_state
-    git_bar checkout --force -B mig origin/master
-
-    for prefix in "${PREFIX_BRANCHES[@]}"; do
-        cherry_pick_prefix "$prefix"
-    done
+    # Root on fmt so mig literally contains fmt's commit SHA as an ancestor
+    # (see build_leaf for the same reasoning — keeps the `fmt...mig` PR diff
+    # scoped to the transforms, not the stylua baseline).
+    git_bar checkout --force -B mig fmt
 
     local -A mig_prereqs_picked
     for transform in "${TRANSFORMS[@]}"; do
@@ -690,32 +786,28 @@ abort_stuck_git_state() {
 # Subsequent env edits: check out $LLM_SOURCE_BRANCH, amend or add more
 # env(llm): commits on top. Mig drift below the anchor is automatically
 # ignored — the replay range is computed from subjects each run, not stored.
-build_fmt_llm() {
+build_fmt_llm_source() {
     abort_stuck_git_state
 
     if ! git_bar rev-parse --verify "$LLM_SOURCE_BRANCH" >/dev/null 2>&1; then
-        err "LLM source branch '$LLM_SOURCE_BRANCH' not found in BAR repo"
+        err "LLM source branch '$LLM_SOURCE_BRANCH' not found in BAR repo."
         err ""
         err "Bootstrap it by authoring env commits on top of mig:"
         err "  git -C $BAR checkout -b $LLM_SOURCE_BRANCH mig"
         err "  # ...edit .emmyrc.json, types/*, etc..."
         err "  git -C $BAR commit -am 'env(llm): emmylua config + type stubs'"
         err ""
-        err "Env commits must have subjects prefixed 'env(llm):' and live"
-        err "contiguously at the branch tip. The replay anchor is auto-detected"
-        err "as the first non-env(llm): commit walking down from the tip."
+        err "Env commits must have subjects prefixed 'env(llm):' (or docs:/deps:)"
+        err "and live contiguously at the branch tip. The replay anchor is"
+        err "auto-detected as the first 'gen('/'git-blame-ignore-revs:'/'deps:'/"
+        err "'env: ' commit walking down from the tip."
         exit 1
     fi
 
-    local new_mig_sha env_anchor env_commit_count
-    new_mig_sha=$(git_bar rev-parse mig)
-
     # Walk $LLM_SOURCE_BRANCH from tip downward; stop at the first commit that
-    # looks like it came from the mig pipeline (gen(…), git-blame-ignore-revs,
-    # or a known prereq prefix). Everything above that is user-authored env
-    # content to be cherry-picked onto the fresh mig. Pure-shell implementation
-    # (no awk) so the script works in minimal distroboxes.
-    env_anchor=""
+    # looks like it came from the mig pipeline. Everything above that is
+    # user-authored env content to replay onto fresh mig.
+    local env_anchor=""
     while IFS=$'\t' read -r sha subject; do
         case "$subject" in
             "gen("*|"git-blame-ignore-revs:"*|"deps:"*|"env: "*) env_anchor="$sha"; break ;;
@@ -725,54 +817,70 @@ build_fmt_llm() {
 
     if [[ -z "$env_anchor" ]]; then
         err "Could not detect an env anchor on $LLM_SOURCE_BRANCH — no commit"
-        err "with a non-'env(llm):' subject was found walking from the tip."
-        err "Is $LLM_SOURCE_BRANCH rooted at origin/master (or a mig variant)?"
+        err "with a 'gen(…)'/'git-blame-ignore-revs:'/'deps:'/'env: ' subject"
+        err "was found walking from the tip. Is $LLM_SOURCE_BRANCH rooted on a"
+        err "mig variant?"
         exit 1
     fi
 
-    env_commit_count=$(git_bar rev-list --count "$env_anchor..$LLM_SOURCE_BRANCH")
-    step "Cherry-picking $env_commit_count env commit(s) from $LLM_SOURCE_BRANCH onto mig..."
+    # Snapshot env commit SHAs BEFORE we reset the branch pointer — once we
+    # force-recreate $LLM_SOURCE_BRANCH at mig, `$env_anchor..$LLM_SOURCE_BRANCH`
+    # would re-resolve to an empty range.
+    local -a env_commits=()
+    while IFS= read -r sha; do env_commits+=("$sha"); done \
+        < <(git_bar rev-list --reverse "$env_anchor..$LLM_SOURCE_BRANCH")
+
+    step "Rebuilding $LLM_SOURCE_BRANCH: mig + ${#env_commits[@]} env commit(s)"
     step "  env anchor: $env_anchor ($(git_bar log -1 --format=%s "$env_anchor"))"
-    step "  new mig:    $new_mig_sha"
 
-    # Build fmt-llm fresh from mig, then cherry-pick the env commits on top.
-    # fmt-llm-source itself is NOT mutated — same fail-fast philosophy as the
-    # prereq rebase guard: if cherry-pick conflicts, a transform on mig has
-    # diverged from what the env commit expects. The maintainer rebuilds
-    # fmt-llm-source by hand rather than silently merging unrelated changes.
-    # (See the lux-i18n bloat incident for why in-place rebase/merge was bad.)
-    git_bar checkout --force -B "$LLM_BRANCH" mig
+    git_bar checkout --force -B "$LLM_SOURCE_BRANCH" mig
 
-    if [[ "$env_commit_count" == "0" ]]; then
+    if [[ ${#env_commits[@]} -eq 0 ]]; then
         warn "$LLM_SOURCE_BRANCH has no env commits above the anchor — env layer is empty"
     else
-        if ! git_bar cherry-pick "$env_anchor..$LLM_SOURCE_BRANCH"; then
+        # -Xtheirs: on conflicts between mig's transforms and env commit edits,
+        # keep the env commit's content (stylua_pass below renormalizes).
+        if ! git_bar cherry-pick -Xtheirs "${env_commits[@]}"; then
             local conflicted
             conflicted=$(git_bar diff --name-only --diff-filter=U | sed 's/^/    /')
             err ""
-            err "Cherry-pick conflict replaying $LLM_SOURCE_BRANCH env commits onto mig."
-            err "A transform on mig modified file(s) also touched by an env commit:"
+            err "Cherry-pick conflict rebuilding $LLM_SOURCE_BRANCH on current mig."
+            err "Unresolved files:"
             err ""
             err "$conflicted"
             err ""
-            err "Option 1 — resolve and continue (stays on $LLM_BRANCH):"
-            err "  cd $BAR"
-            err "  # ...edit conflicted files, pick the right side..."
-            err "  git add -A && git cherry-pick --continue"
-            err "  git checkout $LLM_SOURCE_BRANCH && git cherry-pick $LLM_BRANCH~..$LLM_BRANCH  # propagate the fix"
-            err "  cd $DEVTOOLS_DIR && just bar::fmt-mig-generate --llm-only"
-            err ""
-            err "Option 2 — abort and rebuild $LLM_SOURCE_BRANCH from scratch (safer, avoids"
-            err "pulling unrelated upstream changes into the env commit — see the lux-i18n"
-            err "bloat incident):"
-            err "  cd $BAR && git cherry-pick --abort"
-            err "  git checkout $LLM_SOURCE_BRANCH && git reset --hard mig"
-            err "  # ...re-apply env edits..."
-            err "  git commit -am 'env(llm): emmylua config + type stubs'"
-            err "  cd $DEVTOOLS_DIR && just bar::fmt-mig-generate --llm-only"
+            err "Likely a transform reorganized files in a way the env commit"
+            err "wasn't written against. Resolve on $LLM_SOURCE_BRANCH by hand,"
+            err "then re-run with --llm-only."
             exit 1
         fi
+        # Re-normalize formatting: -Xtheirs can leave the env commit's whitespace
+        # in place where it diverged from mig's stylua output. Amend into the
+        # tip commit so the branch is stylua-clean at least at its head.
+        stylua_pass
+        git_bar add -A
+        if ! git_bar diff --cached --quiet; then
+            git_bar commit --amend --no-edit
+        fi
     fi
+
+    run_tests "$LLM_SOURCE_BRANCH"
+    ok "$LLM_SOURCE_BRANCH ready"
+}
+
+build_fmt_llm() {
+    abort_stuck_git_state
+
+    if ! git_bar rev-parse --verify "$LLM_SOURCE_BRANCH" >/dev/null 2>&1; then
+        err "$LLM_SOURCE_BRANCH not built yet — run build_fmt_llm_source first"
+        exit 1
+    fi
+
+    step "Building $LLM_BRANCH: $LLM_SOURCE_BRANCH + LLM commit..."
+    # Branch from $LLM_SOURCE_BRANCH (not mig) so $LLM_BRANCH physically contains
+    # its commits — PR #7407's diff (base=$LLM_SOURCE_BRANCH) scopes to the LLM
+    # commit alone.
+    git_bar checkout --force -B "$LLM_BRANCH" "$LLM_SOURCE_BRANCH"
 
     # ── LLM layer: run the triage fan-out and commit its edits ──
     local before
@@ -891,6 +999,8 @@ generate_llm_source_pr_body() {
     echo "- CI gate configuration"
     echo "- Manual source fixes that require human judgement"
     echo ""
+    echo "The fix recipes the subsequent LLM pass ($LLM_PR) uses are catalogued in [\`SKILL.md\`]($SKILL_MD_URL) — same rulebook that guides the subagents."
+    echo ""
     generate_topology
 }
 
@@ -900,7 +1010,7 @@ generate_llm_pr_body() {
 
     echo "Part of [BAR type-error cleanup]($TRACKING_ISSUE). Final stage: deterministic transforms + env layer + LLM type-fix pass."
     echo ""
-    generate_museum_table "$LLM_BRANCH" "$LLM_PR"
+    echo "LLM workers apply the categorized fix recipes in [\`SKILL.md\`]($SKILL_MD_URL) — each category maps an \`emmylua_check\` error pattern to an idempotent recipe."
     echo ""
     if [[ -f "$summary_file" ]]; then
         echo '### Triage run'
@@ -1014,7 +1124,7 @@ update_prs() {
                 local new_url
                 new_url=$(gh_host pr create \
                     --repo "$ORIGIN_REPO" \
-                    --head "$FORK_OWNER:$branch" \
+                    --head "$(head_for "$branch")" \
                     --base "$base" \
                     --title "$pr_title" \
                     --body-file "$pr_body_file" \
@@ -1044,6 +1154,39 @@ update_prs() {
         gh_host issue edit "$TRACKING_ISSUE" --body-file "$tracking_body_file"
         ok "Tracking issue updated"
     fi
+
+    link_gh_stack
+}
+
+# Post stack-summary metadata on the linear chain via `gh stack link`. This
+# doesn't rely on gh-stack local tracking — it just renders the "part of a
+# stack of N PRs" UI block on each existing PR and wires up the navigation.
+# No new PRs are created: branches with existing PRs are reused, per
+# `gh stack link --help`.
+link_gh_stack() {
+    if ! command -v gh >/dev/null 2>&1 || ! gh extension list 2>/dev/null | grep -q 'gh-stack'; then
+        info "gh-stack extension not installed — skipping stack linking"
+        info "  (install with: gh extension install github/gh-stack)"
+        return 0
+    fi
+
+    local -a chain=()
+    for b in fmt mig "$LLM_SOURCE_BRANCH" "$LLM_BRANCH"; do
+        if git_bar rev-parse --verify "$b" >/dev/null 2>&1; then
+            chain+=("$b")
+        fi
+    done
+    if [[ ${#chain[@]} -lt 2 ]]; then
+        info "Stack has fewer than 2 branches present — skipping gh stack link"
+        return 0
+    fi
+
+    step "Linking stack on GitHub: ${chain[*]}"
+    if (cd "$BAR" && gh stack link --remote "$ORIGIN_REMOTE" --base master "${chain[@]}"); then
+        ok "Stack linked"
+    else
+        warn "gh stack link failed — PRs are still individually correct, just no stack comment"
+    fi
 }
 
 update_capstone_pr() {
@@ -1071,7 +1214,7 @@ update_capstone_pr() {
         local new_url
         new_url=$(gh_host pr create \
             --repo "$ORIGIN_REPO" \
-            --head "$FORK_OWNER:$branch" \
+            --head "$(head_for "$branch")" \
             --base "$base" \
             --title "$pr_title" \
             --body-file "$pr_body_file" \
@@ -1081,23 +1224,98 @@ update_capstone_pr() {
     fi
 }
 
+# Verify the named branches landed on $remote at the expected local SHAs.
+# Uses `git ls-remote` — asks the remote directly rather than trusting the
+# local tracking-ref cache. `git fetch <remote> <branch>` doesn't always
+# update refs/remotes/<remote>/<branch> (sometimes only FETCH_HEAD), so a
+# rev-parse against the cached ref can silently return stale values and
+# wrongly report "OK". ls-remote bypasses that entirely.
+#
+# Catches the real-world case where `git push --force-with-lease` with
+# multiple refs silently drops one ref (lease check failed on that ref,
+# others succeeded, overall exit still 0 on some git versions / hook
+# configurations). Seen multiple times on fmt-llm-source.
+verify_pushed() {
+    local remote="$1"; shift
+    local -a refs=("$@")
+    step "Verifying ${#refs[@]} ref(s) landed on $remote..."
+
+    # One ls-remote call for all refs — build branch=sha map.
+    local ls_output
+    if ! ls_output=$(git_bar ls-remote "$remote" "${refs[@]/#/refs/heads/}" 2>&1); then
+        err "ls-remote on $remote failed — can't verify."
+        err "$ls_output"
+        exit 1
+    fi
+
+    local drift=0
+    for b in "${refs[@]}"; do
+        local local_sha remote_sha
+        local_sha=$(git_bar rev-parse "$b")
+        remote_sha=$(echo "$ls_output" | awk -v ref="refs/heads/$b" '$2 == ref { print $1 }')
+        if [[ -z "$remote_sha" ]]; then
+            err "  $remote: ref refs/heads/$b not found (push may have been rejected entirely)"
+            drift=1
+        elif [[ "$local_sha" != "$remote_sha" ]]; then
+            err "  $remote/$b at $remote_sha, expected $local_sha"
+            drift=1
+        fi
+    done
+    if [[ "$drift" == "1" ]]; then
+        err "Post-push drift on $remote — push reported success but remote refs don't match local."
+        err "Re-run --push, or push the drifted branches by hand with an explicit lease:"
+        err "  git -C $BAR push $remote --force-with-lease=<branch>:<current-remote-sha> <branch>..."
+        exit 1
+    fi
+    ok "All refs verified on $remote"
+}
+
 push_branches() {
     local branches=("mig" "$LLM_SOURCE_BRANCH" "$LLM_BRANCH")
     for transform in "${TRANSFORMS[@]}"; do
         branches+=("$(tvar "$transform" "branch")")
     done
 
-    # Filter out branches that don't exist locally (e.g., when --llm-only skipped leaves)
-    local existing=()
+    # Filter to branches that exist locally (e.g., --llm-only skips leaves).
+    local -a existing=()
     for b in "${branches[@]}"; do
         if git_bar rev-parse --verify "$b" >/dev/null 2>&1; then
             existing+=("$b")
         fi
     done
 
-    step "Force-pushing: ${existing[*]} -> $REMOTE"
-    git_bar push "$REMOTE" --force-with-lease "${existing[@]}"
-    ok "Pushed to $REMOTE"
+    # Split by primary remote.
+    local -A by_remote=()
+    for b in "${existing[@]}"; do
+        by_remote[$(remote_for "$b")]+="$b "
+    done
+
+    for r in "${!by_remote[@]}"; do
+        local -a refs=(${by_remote[$r]})
+        step "Force-pushing: ${refs[*]} -> $r"
+        git_bar push "$r" --force-with-lease "${refs[@]}"
+        ok "Pushed to $r"
+        verify_pushed "$r" "${refs[@]}"
+    done
+
+    # The rollup PRs (mig #7229, fmt-llm-source #7447, fmt-llm #7407) were
+    # opened cross-fork with head=$FORK_OWNER:<branch>. GitHub's PR head ref
+    # lives on the fork, not origin, so pushing only to origin leaves the PR
+    # showing a stale head SHA (and therefore the old pre-topology-fix diff).
+    # Mirror these branches to the fork as well until those PRs are recreated
+    # same-repo (head=origin:<branch>).
+    local -a mirror=()
+    for b in fmt mig "$LLM_SOURCE_BRANCH" "$LLM_BRANCH"; do
+        if git_bar rev-parse --verify "$b" >/dev/null 2>&1; then
+            mirror+=("$b")
+        fi
+    done
+    if [[ ${#mirror[@]} -gt 0 ]] && [[ "$ORIGIN_REMOTE" != "$FORK_REMOTE" ]]; then
+        step "Mirroring main-chain branches to fork: ${mirror[*]} -> $FORK_REMOTE"
+        git_bar push "$FORK_REMOTE" --force-with-lease "${mirror[@]}"
+        ok "Mirrored to $FORK_REMOTE"
+        verify_pushed "$FORK_REMOTE" "${mirror[@]}"
+    fi
 }
 
 # ─── CLI ─────────────────────────────────────────────────────────────────────
@@ -1121,7 +1339,9 @@ Reconstructs fmt, standalone leaf (mig-*), combined mig, and the
 fmt-llm capstone branch.
 
 Flags:
-  --push              Force-push all branches to $REMOTE
+  --push              Force-push origin-hosted branches (fmt, mig,
+                      fmt-llm-source, fmt-llm) to \$ORIGIN_REMOTE and all
+                      other leaves to \$FORK_REMOTE
   --update-prs        Update all PR descriptions via gh (creates new PRs
                       for leaves without one)
   --llm-only          Skip leaves and mig rebuild; only rebuild fmt-llm
@@ -1150,7 +1370,7 @@ fi
 # ─── Run ─────────────────────────────────────────────────────────────────────
 
 step "Fetching origin..."
-git_bar fetch origin
+git_bar -c submodule.recurse=false fetch --no-recurse-submodules origin
 
 if [[ "$DO_SKIP_GENERATION" == "true" ]]; then
     step "--skip-generation: skipping ALL branch rebuilds (PR bodies only)"
@@ -1175,6 +1395,7 @@ elif [[ "$DO_LLM_ONLY" == "true" ]]; then
     # Preserve leaf test results from a previous full run so the topology
     # tables aren't lying about untested branches.
     load_test_results || true
+    build_fmt_llm_source
     build_fmt_llm
     persist_test_results
 else
@@ -1217,6 +1438,7 @@ else
     done
 
     build_mig
+    build_fmt_llm_source
     build_fmt_llm
     persist_test_results
 fi
