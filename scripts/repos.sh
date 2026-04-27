@@ -81,6 +81,12 @@ clone_or_update_repo() {
     fi
     info "  ${dir}: fetching latest..."
     git -C "$target" fetch origin --quiet 2>/dev/null || warn "  ${dir}: fetch failed (offline?)"
+    # Sync submodules — needed at minimum for RecoilEngine (rmlui, rapidjson,
+    # spring-restbase, etc). Existing checkouts predating this addition won't
+    # have submodules initialized; --init handles them, --recursive walks
+    # nested submodules. Quiet on success; failures (offline, auth) just warn.
+    git -C "$target" submodule update --init --recursive --quiet 2>/dev/null \
+      || warn "  ${dir}: submodule sync failed (offline or auth?)"
     local current_branch
     current_branch="$(git -C "$target" branch --show-current 2>/dev/null)"
     if [ -n "$current_branch" ] && [ "$current_branch" != "$branch" ]; then
@@ -88,7 +94,7 @@ clone_or_update_repo() {
     fi
   else
     info "  ${dir}: cloning ${url} (branch: ${branch})..."
-    git clone --branch "$branch" "$url" "$target" 2>&1 | sed 's/^/    /'
+    git clone --recurse-submodules --branch "$branch" "$url" "$target" 2>&1 | sed 's/^/    /'
   fi
 }
 
