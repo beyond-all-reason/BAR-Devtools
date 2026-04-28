@@ -6,7 +6,6 @@
     "**/.lux/**": false
   },
   "[lua]": {
-    "editor.defaultFormatter": "JohnnyMorganz.stylua",
-    "editor.formatOnSave": true
+    "editor.defaultFormatter": "JohnnyMorganz.stylua"
   }
 }
