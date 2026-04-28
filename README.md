@@ -95,9 +95,9 @@ just setup::hooks
 
 `just setup::editor` writes a workspace `.vscode/settings.json` into the BAR
 repo (gitignored, per-checkout) that configures `JohnnyMorganz.stylua` as the
-Lua formatter with format-on-save. Both VS Code and Cursor read this
-automatically. If the file already exists, setup shows a diff against the
-recommended defaults and leaves yours intact.
+Lua formatter. Both VS Code and Cursor read this automatically. If the file
+already exists, setup shows a diff against the recommended defaults and
+leaves yours intact. Run `just bar::fmt` to format manually.
 
 #### VS Code Test Switcher (optional)
 

@@ -169,7 +169,7 @@ editor:
         elif ! diff -q "$bar_vscode_template" "$bar_vscode" >/dev/null 2>&1; then
             warn "$bar_vscode differs from recommended defaults:"
             diff -u "$bar_vscode" "$bar_vscode_template" | sed 's/^/  /' || true
-            info "Merge the '[lua]' block (and any missing files.exclude entries) manually if you want format-on-save."
+            info "Merge the '[lua]' block (and any missing files.exclude entries) manually."
         else
             info "$bar_vscode matches recommended defaults"
         fi
