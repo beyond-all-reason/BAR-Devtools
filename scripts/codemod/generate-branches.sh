@@ -196,7 +196,7 @@ detach_bar_modules_branch="mig-detach-bar-modules"
 detach_bar_modules_commit="gen(bar_codemod): detach-bar-modules"
 detach_bar_modules_pr="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7289"
 detach_bar_modules_prereq="detach-bar-modules-env"
-detach_bar_modules_description=""
+detach_bar_modules_description='The `detach-bar-modules-env` prereq exposes the detached modules to the widget/gadget sandbox (`luarules/system.lua`, `luaui/system.lua`), adds type stubs for them under `types/`, and lists them as globals in `.emmyrc.json` so EmmyLua resolves them as bare identifiers. Cherry-picked on top of `fmt` before the codemod runs.'
 
 run_detach_bar_modules() {
     "$CODEMOD" detach-bar-modules --path "$BAR" --exclude common/luaUtilities
