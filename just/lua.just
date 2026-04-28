@@ -47,10 +47,10 @@ library *flags: build-lde
         {{flags}}
 
     info "Copying into BAR working tree..."
-    mkdir -p "$BAR_DIR/recoil-lua-library/src"
-    clean_dir "$BAR_DIR/recoil-lua-library/src"
-    cp -r "$RECOIL_DIR/rts/Lua/library/"* "$BAR_DIR/recoil-lua-library/src/"
-    ok "Updated $BAR_DIR/recoil-lua-library/src/"
+    mkdir -p "$BAR_DIR/recoil-lua-library/library"
+    clean_dir "$BAR_DIR/recoil-lua-library/library"
+    cp -r "$RECOIL_DIR/rts/Lua/library/"* "$BAR_DIR/recoil-lua-library/library/"
+    ok "Updated $BAR_DIR/recoil-lua-library/library/"
 
 # Generate library then restart LuaLS so the editor picks up changes
 library-reload *flags: (library flags)
