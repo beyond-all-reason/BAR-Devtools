@@ -17,7 +17,10 @@ FORK_OWNER="${FORK_OWNER:-$(git -C "$BAR" remote get-url "$FORK_REMOTE" 2>/dev/n
 
 # Branches hosted directly on origin (beyond-all-reason). Everything else lives
 # on the fork and its PRs are cross-repo.
-ORIGIN_BRANCHES_RE='^(fmt|mig|fmt-llm)$'
+# fmt-llm-source must be in this set: PR #7407's base is
+# beyond-all-reason:fmt-llm-source, so origin's copy has to track local or
+# the capstone PR goes DIRTY against a stale base even when topology is sound.
+ORIGIN_BRANCHES_RE='^(fmt|mig|fmt-llm|fmt-llm-source)$'
 
 # Return the --head value for a gh pr create invocation: bare branch name for
 # same-repo PRs, owner:branch for cross-repo PRs from the fork.
@@ -1283,6 +1286,28 @@ push_branches() {
             existing+=("$b")
         fi
     done
+
+    # Topology invariant: $LLM_BRANCH must be stacked on the current
+    # $LLM_SOURCE_BRANCH tip. If fmt-llm-source was rebuilt without rebuilding
+    # fmt-llm (e.g., --skip-generation, or --llm-only with a stale local
+    # fmt-llm-source), the stale fmt-llm would force-push cleanly and PR #7407
+    # would silently go DIRTY against the new base. verify_pushed only checks
+    # local==remote, so it can't catch this — guard before push.
+    if git_bar rev-parse --verify "$LLM_SOURCE_BRANCH" >/dev/null 2>&1 \
+        && git_bar rev-parse --verify "$LLM_BRANCH" >/dev/null 2>&1; then
+        local src_tip
+        src_tip=$(git_bar rev-parse "$LLM_SOURCE_BRANCH")
+        if ! git_bar merge-base --is-ancestor "$src_tip" "$LLM_BRANCH"; then
+            err "$LLM_BRANCH is not a descendant of $LLM_SOURCE_BRANCH ($src_tip)."
+            err "fmt-llm-source was rebuilt without rebuilding fmt-llm — refusing"
+            err "to push (would leave PR #7407 with merge conflicts against the"
+            err "regenerated base)."
+            err ""
+            err "Re-run without --skip-generation, or with --llm-only, to rebuild"
+            err "$LLM_BRANCH on top of the current $LLM_SOURCE_BRANCH."
+            exit 1
+        fi
+    fi
 
     # Split by primary remote.
     local -A by_remote=()
