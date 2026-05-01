@@ -8,6 +8,7 @@ declare -a REPO_DIRS=() REPO_URLS=() REPO_BRANCHES=() REPO_GROUPS=() REPO_LOCAL_
 load_repos_conf() {
   REPO_DIRS=(); REPO_URLS=(); REPO_BRANCHES=(); REPO_GROUPS=(); REPO_LOCAL_PATHS=()
   local -A seen=()
+  local local_root="" protocol=""
 
   _parse_conf() {
     local file="$1"
@@ -16,6 +17,18 @@ load_repos_conf() {
       line="${line%%#*}"
       line="$(echo "$line" | xargs 2>/dev/null || true)"
       [ -z "$line" ] && continue
+
+      # Directive lines: @key value
+      if [[ "$line" =~ ^@([a-z_]+)[[:space:]]+(.+)$ ]]; then
+        local key="${BASH_REMATCH[1]}" val="${BASH_REMATCH[2]}"
+        case "$key" in
+          local_root) local_root="${val/#\~/$HOME}" ;;
+          protocol)   protocol="$val" ;;
+          *)          warn "Unknown directive in $file: @$key" ;;
+        esac
+        continue
+      fi
+
       local dir url branch group local_path
       read -r dir url branch group local_path <<< "$line"
       [ -z "$dir" ] || [ -z "$url" ] && continue
@@ -33,6 +46,19 @@ load_repos_conf() {
   for dir in "${!seen[@]}"; do
     local url branch group local_path
     read -r url branch group local_path <<< "${seen[$dir]}"
+
+    # @protocol: rewrite github.com URLs between https and ssh forms.
+    if [ "$protocol" = "ssh" ] && [[ "$url" =~ ^https://github\.com/(.+)$ ]]; then
+      url="git@github.com:${BASH_REMATCH[1]}"
+    elif [ "$protocol" = "https" ] && [[ "$url" =~ ^git@github\.com:(.+)$ ]]; then
+      url="https://github.com/${BASH_REMATCH[1]}"
+    fi
+
+    # @local_root: any repo without an explicit local_path gets $local_root/$dir.
+    if [ -z "$local_path" ] && [ -n "$local_root" ]; then
+      local_path="$local_root/$dir"
+    fi
+
     REPO_DIRS+=("$dir")
     REPO_URLS+=("$url")
     REPO_BRANCHES+=("$branch")
@@ -46,8 +72,12 @@ clone_or_update_repo() {
 
   if [ -n "$local_path" ]; then
     if [ ! -d "$local_path" ]; then
-      warn "  ${dir}: local path does not exist: ${local_path}"
-      return 1
+      info "  ${dir}: local path absent; cloning ${url} into ${local_path}..."
+      mkdir -p "$(dirname "$local_path")"
+      if ! git clone --recurse-submodules --branch "$branch" "$url" "$local_path" 2>&1 | sed 's/^/    /'; then
+        err "  ${dir}: clone into ${local_path} failed (check URL / SSH access)"
+        return 1
+      fi
     fi
     if [ -L "$target" ]; then
       local current_link
@@ -81,6 +111,8 @@ clone_or_update_repo() {
     fi
     info "  ${dir}: fetching latest..."
     git -C "$target" fetch origin --quiet 2>/dev/null || warn "  ${dir}: fetch failed (offline?)"
+    git -C "$target" submodule update --init --recursive --quiet 2>/dev/null \
+      || warn "  ${dir}: submodule sync failed (offline or auth?)"
     local current_branch
     current_branch="$(git -C "$target" branch --show-current 2>/dev/null)"
     if [ -n "$current_branch" ] && [ "$current_branch" != "$branch" ]; then
@@ -88,7 +120,7 @@ clone_or_update_repo() {
     fi
   else
     info "  ${dir}: cloning ${url} (branch: ${branch})..."
-    git clone --branch "$branch" "$url" "$target" 2>&1 | sed 's/^/    /'
+    git clone --recurse-submodules --branch "$branch" "$url" "$target" 2>&1 | sed 's/^/    /'
   fi
 }
 

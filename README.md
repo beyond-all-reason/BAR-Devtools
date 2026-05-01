@@ -6,11 +6,19 @@ Everything server-side runs in Docker. The game client runs natively.
 
 ## Quick Start
 
+Install **[just](https://github.com/casey/just)** ≥ 1.31 (this repo uses just modules, stabilized in 1.31):
+
 ```bash
-# Install just
-pacman -S just        # Arch
-dnf install just      # Fedora
-apt install just      # Debian/Ubuntu
+pacman -S just                 # Arch
+dnf install just               # Fedora
+# Debian/Ubuntu: apt ships 1.21 (frozen at LTS release), use the upstream installer:
+curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
+  | bash -s -- --to ~/.local/bin
+
+# Add ~/.local/bin to PATH if it isn't already (idempotent), then reload:
+grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' ~/.bashrc \
+  || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
 ```
 
 ```bash
@@ -132,6 +140,22 @@ sudo apt install -y podman distrobox
 ```
 
 Everything -- services, testing, formatting, engine IDE integration -- works unchanged inside WSL2. The `dev.Containerfile` documents every dependency; if you prefer native Windows (MSYS2/mingw), use it as a reference.
+
+#### Optional: prompt that doesn't make you sad
+
+The default bash prompt in a fresh WSL distro is `user@host:~$` with no git info, no exit-status hint, no color discipline. If you're going to spend hours in this terminal, install **[starship](https://starship.rs/)**:
+
+```bash
+curl -sS https://starship.rs/install.sh | sh
+echo 'eval "$(starship init bash)"' >> ~/.bashrc   # or zsh, fish, etc.
+```
+
+One binary, one line, works in any shell.
+
+Starship's default config uses Nerd Font glyphs (git branch, language icons), which render as `?` boxes without one installed. Two ways to fix:
+
+- **Install a [Nerd Font](https://www.nerdfonts.com/font-downloads)** on Windows (e.g. JetBrainsMono Nerd Font), then in Windows Terminal: *Settings → your WSL profile → Appearance → Font face*. Keeps the pretty defaults.
+- **Or strip glyphs from starship**: `starship preset plain-text-symbols -o ~/.config/starship.toml`. Pure ASCII, no font install.
 
 ## Common Workflows
 

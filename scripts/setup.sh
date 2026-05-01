@@ -15,6 +15,10 @@ detect_distro() {
   fi
 }
 
+is_wsl() {
+  [ -n "${WSL_DISTRO_NAME:-}" ] || [ -f /proc/sys/fs/binfmt_misc/WSLInterop ]
+}
+
 pkg_install_cmd() {
   case "$(detect_distro)" in
     arch)   echo "sudo pacman -S --needed" ;;
@@ -29,11 +33,11 @@ pkg_name() {
   local distro
   distro="$(detect_distro)"
   case "${distro}:${generic}" in
-    arch:docker)           echo "docker" ;;
+    arch:docker)           echo "docker docker-buildx" ;;
     arch:docker-compose)   echo "docker-compose" ;;
     arch:git)              echo "git" ;;
     arch:distrobox)        echo "distrobox" ;;
-    debian:docker)         echo "docker.io" ;;
+    debian:docker)         echo "docker-ce docker-ce-cli containerd.io docker-buildx-plugin" ;;
     debian:docker-compose) echo "docker-compose-plugin" ;;
     debian:git)            echo "git" ;;
     debian:distrobox)      echo "distrobox" ;;
@@ -63,7 +67,12 @@ check_docker() {
     echo ""
     echo "  Start the daemon:   sudo systemctl start docker"
     echo "  Enable on boot:     sudo systemctl enable docker"
-    echo "  Add yourself:       sudo usermod -aG docker \$USER  (then re-login)"
+    echo "  Add yourself:       sudo usermod -aG docker \$USER"
+    if grep -qi microsoft /proc/version 2>/dev/null; then
+      echo "  Then on WSL2:       wsl --shutdown  (from Windows PowerShell), reopen WSL"
+    else
+      echo "  Then re-login (log out of your desktop session and back in)"
+    fi
     echo ""
     return 1
   fi
@@ -124,6 +133,141 @@ install_dockerignore() {
   fi
 }
 
+# Idempotent WSL2 environment prep: enable systemd, mark / as a shared mount.
+# Required for docker-backed distrobox to work. No-op outside WSL2.
+ensure_wsl_setup() {
+  grep -qi microsoft /proc/version 2>/dev/null || return 0
+
+  echo -e "${BOLD}=== WSL2 environment prep ===${NC}"
+  echo ""
+
+  local wsl_conf="/etc/wsl.conf"
+  local needs_shutdown=0
+
+  [ -f "$wsl_conf" ] || sudo touch "$wsl_conf"
+
+  if ! sudo grep -qE '^\[boot\]' "$wsl_conf"; then
+    info "Adding [boot] section to $wsl_conf"
+    echo -e "\n[boot]" | sudo tee -a "$wsl_conf" >/dev/null
+  fi
+
+  if ! sudo grep -qE '^\s*systemd\s*=\s*true' "$wsl_conf"; then
+    if sudo grep -qE '^\s*systemd\s*=' "$wsl_conf"; then
+      warn "$wsl_conf has 'systemd=' set to a non-true value -- leaving it alone."
+      warn "  BAR-Devtools' docker path needs systemd; flip it manually if that's a mistake."
+    else
+      info "Enabling systemd in $wsl_conf"
+      sudo sed -i '/^\[boot\]/a systemd=true' "$wsl_conf"
+      needs_shutdown=1
+    fi
+  fi
+
+  if ! sudo grep -qE '^\s*command\s*=.*make-rshared' "$wsl_conf"; then
+    info "Persisting 'mount --make-rshared /' in $wsl_conf (rebind / as shared mount on every boot)"
+    sudo sed -i '/^\[boot\]/a command="mount --make-rshared /"' "$wsl_conf"
+  fi
+
+  # If systemd isn't PID 1, the user must restart WSL before we can proceed.
+  if [ "$(ps -p 1 -o comm= 2>/dev/null)" != "systemd" ] || [ "$needs_shutdown" -eq 1 ]; then
+    echo ""
+    warn "WSL must restart to pick up systemd."
+    warn "  From Windows PowerShell:  wsl --shutdown"
+    warn "  Then reopen WSL and re-run: just setup::init"
+    exit 0
+  fi
+
+  # systemd is up; ensure / is shared right now (avoids forcing a shutdown just for this).
+  local rootprop
+  rootprop="$(findmnt -no PROPAGATION / 2>/dev/null || echo unknown)"
+  if [ "$rootprop" != "shared" ]; then
+    info "Re-mounting / as shared (one-shot for current boot; persisted via wsl.conf above)"
+    sudo mount --make-rshared /
+    rootprop="$(findmnt -no PROPAGATION /)"
+    if [ "$rootprop" != "shared" ]; then
+      err "Failed to mark / as shared (got '$rootprop'). Cannot proceed."
+      exit 1
+    fi
+  fi
+
+  ok "WSL2 environment ready (systemd active, / is a shared mount)"
+  echo ""
+}
+
+# Set up Docker's official apt repository (Debian/Ubuntu).
+# Idempotent: returns early if the keyring + sources file are already in place.
+setup_docker_repo_debian() {
+  if [ -f /etc/apt/keyrings/docker.asc ] && [ -f /etc/apt/sources.list.d/docker.list ]; then
+    return 0
+  fi
+  info "Adding Docker's official apt repository (apt's docker.io lags upstream)..."
+  sudo apt-get update -qq
+  sudo apt-get install -y -qq ca-certificates curl
+  sudo install -m 0755 -d /etc/apt/keyrings
+  sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+    -o /etc/apt/keyrings/docker.asc
+  sudo chmod a+r /etc/apt/keyrings/docker.asc
+  local arch codename
+  arch="$(dpkg --print-architecture)"
+  codename="$(. /etc/os-release && echo "${VERSION_CODENAME:-${UBUNTU_CODENAME:-noble}}")"
+  echo "deb [arch=$arch signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $codename stable" \
+    | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
+  sudo apt-get update -qq
+  ok "Docker apt repository configured"
+}
+
+# If Ubuntu's apt-shipped 'docker.io' is installed, offer to replace with docker-ce stack.
+# Returns 0 whether or not migration happened (caller continues either way).
+migrate_docker_io_debian() {
+  if ! dpkg -l docker.io 2>/dev/null | grep -q '^ii'; then
+    return 0
+  fi
+  warn "Detected apt's 'docker.io' package -- it lags upstream Docker CE."
+  echo "  To get the modern Docker stack we'd purge docker.io / docker-buildx /"
+  echo "  docker-compose-v2 and replace with docker-ce + plugins from Docker's repo."
+  read -rp "Replace docker.io with docker-ce? [Y/n] " ans
+  if [[ "$ans" =~ ^[Nn]$ ]]; then
+    info "Keeping apt's docker.io. Skipping docker-ce upgrade."
+    return 0
+  fi
+  info "Stopping docker daemon and purging apt's docker.io / docker-buildx / docker-compose-v2..."
+  sudo systemctl stop docker.socket docker.service 2>/dev/null || true
+  sudo apt-get purge -y docker.io docker-buildx docker-compose-v2 2>/dev/null || true
+  sudo apt-get autoremove -y -qq 2>/dev/null || true
+}
+
+# Install distrobox from upstream main. Apt's distrobox on Ubuntu LTS (1.7.0)
+# predates PR #1965 (merged 2026-01-17, first in tag 1.8.2.3) which dropped the
+# 'chpasswd -e' usage that fails against shadow-utils 4.13+'s hash validation.
+# Idempotent: skips only if /usr/local/bin/distrobox is >= 1.8.2.3.
+install_distrobox_upstream() {
+  local current
+  current="$(/usr/local/bin/distrobox --version 2>/dev/null | awk '{print $NF}')"
+  if [ -n "$current" ] && _distrobox_ver_ge "$current" "1.8.2.3"; then
+    ok "distrobox already up-to-date at /usr/local/bin: $current"
+    return 0
+  fi
+  info "Installing distrobox from upstream (need >= 1.8.2.3 for the chpasswd-hash-validation fix)..."
+  sudo apt-get purge -y distrobox 2>/dev/null || true
+  curl -fsSL https://raw.githubusercontent.com/89luca89/distrobox/main/install \
+    | sudo sh -s -- --prefix /usr/local
+  hash -r
+  ok "distrobox installed: $(/usr/local/bin/distrobox --version 2>/dev/null | awk '{print $NF}')"
+}
+
+# Pure-bash version comparison: returns 0 if $1 >= $2, else 1.
+_distrobox_ver_ge() {
+  local IFS=.
+  local -a a=($1) b=($2)
+  local i max=${#a[@]}
+  [ "${#b[@]}" -gt "$max" ] && max=${#b[@]}
+  for ((i=0; i<max; i++)); do
+    local ai=${a[i]:-0} bi=${b[i]:-0}
+    if (( 10#$ai > 10#$bi )); then return 0; fi
+    if (( 10#$ai < 10#$bi )); then return 1; fi
+  done
+  return 0
+}
+
 cmd_install_deps() {
   echo -e "${BOLD}=== Install System Dependencies ===${NC}"
   echo ""
@@ -142,6 +286,12 @@ cmd_install_deps() {
   info "Detected distro: ${BOLD}${distro}${NC}"
   echo ""
 
+  # Debian-specific: switch from apt's stale docker.io to Docker CE before detecting deps.
+  if [ "$distro" = "debian" ]; then
+    setup_docker_repo_debian
+    migrate_docker_io_debian
+  fi
+
   local missing=()
 
   if ! command -v git &>/dev/null; then
@@ -157,9 +307,20 @@ cmd_install_deps() {
     missing+=("distrobox")
   fi
 
+  # On Debian, distrobox is always installed from upstream (apt's version is broken
+  # against shadow-utils 4.13+). Drop it from the apt list.
+  local apt_missing=()
+  for tool in "${missing[@]}"; do
+    if [ "$distro" = "debian" ] && [ "$tool" = "distrobox" ]; then continue; fi
+    apt_missing+=("$tool")
+  done
+
   if [ "${#missing[@]}" -eq 0 ]; then
-    ok "All dependencies already installed."
+    ok "All package-manager dependencies already installed."
     echo ""
+
+    # Even when nothing was missing, ensure distrobox on Debian is the upstream version.
+    [ "$distro" = "debian" ] && install_distrobox_upstream
 
     if ! docker info &>/dev/null; then
       warn "Docker is installed but the daemon isn't running or you lack permissions."
@@ -172,35 +333,51 @@ cmd_install_deps() {
     return 0
   fi
 
-  local packages=""
-  for dep in "${missing[@]}"; do
-    packages+=" $(pkg_name "$dep")"
-  done
+  if [ "${#apt_missing[@]}" -gt 0 ]; then
+    local packages=""
+    for dep in "${apt_missing[@]}"; do
+      packages+=" $(pkg_name "$dep")"
+    done
 
-  info "Missing: ${missing[*]}"
-  info "Will run: ${install_cmd}${packages}"
-  echo ""
+    info "Missing (via package manager): ${apt_missing[*]}"
+    info "Will run: ${install_cmd}${packages}"
+    echo ""
 
-  read -rp "Install now? [Y/n] " confirm
-  if [[ "$confirm" =~ ^[Nn]$ ]]; then
-    echo "Skipped. Install manually and retry."
-    return 1
+    read -rp "Install now? [Y/n] " confirm
+    if [[ "$confirm" =~ ^[Nn]$ ]]; then
+      echo "Skipped. Install manually and retry."
+      return 1
+    fi
+
+    $install_cmd $packages
+    echo ""
   fi
 
-  $install_cmd $packages
-
-  echo ""
+  # Always run after apt step on Debian -- handles both "distrobox missing" and
+  # "apt's distrobox installed but too old."
+  if [ "$distro" = "debian" ]; then
+    install_distrobox_upstream
+    echo ""
+  fi
 
   if [[ " ${missing[*]} " == *" docker "* ]]; then
     info "Enabling and starting Docker daemon..."
     sudo systemctl enable --now docker 2>/dev/null || true
 
     if ! groups | grep -qw docker; then
-      info "Adding $USER to the docker group (re-login required)..."
+      info "Adding $USER to the docker group..."
       sudo usermod -aG docker "$USER"
-      warn "You need to log out and back in for Docker group membership to take effect."
-      warn "After re-login, run: just setup::init"
-      return 0
+      echo ""
+      warn "Docker group membership only takes effect in a fresh shell."
+      if grep -qi microsoft /proc/version 2>/dev/null; then
+        warn "  On WSL2: from Windows PowerShell, run:  wsl --shutdown"
+        warn "  Then reopen your WSL terminal (closing the tab is NOT enough --"
+        warn "  the WSL2 distro keeps running headless until you shut it down)."
+      else
+        warn "  On Linux desktop: log out of your session and log back in."
+      fi
+      warn "After that, re-run: just setup::init"
+      exit 0
     fi
   fi
 
@@ -219,6 +396,8 @@ cmd_setup_distrobox() {
     exit 1
   fi
 
+  ensure_wsl_setup
+
   local runtime="podman"
   command -v podman &>/dev/null || runtime="docker"
 
@@ -227,13 +406,18 @@ cmd_setup_distrobox() {
   ok "Image built: $DEV_IMAGE"
   echo ""
 
-  if distrobox list 2>/dev/null | grep -q "$DEV_BOX"; then
+  if distrobox list 2>/dev/null | grep -q "$DEV_BOX" || $runtime ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$DEV_BOX"; then
     warn "Distrobox '$DEV_BOX' already exists. Recreating..."
-    distrobox rm -f "$DEV_BOX"
+    distrobox stop "$DEV_BOX" 2>/dev/null || true
+    distrobox rm -f "$DEV_BOX" 2>/dev/null \
+      || $runtime rm -f "$DEV_BOX" 2>/dev/null \
+      || true
   fi
 
   step "Creating distrobox '$DEV_BOX'..."
-  distrobox create --name "$DEV_BOX" --image "localhost/$DEV_IMAGE" --yes
+  local image_ref="$DEV_IMAGE"
+  [ "$runtime" = "podman" ] && image_ref="localhost/$DEV_IMAGE"
+  distrobox create --name "$DEV_BOX" --image "$image_ref" --yes
   ok "Distrobox created: $DEV_BOX"
   echo ""
 
@@ -278,6 +462,8 @@ cmd_init() {
   echo -e "${BOLD}  BAR Dev Environment - First Time Setup${NC}"
   echo -e "${BOLD}==========================================${NC}"
   echo ""
+
+  ensure_wsl_setup
 
   step "1/6  Checking & installing dependencies"
   echo ""
@@ -340,14 +526,15 @@ cmd_init() {
     echo ""
     read -rp "Build engine from source? [y/N] " build_engine
     if [[ "$build_engine" =~ ^[Yy]$ ]]; then
-      local engine_arch
+      local engine_arch engine_os="linux"
       case "$(uname -m)" in
         x86_64)       engine_arch="amd64" ;;
         aarch64|arm64) engine_arch="arm64" ;;
         *)            engine_arch="amd64" ;;
       esac
-      info "Building Recoil engine (${engine_arch}-linux, this may take a while)..."
-      bash "$DEVTOOLS_DIR/RecoilEngine/docker-build-v2/build.sh" --arch "$engine_arch" linux
+      is_wsl && engine_os="windows"
+      info "Building Recoil engine (${engine_arch}-${engine_os}, this may take a while)..."
+      bash "$DEVTOOLS_DIR/RecoilEngine/docker-build-v2/build.sh" --arch "$engine_arch" "$engine_os"
     fi
     echo ""
   else
@@ -455,6 +642,17 @@ detect_game_dir() {
     echo "$candidate"
     return 0
   fi
+  if is_wsl && command -v wslpath &>/dev/null && command -v cmd.exe &>/dev/null; then
+    local win_userprofile
+    win_userprofile="$(cmd.exe /c 'echo %USERPROFILE%' 2>/dev/null | tr -d '\r\n')"
+    if [ -n "$win_userprofile" ]; then
+      candidate="$(wslpath "$win_userprofile")/AppData/Local/Programs/Beyond-All-Reason/data"
+      if [ -d "$candidate" ]; then
+        echo "$candidate"
+        return 0
+      fi
+    fi
+  fi
   return 1
 }
 
@@ -503,7 +701,14 @@ cmd_link() {
   local source_path link_path
   case "$target" in
     engine)
-      source_path="$DEVTOOLS_DIR/RecoilEngine/build-linux/install"
+      local engine_arch engine_os="linux"
+      case "$(uname -m)" in
+        x86_64)        engine_arch="amd64" ;;
+        aarch64|arm64) engine_arch="arm64" ;;
+        *)             engine_arch="amd64" ;;
+      esac
+      is_wsl && engine_os="windows"
+      source_path="$DEVTOOLS_DIR/RecoilEngine/build-${engine_arch}-${engine_os}/install"
       link_path="$game_dir/engine/local-build"
       ;;
     chobby)
@@ -524,7 +729,11 @@ cmd_link() {
   if [ ! -e "$source_path" ] && [ ! -L "$source_path" ]; then
     err "Source not found: $source_path"
     if [ "$target" = "engine" ]; then
-      echo "  Build the engine first: just engine::build linux"
+      if is_wsl; then
+        echo "  Build the engine first: just engine::build windows"
+      else
+        echo "  Build the engine first: just engine::build linux"
+      fi
     else
       echo "  Clone the repo first: just repos::clone extra"
     fi
