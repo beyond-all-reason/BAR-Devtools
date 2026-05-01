@@ -450,14 +450,187 @@ cmd_setup_distrobox() {
   echo "  To rebuild after changes:   just setup::distrobox"
 }
 
-cmd_init() {
-  local clone_extras=0
-  for arg in "$@"; do
-    case "$arg" in
-      extras|all) clone_extras=1 ;;
+# Feature -> repo dirs it pulls in.
+feature_repos() {
+  case "$1" in
+    bar)          echo "Beyond-All-Reason bar-lobby" ;;
+    recoil)       echo "RecoilEngine" ;;
+    teiserver)    echo "teiserver spads_config_bar" ;;
+    chobby)       echo "BYAR-Chobby bar-lobby" ;;
+    spads-source) echo "SPADS SpringLobbyInterface ansible-spads-setup" ;;
+    *)            echo "" ;;
+  esac
+}
+
+# True if the comma-separated feature list contains $2.
+features_include() {
+  local IFS=','
+  local f
+  for f in $1; do
+    [ "$f" = "$2" ] && return 0
+  done
+  return 1
+}
+
+# Comma-separated features -> deduplicated space-separated repo dirs.
+features_to_repos() {
+  local IFS=','
+  local f r
+  declare -A seen=()
+  for f in $1; do
+    for r in $(feature_repos "$f"); do
+      seen[$r]=1
+    done
+  done
+  echo "${!seen[@]}"
+}
+
+# Interactive checkbox list. Args after the title are "key|label|default" where
+# default is 1 (checked) or 0 (unchecked). On confirm, sets CHECKBOX_RESULT to
+# the comma-separated keys of the selected items. Returns 1 on quit.
+checkbox_list() {
+  local title="$1"; shift
+  local -a keys=() labels=() state=()
+  local item
+  for item in "$@"; do
+    keys+=("${item%%|*}")
+    local rest="${item#*|}"
+    labels+=("${rest%|*}")
+    state+=("${rest##*|}")
+  done
+  local n=${#keys[@]}
+  local first=1
+
+  trap 'stty echo 2>/dev/null' EXIT
+  stty -echo 2>/dev/null
+
+  local i mark
+  while true; do
+    if [ "$first" -eq 1 ]; then
+      first=0
+    else
+      printf '\e[%dA' $((n + 4))
+    fi
+    printf '\e[J'
+
+    echo -e "${BOLD}${title}${NC}"
+    echo -e "  ${DIM}1-${n} toggle - a all - n none - enter confirm${NC}"
+    echo ""
+    for ((i=0; i<n; i++)); do
+      [ "${state[i]}" = "1" ] && mark="[${GREEN}x${NC}]" || mark="[ ]"
+      echo -e "  ${DIM}$((i + 1)).${NC} ${mark} ${labels[i]}"
+    done
+    echo ""
+
+    local key=""
+    IFS= read -rsn1 key
+    case "$key" in
+      [1-9])
+        local idx=$((key - 1))
+        if [ "$idx" -lt "$n" ]; then
+          state[idx]=$(( 1 - ${state[idx]:-0} ))
+        fi
+        ;;
+      a|A)       for ((i=0; i<n; i++)); do state[i]=1; done ;;
+      n|N)       for ((i=0; i<n; i++)); do state[i]=0; done ;;
+      ''|$'\n')  break ;;
+      q|Q)       stty echo 2>/dev/null; trap - EXIT; return 1 ;;
     esac
   done
+  stty echo 2>/dev/null
+  trap - EXIT
 
+  local picked=()
+  for ((i=0; i<n; i++)); do
+    [ "${state[i]}" = "1" ] && picked+=("${keys[i]}")
+  done
+  CHECKBOX_RESULT="$(IFS=,; echo "${picked[*]}")"
+  return 0
+}
+
+# Single-list checkbox picker for components. Sets BAR_FEATURES_SELECTED.
+pick_features() {
+  CHECKBOX_RESULT=""
+  if ! checkbox_list "Which BAR components will you work on?" \
+    "bar|BAR game content + bar-lobby client|1" \
+    "recoil|Recoil engine (build from source)|1" \
+    "teiserver|Teiserver (lobby/matchmaking server)|1" \
+    "chobby|Chobby (in-game lobby)|1" \
+    "spads-source|SPADS source (autohost dev, optional)|0"
+  then
+    BAR_FEATURES_SELECTED=""
+    warn "Selection cancelled."
+    return
+  fi
+
+  if [ -z "$CHECKBOX_RESULT" ]; then
+    BAR_FEATURES_SELECTED=""
+    warn "No features selected. Nothing to clone or build."
+    return
+  fi
+
+  BAR_FEATURES_SELECTED="$CHECKBOX_RESULT"
+  ok "Selected: ${BAR_FEATURES_SELECTED}"
+}
+
+# Persist BAR_FEATURES=... to .env (overwrite if already set).
+write_features_env() {
+  local features="$1"
+  local env_file="$DEVTOOLS_DIR/.env"
+  touch "$env_file"
+  if grep -q "^BAR_FEATURES=" "$env_file"; then
+    sed -i "s|^BAR_FEATURES=.*|BAR_FEATURES=${features}|" "$env_file"
+    info "Updated BAR_FEATURES in .env: ${features}"
+  else
+    echo "BAR_FEATURES=${features}" >> "$env_file"
+    ok "Added BAR_FEATURES=${features} to .env"
+  fi
+}
+
+# Clone only the repos that map to the selected features.
+clone_for_features() {
+  local features="$1"
+  if [ -z "$features" ]; then
+    return 0
+  fi
+  local wanted
+  wanted="$(features_to_repos "$features")"
+
+  load_repos_conf
+
+  echo -e "${BOLD}=== Cloning repositories for: ${features} ===${NC}"
+  echo ""
+
+  if [ -f "$REPOS_LOCAL" ]; then
+    info "Using overrides from repos.local.conf"
+    echo ""
+  fi
+
+  local i cloned=0 updated=0 linked=0
+  for i in "${!REPO_DIRS[@]}"; do
+    local dir="${REPO_DIRS[$i]}"
+    [[ " $wanted " == *" $dir "* ]] || continue
+
+    local local_path="${REPO_LOCAL_PATHS[$i]}"
+    if [ -n "$local_path" ]; then
+      clone_or_update_repo "$dir" "${REPO_URLS[$i]}" "${REPO_BRANCHES[$i]}" "$local_path"
+      linked=$((linked + 1))
+    elif [ -d "$DEVTOOLS_DIR/$dir/.git" ]; then
+      clone_or_update_repo "$dir" "${REPO_URLS[$i]}" "${REPO_BRANCHES[$i]}"
+      updated=$((updated + 1))
+    else
+      clone_or_update_repo "$dir" "${REPO_URLS[$i]}" "${REPO_BRANCHES[$i]}"
+      cloned=$((cloned + 1))
+    fi
+  done
+
+  echo ""
+  local summary="${cloned} cloned, ${updated} updated"
+  [ "$linked" -gt 0 ] && summary+=", ${linked} linked"
+  ok "Repos: ${summary}"
+}
+
+cmd_init() {
   echo -e "${BOLD}==========================================${NC}"
   echo -e "${BOLD}  BAR Dev Environment - First Time Setup${NC}"
   echo -e "${BOLD}==========================================${NC}"
@@ -467,13 +640,10 @@ cmd_init() {
 
   step "1/6  Checking & installing dependencies"
   echo ""
-  local deps_ok=0
   if check_git &>/dev/null && check_docker &>/dev/null; then
-    deps_ok=1
     ok "Core dependencies (git, docker) already installed."
   else
     cmd_install_deps || { err "Dependency installation failed. Fix and retry."; exit 1; }
-    deps_ok=1
   fi
   echo ""
 
@@ -492,57 +662,57 @@ cmd_init() {
   fi
   echo ""
 
-  step "3/6  Cloning repositories"
+  step "3/6  Component selection & cloning"
   echo ""
   if [ ! -f "$REPOS_CONF" ]; then
     err "repos.conf not found at: $REPOS_CONF"
     exit 1
   fi
-  cmd_clone core
-  echo ""
 
-  if [ "$clone_extras" -eq 1 ]; then
-    cmd_clone extra
-    echo ""
-  else
-    read -rp "Also clone extra repositories (game engine, SPADS source, infra)? [y/N] " extras
-    if [[ "$extras" =~ ^[Yy]$ ]]; then
-      cmd_clone extra
-      echo ""
-    fi
+  pick_features
+  local features="${BAR_FEATURES_SELECTED:-}"
+  if [ -z "$features" ]; then
+    info "Skipping clone/build steps. Re-run 'just setup::init' to pick components."
+    return 0
   fi
+  write_features_env "$features"
+  echo ""
+  clone_for_features "$features"
+  echo ""
 
   step "4/6  Building Docker images"
   echo ""
-  install_dockerignore
-  info "Building Docker images..."
-  $COMPOSE build teiserver
-  $COMPOSE --profile spads pull spads
-  ok "Images built successfully."
+  if features_include "$features" teiserver; then
+    install_dockerignore
+    info "Building Docker images..."
+    $COMPOSE build teiserver
+    $COMPOSE --profile spads pull spads
+    ok "Images built successfully."
+  else
+    info "Teiserver not selected -- skipping Docker image build."
+  fi
   echo ""
 
-  if [ -d "$DEVTOOLS_DIR/RecoilEngine/docker-build-v2" ]; then
-    step "5/6  Engine build"
-    echo ""
-    read -rp "Build engine from source? [y/N] " build_engine
-    if [[ "$build_engine" =~ ^[Yy]$ ]]; then
+  step "5/6  Engine build"
+  echo ""
+  if features_include "$features" recoil; then
+    if [ -d "$DEVTOOLS_DIR/RecoilEngine/docker-build-v2" ]; then
       local engine_arch engine_os="linux"
       case "$(uname -m)" in
-        x86_64)       engine_arch="amd64" ;;
+        x86_64)        engine_arch="amd64" ;;
         aarch64|arm64) engine_arch="arm64" ;;
-        *)            engine_arch="amd64" ;;
+        *)             engine_arch="amd64" ;;
       esac
       is_wsl && engine_os="windows"
       info "Building Recoil engine (${engine_arch}-${engine_os}, this may take a while)..."
       bash "$DEVTOOLS_DIR/RecoilEngine/docker-build-v2/build.sh" --arch "$engine_arch" "$engine_os"
+    else
+      warn "Recoil selected but RecoilEngine/docker-build-v2 missing -- clone may have failed."
     fi
-    echo ""
   else
-    step "5/6  Engine build"
-    echo ""
-    info "RecoilEngine not cloned -- skipping. Clone with: just repos::clone extra"
-    echo ""
+    info "Recoil not selected -- skipping engine build."
   fi
+  echo ""
 
   step "6/6  Symlinks to game directory"
   echo ""
@@ -550,15 +720,15 @@ cmd_init() {
   game_dir="$(detect_game_dir 2>/dev/null)" || true
   if [ -z "$game_dir" ]; then
     info "No game directory detected. Set BAR_GAME_DIR to enable linking."
-    echo ""
   else
     local available=()
-    [ -d "$DEVTOOLS_DIR/RecoilEngine" ] && available+=("engine")
-    [ -d "$DEVTOOLS_DIR/BYAR-Chobby" ] && available+=("chobby")
-    [ -d "$DEVTOOLS_DIR/Beyond-All-Reason" ] && available+=("bar")
+    features_include "$features" recoil && [ -d "$DEVTOOLS_DIR/RecoilEngine" ] && available+=("engine")
+    features_include "$features" chobby && [ -d "$DEVTOOLS_DIR/BYAR-Chobby" ]    && available+=("chobby")
+    features_include "$features" bar    && [ -d "$DEVTOOLS_DIR/Beyond-All-Reason" ] && available+=("bar")
 
     if [ "${#available[@]}" -gt 0 ]; then
-      echo "  Available repos to symlink into $game_dir:"
+      echo "  Repos to symlink into $game_dir:"
+      local name
       for name in "${available[@]}"; do
         case "$name" in
           engine) echo -e "    ${BOLD}engine${NC}  -> $game_dir/engine/local-build/" ;;
@@ -576,19 +746,56 @@ cmd_init() {
         done
       fi
     else
-      info "No linkable repos cloned yet."
+      info "No linkable repos for the selected features."
     fi
   fi
   echo ""
 
   echo -e "${BOLD}=== Setup Complete ===${NC}"
   echo ""
+  echo "  Selected features: ${features}"
+  echo ""
   echo "  Your workspace is ready. Next steps:"
   echo ""
-  echo -e "    ${BOLD}just services::up${NC}             Start Teiserver + PostgreSQL"
-  echo -e "    ${BOLD}just services::up lobby${NC}       ...and launch bar-lobby"
-  echo -e "    ${BOLD}just services::up spads${NC}       ...and start SPADS autohost"
-  echo -e "    ${BOLD}just engine::build linux${NC}      Build the Recoil engine"
+  if features_include "$features" teiserver; then
+    echo -e "  ${CYAN}Teiserver${NC}"
+    echo -e "    ${BOLD}just services::up${NC}             Start Teiserver + PostgreSQL"
+    echo -e "    ${BOLD}just services::up spads${NC}       ...and start SPADS autohost"
+    echo ""
+  fi
+  if features_include "$features" bar; then
+    echo -e "  ${CYAN}BAR (game content)${NC}"
+    echo -e "    ${BOLD}just services::up lobby${NC}       Launch bar-lobby and connect"
+    echo -e "    ${BOLD}just bar::units${NC}               Run busted Lua unit tests"
+    echo -e "    ${BOLD}just bar::test-shell${NC}          Drop into an interactive busted shell"
+    echo -e "    ${BOLD}just bar::check${NC}               LuaLS type-check across the repo"
+    echo -e "    ${BOLD}just bar::lint${NC}                luacheck (via lux)"
+    echo -e "    ${BOLD}just bar::fmt${NC}                 stylua format"
+    echo -e "    ${BOLD}just bar::integrations${NC}        Headless integration tests (x86-64 only)"
+    echo -e "    ${BOLD}just bar::setup-hooks${NC}         Install the stylua pre-commit hook"
+    echo -e "    ${DIM}Edits land in Beyond-All-Reason/ and reflect live via the symlink.${NC}"
+    echo ""
+  fi
+  if features_include "$features" chobby && ! features_include "$features" bar; then
+    echo -e "  ${CYAN}Chobby${NC}"
+    echo -e "    ${BOLD}just services::up lobby${NC}       Launch bar-lobby (loads BYAR-Chobby)"
+    echo ""
+  fi
+  if features_include "$features" recoil; then
+    echo -e "  ${CYAN}Recoil${NC}"
+    if is_wsl; then
+      echo -e "    ${BOLD}just engine::build windows${NC}    Rebuild the engine"
+    else
+      echo -e "    ${BOLD}just engine::build linux${NC}      Rebuild the engine"
+    fi
+    echo ""
+  fi
+  if features_include "$features" spads-source; then
+    echo -e "  ${CYAN}SPADS source${NC}"
+    echo -e "    ${DIM}see SPADS/ and SpringLobbyInterface/ for autohost dev${NC}"
+    echo ""
+  fi
+  echo -e "  ${CYAN}Workspace${NC}"
   echo -e "    ${BOLD}just link::status${NC}             Show symlink status"
   echo -e "    ${BOLD}just repos::status${NC}            Show repository status"
   echo ""
