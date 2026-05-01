@@ -193,6 +193,75 @@ ensure_wsl_setup() {
   echo ""
 }
 
+# True if $1 looks like a real Windows Python (not the Microsoft Store
+# placeholder under WindowsApps that opens the Store when invoked).
+_is_real_windows_python() {
+  local p="$1"
+  [ -n "$p" ] || return 1
+  # Reject the Store stub and the WindowsApps reparse-point path.
+  case "$p" in
+    *WindowsApps*python.exe|*WindowsApps*py.exe) return 1 ;;
+  esac
+  return 0
+}
+
+# Install Python on the Windows host via winget. Phase 3 of the bar::launch
+# sync pipeline (and the probe_wsl_sync.py helper) need py.exe / python.exe on
+# Windows. Idempotent: skips if a real Python is already on the Windows PATH,
+# and is a no-op outside WSL.
+ensure_windows_python() {
+  is_wsl || return 0
+
+  local py_path python_path
+  py_path="$(command -v py.exe 2>/dev/null || true)"
+  python_path="$(command -v python.exe 2>/dev/null || true)"
+
+  if _is_real_windows_python "$py_path"; then
+    ok "Windows Python already installed: $py_path"
+    return 0
+  fi
+  if _is_real_windows_python "$python_path"; then
+    ok "Windows Python already installed: $python_path"
+    return 0
+  fi
+
+  if [ -n "$python_path" ]; then
+    info "Detected Microsoft Store python.exe stub at $python_path -- not a real install."
+  fi
+
+  if ! command -v winget.exe &>/dev/null; then
+    warn "winget.exe not found on the Windows PATH -- can't auto-install Python."
+    warn "Install manually from https://www.python.org/downloads/ and re-open the WSL shell."
+    return 0
+  fi
+
+  echo ""
+  info "Phase 3 sync watcher and probe_wsl_sync.py both need py.exe / python.exe on Windows."
+  read -rp "Install Python 3.12 via winget on Windows now? [Y/n] " ans
+  if [[ "$ans" =~ ^[Nn]$ ]]; then
+    info "Skipped. Run later: winget install Python.Python.3.12"
+    return 0
+  fi
+
+  step "Installing Python 3.12 on Windows via winget..."
+  winget.exe install Python.Python.3.12 \
+    --silent \
+    --accept-source-agreements \
+    --accept-package-agreements \
+    || warn "winget exited non-zero. Check the output above; Python may still be installed."
+
+  hash -r
+  py_path="$(command -v py.exe 2>/dev/null || true)"
+  python_path="$(command -v python.exe 2>/dev/null || true)"
+  if _is_real_windows_python "$py_path" || _is_real_windows_python "$python_path"; then
+    ok "Windows Python installed."
+  else
+    warn "winget finished but a real py.exe / python.exe still isn't on PATH."
+    warn "Open a new WSL shell (Windows PATH is re-imported at WSL shell start)."
+    warn "If it still isn't visible, check: winget list Python.Python.3.12 (from cmd/PowerShell)."
+  fi
+}
+
 # Set up Docker's official apt repository (Debian/Ubuntu).
 # Idempotent: returns early if the keyring + sources file are already in place.
 setup_docker_repo_debian() {
@@ -645,6 +714,7 @@ cmd_init() {
   else
     cmd_install_deps || { err "Dependency installation failed. Fix and retry."; exit 1; }
   fi
+  ensure_windows_python
   echo ""
 
   step "2/6  Dev environment (distrobox)"
