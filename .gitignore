@@ -16,7 +16,12 @@ SpringLobbyInterface/
 repos.local.conf
 .env
 
+# Build artifacts
+bar-lua-codemod/target/
+
 # Runtime / editor state
 tasks/
 .devtools/
 *.log
+.claude
+bar-lua-codemod/target/

@@ -10,12 +10,12 @@ mod docs     'just/docs.just'
 mod bar      'just/bar.just'
 mod tei      'just/tei.just'
 
+default:
+    @just --list --list-submodules
+
 # Diagnose your dev environment (read-only, no side effects)
 doctor:
     just setup::doctor
-
-default:
-    @just --list --list-submodules
 
 reset:
     just lua::reset

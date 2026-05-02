@@ -5,9 +5,11 @@ COMPOSE_FILE        := DEVTOOLS_DIR / "docker-compose.dev.yml"
 COMPOSE             := "docker compose -f " + COMPOSE_FILE
 BAR_DIR             := DEVTOOLS_DIR / "Beyond-All-Reason"
 INTEGRATION_COMPOSE := "docker compose -f " + BAR_DIR / "tools" / "headless_testing" / "docker-compose.yml"
-LUALS_VERSION       := "3.17.1"
-LUALS_DIR           := DEVTOOLS_DIR / ".devtools" / "lua-language-server"
-LUALS_BIN           := LUALS_DIR / "bin" / "lua-language-server"
+CODEMOD_DIR         := DEVTOOLS_DIR / "bar-lua-codemod"
+CODEMOD_BIN         := CODEMOD_DIR / "target" / "release" / "bar-lua-codemod"
+# Batch check uses `emmylua_check` (Rust EmmyLua analyzer), baked into the dev
+# container image. `emmylua_ls` is LSP-only (no --check) and lives on the host
+# for editor integration — see `just setup::editor`.
 
 [private]
 require-bar:
@@ -18,33 +20,35 @@ require-bar:
         exit 1
     fi
 
-[private]
-require-luals:
-    #!/usr/bin/env bash
-    [ -x "{{LUALS_BIN}}" ] && exit 0
-    set -euo pipefail
-    source "$DEVTOOLS_DIR/scripts/common.sh"
-    step "lua-language-server not found, downloading v{{LUALS_VERSION}}..."
-    mkdir -p "{{LUALS_DIR}}"
-    ARCH="$(uname -m)"
-    case "$ARCH" in
-        x86_64)  PLAT="linux-x64" ;;
-        aarch64) PLAT="linux-arm64" ;;
-        *)       err "Unsupported arch: $ARCH"; exit 1 ;;
-    esac
-    curl -fsSL "https://github.com/LuaLS/lua-language-server/releases/download/${LUALS_VERSION}/lua-language-server-${LUALS_VERSION}-${PLAT}.tar.gz" \
-        | tar xz -C "{{LUALS_DIR}}"
-    ok "Downloaded lua-language-server v{{LUALS_VERSION}}"
-
-# Type-check BAR Lua code (LuaLS diagnostics)
-check *args: require-bar require-luals
+# Type-check BAR Lua code (EmmyLua analyzer CLI — `-c .emmyrc.json` avoids LuaLS-only keys in `.luarc.json`)
+check *args: require-bar
     #!/usr/bin/env bash
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
-    step "Running LuaLS type check..."
+    enter_distrobox
+    step "Running emmylua_check (EmmyLua analyzer)..."
     cd "$BAR_DIR"
-    "{{LUALS_BIN}}" --check=. --checklevel=Warning --logpath=/tmp/luals-check {{args}}
+    emmylua_check -c .emmyrc.json . {{args}}
     ok "Type check complete"
+
+# Type-check but only surface errors — warnings/hints dropped. Exits 0 iff no errors
+# (emmylua_check itself exits non-zero on any diagnostic, so we re-derive exit code from the error count).
+check-errors: require-bar
+    #!/usr/bin/env bash
+    set -uo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    enter_distrobox
+    step "Running emmylua_check (errors only)..."
+    cd "$BAR_DIR"
+    json="$(emmylua_check -c .emmyrc.json -f json . 2>/dev/null || true)"
+    printf '%s\n' "$json" | jq -r '.[] | . as $f | .diagnostics[] | select(.severity == 1) |
+        "\($f.file):\(.range.start.line + 1):\(.range.start.character + 1): \(.code): \(.message)"'
+    count="$(printf '%s\n' "$json" | jq '[.[] | .diagnostics[] | select(.severity == 1)] | length')"
+    if [[ "$count" -gt 0 ]]; then
+        err "$count error(s)"
+        exit 1
+    fi
+    ok "No errors"
 
 # Lint BAR Lua code (luacheck via lux)
 lint *args: require-bar
@@ -86,15 +90,123 @@ test-shell: require-bar
 # Run headless integration tests (x86-64 only)
 integrations *args: require-bar
     #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
     if [[ "$(uname -m)" == arm64 ]]; then
         echo "Error: integration tests require an x86-64 host." >&2
         echo "The Spring engine used by headless tests has no arm64 build." >&2
         exit 1
     fi
-    {{INTEGRATION_COMPOSE}} up --build --abort-on-container-exit {{args}}
+
+    # If the local Recoil build exists under the devtools workspace
+    # (cloned via `just repos::clone extra` + built via `just engine::build
+    # linux`), stack an override so the container uses it instead of the
+    # stock engine download.
+    compose="{{INTEGRATION_COMPOSE}}"
+    local_engine="$DEVTOOLS_DIR/RecoilEngine/build-amd64-linux/install"
+    if [ -x "$local_engine/spring-headless" ]; then
+        info "Using local engine: $local_engine"
+        export BAR_LOCAL_ENGINE="$local_engine"
+        export BAR_DEVTOOLS_DIR="$DEVTOOLS_DIR"
+        compose="$compose -f $DEVTOOLS_DIR/docker-compose.integrations.local.yml"
+    else
+        info "Using stock engine (build RecoilEngine with 'just engine::build linux' to use your local build)"
+    fi
+    $compose up --build --abort-on-container-exit {{args}}
 
 # Run all BAR tests (unit + integrations)
 test: units integrations
+
+# Build bar-lua-codemod binary
+codemod-build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    step "Building bar-lua-codemod..."
+    bash "$DEVTOOLS_DIR/scripts/codemod-cargo.sh" build --release
+    ok "Built: {{CODEMOD_BIN}}"
+
+# Run bar-lua-codemod unit tests
+codemod-test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    step "Testing bar-lua-codemod..."
+    bash "$DEVTOOLS_DIR/scripts/codemod-cargo.sh" test
+    ok "All tests passed"
+
+[private]
+require-codemod:
+    #!/usr/bin/env bash
+    [ -x "{{CODEMOD_BIN}}" ] && exit 0
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    step "bar-lua-codemod not found, building..."
+    bash "$DEVTOOLS_DIR/scripts/codemod-cargo.sh" build --release
+    ok "Built bar-lua-codemod"
+
+# Run codemod transforms + stylua (contributors run after rebasing)
+fmt-mig: require-bar require-codemod
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    enter_distrobox
+    step "bracket-to-dot transform..."
+    "{{CODEMOD_BIN}}" bracket-to-dot --path "$BAR_DIR" --exclude common/luaUtilities
+    step "rename-aliases transform..."
+    "{{CODEMOD_BIN}}" rename-aliases --path "$BAR_DIR" --exclude common/luaUtilities
+    step "detach-bar-modules transform..."
+    "{{CODEMOD_BIN}}" detach-bar-modules --path "$BAR_DIR" --exclude common/luaUtilities
+    step "spring-split transform..."
+    "{{CODEMOD_BIN}}" spring-split --path "$BAR_DIR" --library "$BAR_DIR/recoil-lua-library/src" --exclude common/luaUtilities
+    step "stylua..."
+    (cd "$BAR_DIR" && lx --lua-version 5.1 exec stylua .)
+    ok "fmt-mig complete"
+
+[private]
+require-library:
+    just lua::library
+
+# $CREDENTIALS_RUNNER is an opaque command prefix that loads secrets into
+# the environment of whatever it wraps. When set, fmt-mig-generate runs
+# generate-branches.sh through it so subprocesses (notably the parallel
+# `claude --print` workers spawned by scripts/codemod/llm-type-triage.sh) inherit
+# the loaded credentials. Without this, the workers would run with the
+# credential-less env that just/bash inherits and fail at auth.
+#
+# Write the prefix however your secrets store wants. Tilde expansion is
+# applied. Examples:
+#
+#   # 1Password CLI
+#   CREDENTIALS_RUNNER="op run --env-file=~/code/ai.env.op --"
+#
+#   # Bitwarden CLI
+#   CREDENTIALS_RUNNER="bw run --envfile ~/secrets/ai.env --"
+#
+#   # direnv loader (treats first arg as a directory whose .envrc to apply)
+#   CREDENTIALS_RUNNER="direnv exec ~/code/secrets"
+#
+#   # raw env injection from a sourceable .env-style file
+#   CREDENTIALS_RUNNER="env $(grep -v '^#' ~/.config/anthropic/key.env | xargs)"
+#
+# When unset, the script runs unwrapped — fine for non-AI invocations
+# (e.g. `--push` only) where no subprocess actually needs credentials.
+
+# Regenerate fmt, mig-*, and mig branches from origin/master (uses $CREDENTIALS_RUNNER for AI auth)
+fmt-mig-generate *args: require-bar require-codemod require-library
+    #!/usr/bin/env bash
+    set -euo pipefail
+    script="$DEVTOOLS_DIR/scripts/codemod/generate-branches.sh"
+    if [[ -n "${CREDENTIALS_RUNNER:-}" ]]; then
+        # Expand ~ in the prefix (most secrets-wrapper tools don't expand
+        # it themselves when invoked through a non-interactive shell).
+        expanded="${CREDENTIALS_RUNNER//\~/$HOME}"
+        echo "[info] wrapping fmt-mig-generate with: $expanded" >&2
+        # eval re-parses the prefix so multi-token wrappers like
+        # `op run --env-file=path --` keep their structure when prepended.
+        eval "exec $expanded bash \"\$script\" {{args}}"
+    fi
+    exec bash "$script" {{args}}
 
 # Install git pre-commit hook in the BAR repo
 setup-hooks:
