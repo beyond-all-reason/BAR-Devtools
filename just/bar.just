@@ -40,7 +40,47 @@ require-luals:
 # plus --play/--source/--boot to run without the Tk window. All flags forward
 # verbatim to `bar-launch`; see `just bar::launch --help` for the full set.
 launch *FLAGS:
-    @"$DEVTOOLS_DIR/scripts/launch.sh" {{FLAGS}}
+    @bash "$DEVTOOLS_DIR/scripts/launch.sh" {{FLAGS}}
+
+# Stop the Phase 3 sync watcher (Windows-side python.exe). `just bar::launch`
+# starts the watcher and leaves it running so subsequent launches are instant
+# and game shutdown isn't blocked on watcher teardown -- run this when you
+# want to actually free the watcher (e.g. before rebooting WSL2). WSL2-only.
+stop:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    if ! grep -qi microsoft /proc/version 2>/dev/null; then
+      err "stop is WSL2-only (Linux uses symlinks; no sync daemon to stop)."
+      exit 1
+    fi
+    bash "$DEVTOOLS_DIR/scripts/sync.sh" stop
+
+# Regenerate the Windows-side launcher shim ($BAR_DEVSYNC_DIR/bin/bar-launch.cmd)
+# from the current BAR_DEVSYNC_DIR / venv-python paths. Use this after editing
+# .env values that the shim has baked in as literals. WSL2-only.
+regen-shim:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    source "$DEVTOOLS_DIR/scripts/setup.sh"
+    if ! is_wsl; then
+      err "regen-shim is WSL2-only -- on Linux, 'just bar::launch' runs bar-launch directly."
+      exit 1
+    fi
+    regenerate_bar_launch_cmd_shim
+
+# Tail the Phase 3 sync watcher's log. Pass tail flags after `--`,
+# e.g. `just bar::sync-logs -- -f -n 200`. WSL2-only.
+sync-logs *TAIL_FLAGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    if ! grep -qi microsoft /proc/version 2>/dev/null; then
+      err "sync-logs is WSL2-only (Linux uses symlinks; no sync daemon to log)."
+      exit 1
+    fi
+    exec bash "$DEVTOOLS_DIR/scripts/sync.sh" logs {{TAIL_FLAGS}}
 
 # Tail the engine's infolog from the most recent BAR run. The engine writes
 # this itself -- we don't capture launch.sh output, since `bar-launch` exits

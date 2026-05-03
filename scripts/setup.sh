@@ -218,10 +218,12 @@ ensure_windows_python() {
 
   if _is_real_windows_python "$py_path"; then
     ok "Windows Python already installed: $py_path"
+    ensure_bar_launch_python_persisted
     return 0
   fi
   if _is_real_windows_python "$python_path"; then
     ok "Windows Python already installed: $python_path"
+    ensure_bar_launch_python_persisted
     return 0
   fi
 
@@ -255,6 +257,7 @@ ensure_windows_python() {
   python_path="$(command -v python.exe 2>/dev/null || true)"
   if _is_real_windows_python "$py_path" || _is_real_windows_python "$python_path"; then
     ok "Windows Python installed."
+    ensure_bar_launch_python_persisted
   else
     warn "winget finished but a real py.exe / python.exe still isn't on PATH."
     warn "Open a new WSL shell (Windows PATH is re-imported at WSL shell start)."
@@ -700,6 +703,316 @@ ensure_bar_appimage_path_set() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# WSL2 sync target (Phase 3): BAR_DEVSYNC_DIR -- Windows-side data dir that
+# the engine reads from, with three Devtools subpaths kept in sync from WSL.
+# See bar-design-docs/bar_launch/plan.md (Phase 3).
+# ---------------------------------------------------------------------------
+
+# Read BAR_DEVSYNC_DIR from .env (preferred) or the current env. Echoes the
+# WSL path form (/mnt/c/...) -- the canonical form we persist. Empty if unset.
+bar_devsync_dir_get() {
+  local env_file="$DEVTOOLS_DIR/.env"
+  if [ -f "$env_file" ]; then
+    local val
+    val="$(grep -E '^BAR_DEVSYNC_DIR=' "$env_file" 2>/dev/null | tail -n1 | cut -d= -f2-)"
+    if [ -n "$val" ]; then
+      # Strip optional surrounding quotes.
+      val="${val%\"}"; val="${val#\"}"
+      echo "$val"
+      return 0
+    fi
+  fi
+  echo "${BAR_DEVSYNC_DIR:-}"
+}
+
+# Convert a WSL /mnt/c/... path to a Windows C:\... path. Falls back to the
+# input if wslpath isn't available (non-WSL hosts shouldn't call this).
+_to_windows_path() {
+  local p="$1"
+  if command -v wslpath &>/dev/null; then
+    wslpath -w "$p" 2>/dev/null || echo "$p"
+  else
+    echo "$p"
+  fi
+}
+
+# Convert a Windows C:\... path to a WSL /mnt/c/... path. Same fallback.
+_to_wsl_path() {
+  local p="$1"
+  if command -v wslpath &>/dev/null; then
+    wslpath -u "$p" 2>/dev/null || echo "$p"
+  else
+    echo "$p"
+  fi
+}
+
+# Echo the WSL form of the BAR launcher's own data dir, or empty if we
+# can't reach Windows. We default BAR_DEVSYNC_DIR to the launcher's data
+# directory (where Beyond-All-Reason.exe puts cache/, demos/, infolog.txt,
+# etc.) so the engine reads our synced bar/chobby/engine from a single
+# canonical location -- no junctions, no second data dir. The launcher's
+# install path follows BAR's installer's `%LOCALAPPDATA%\Programs\
+# Beyond-All-Reason\` convention; if a contributor installed somewhere
+# else they can override via the prompt.
+_default_devsync_dir() {
+  is_wsl || return 0
+  command -v cmd.exe &>/dev/null || return 0
+  command -v wslpath &>/dev/null || return 0
+  local localappdata
+  localappdata="$(cmd.exe /c 'echo %LOCALAPPDATA%' 2>/dev/null | tr -d '\r\n')"
+  [ -z "$localappdata" ] && return 0
+  case "$localappdata" in
+    *%LOCALAPPDATA%*) return 0 ;;
+  esac
+  local wsl_path
+  wsl_path="$(wslpath -u "$localappdata" 2>/dev/null)" || return 0
+  # The launcher's data dir (where its cache/, demos/, infolog.txt live).
+  # Spring's archive scanner registers our games/ entries here cleanly --
+  # earlier attempts that put sync in a separate dir + junctioned into
+  # this one failed because spring's scanner doesn't traverse reparse
+  # points into game subdirs.
+  local launcher_data="$wsl_path/Programs/Beyond-All-Reason/data"
+  if [ -d "$launcher_data" ]; then
+    echo "$launcher_data"
+  else
+    # Fallback: a fresh dir under LOCALAPPDATA. The contributor will need
+    # to either install BAR or junction <launcher>/data themselves.
+    echo "$wsl_path/BAR-DevSync"
+  fi
+}
+
+# WSL2-only: prompt for BAR_DEVSYNC_DIR, persist to .env, create the three
+# subpaths the sync daemon mirrors into plus bin/ for the cmd shim. Idempotent;
+# safe to re-run after an upgrade.
+#
+# We persist the WSL path form so the rest of the bash plumbing reads it
+# directly without wslpath conversion. The Windows-side shim is generated
+# with the literal Windows path baked in (see regenerate_bar_launch_cmd_shim).
+ensure_bar_devsync_dir() {
+  is_wsl || return 0
+
+  local env_file="$DEVTOOLS_DIR/.env"
+  touch "$env_file"
+
+  local current
+  current="$(bar_devsync_dir_get)"
+  if [ -n "$current" ]; then
+    info "BAR_DEVSYNC_DIR already set: $current"
+  else
+    echo ""
+    info "WSL2 detected. Linux↔Windows symlinks aren't fast enough for runtime"
+    info "game-Lua reads, so BAR-Devtools mirrors your Devtools checkouts to a"
+    info "Windows-side data directory the engine reads from. The recommended"
+    info "target is the BAR launcher's own data dir -- spring then sees our"
+    info "synced bar/chobby/engine alongside its own cache/demos/settings"
+    info "without any junctions in the path."
+    echo ""
+    echo "  Recommended:  %LOCALAPPDATA%\\Programs\\Beyond-All-Reason\\data\\"
+    echo "                (the data dir Beyond-All-Reason.exe already writes to)"
+    echo "  Avoid:        %USERPROFILE%\\Documents\\... (OneDrive redirection)"
+    echo "                %TEMP%\\...                  (cleared on reboot)"
+    echo "                \\\\wsl\$\\<distro>\\...        (defeats the whole point)"
+    echo ""
+    local default_path
+    default_path="$(_default_devsync_dir)"
+
+    local response
+    if [ -t 0 ]; then
+      if [ -n "$default_path" ]; then
+        read -rp "BAR sync dir [$(_to_windows_path "$default_path")]: " response
+      else
+        read -rp "BAR sync dir (WSL path or Windows path): " response
+      fi
+    else
+      response=""
+    fi
+
+    if [ -z "$response" ]; then
+      if [ -z "$default_path" ]; then
+        err "No BAR_DEVSYNC_DIR provided and couldn't compute a default (cmd.exe / wslpath unavailable)."
+        info "Edit BAR-Devtools/.env directly:  BAR_DEVSYNC_DIR=/mnt/c/Users/<you>/AppData/Local/BAR-DevSync"
+        return 1
+      fi
+      current="$default_path"
+    else
+      # Accept either form. wslpath -u on a /mnt/... path is a no-op; on a
+      # Windows path it converts. Tolerate both via wslpath probing.
+      case "$response" in
+        /mnt/*|/home/*|/root/*) current="${response/#\~/$HOME}" ;;
+        *)
+          local converted
+          converted="$(_to_wsl_path "$response")"
+          if [ -z "$converted" ] || [ "$converted" = "$response" ]; then
+            warn "Couldn't convert '$response' via wslpath -- saving as-is."
+            current="$response"
+          else
+            current="$converted"
+          fi
+          ;;
+      esac
+    fi
+
+    echo "BAR_DEVSYNC_DIR=$current" >> "$env_file"
+    ok "Added BAR_DEVSYNC_DIR=$current to .env"
+  fi
+
+  # Create the directory tree. The sync daemon writes into the three rsync
+  # targets; the engine creates everything else (cache/, demos/, infolog.txt,
+  # settings) on first run. bin/ holds the cmd shim.
+  local sub
+  for sub in engine/local-build games/Beyond-All-Reason.sdd games/BYAR-Chobby.sdd bin; do
+    mkdir -p "$current/$sub" 2>/dev/null || {
+      err "Couldn't mkdir $current/$sub -- check that the path is reachable from WSL."
+      return 1
+    }
+  done
+  ok "BAR data dir ready: $current"
+
+  export BAR_DEVSYNC_DIR="$current"
+}
+
+# Persist BAR_LAUNCH_PYTHON=<py.exe path> to .env. Called after
+# ensure_windows_python finds a real interpreter so the shim and venv
+# bootstrap have a stable handle to it. WSL-only.
+ensure_bar_launch_python_persisted() {
+  is_wsl || return 0
+  local env_file="$DEVTOOLS_DIR/.env"
+  touch "$env_file"
+
+  if grep -q "^BAR_LAUNCH_PYTHON=" "$env_file" 2>/dev/null; then
+    return 0
+  fi
+
+  local py_path
+  py_path="$(command -v py.exe 2>/dev/null || true)"
+  if ! _is_real_windows_python "$py_path"; then
+    py_path="$(command -v python.exe 2>/dev/null || true)"
+  fi
+  if ! _is_real_windows_python "$py_path"; then
+    return 0
+  fi
+
+  # Resolve through wslpath -w so the persisted value is the Windows path
+  # (the shim references it via cmd.exe; the venv bootstrap calls it from
+  # WSL but `command -v` re-finds it either way).
+  local win_py
+  win_py="$(_to_windows_path "$py_path")"
+  # Single-quote: backslashes in the Windows path (e.g. C:\Users\...) would
+  # otherwise be interpreted as escape sequences by just's dotenv parser.
+  echo "BAR_LAUNCH_PYTHON='$win_py'" >> "$env_file"
+  ok "Added BAR_LAUNCH_PYTHON=$win_py to .env"
+}
+
+# Bootstrap a Windows venv at <BAR_DEVSYNC_DIR>/.venv and install
+# bar_debug_launcher (editable) plus watchdog (sync daemon dep) into it.
+# Idempotent: skips if the venv's bar-launch entry point already exists and
+# the marker is newer than the launcher's pyproject.toml.
+#
+# Why a Windows venv specifically: the Recoil engine must run as a native
+# Windows process, and the bar-launch CLI invokes it via subprocess. Running
+# bar-launch from WSL → cmd.exe spring.exe works, but we'd then have two
+# Pythons in the picture (WSL + Windows) for no benefit. Single Windows venv
+# keeps the launch path uniform.
+ensure_bar_launch_venv_windows() {
+  is_wsl || return 0
+
+  local devsync_wsl="${BAR_DEVSYNC_DIR:-$(bar_devsync_dir_get)}"
+  if [ -z "$devsync_wsl" ]; then
+    warn "BAR_DEVSYNC_DIR not set -- skipping Windows venv bootstrap."
+    return 0
+  fi
+
+  local py_path
+  py_path="$(command -v py.exe 2>/dev/null || true)"
+  if ! _is_real_windows_python "$py_path"; then
+    py_path="$(command -v python.exe 2>/dev/null || true)"
+  fi
+  if ! _is_real_windows_python "$py_path"; then
+    warn "No real Windows Python found -- skipping venv bootstrap."
+    info "Run 'just setup::init' again after installing Python on Windows."
+    return 0
+  fi
+
+  local venv_wsl="$devsync_wsl/.venv"
+  local venv_python_wsl="$venv_wsl/Scripts/python.exe"
+
+  if [ ! -x "$venv_python_wsl" ] && [ ! -f "$venv_python_wsl" ]; then
+    step "Creating Windows venv at $venv_wsl"
+    "$py_path" -3 -m venv "$(_to_windows_path "$venv_wsl")" \
+      || { err "Failed to create venv at $venv_wsl"; return 1; }
+  fi
+
+  if [ ! -f "$venv_python_wsl" ]; then
+    err "venv created but $venv_python_wsl is missing -- aborting."
+    return 1
+  fi
+
+  local repo_path
+  repo_path="$(bar_launch_repo_path)"
+  if [ ! -f "$repo_path/pyproject.toml" ]; then
+    err "bar_debug_launcher checkout missing at $repo_path -- skipping venv install."
+    return 1
+  fi
+
+  step "Installing bar_debug_launcher + watchdog into Windows venv"
+  # pip install on the Windows side. UNC path to the WSL repo works for an
+  # editable install -- pip writes a .pth file, and import-time resolution
+  # crosses Plan9 once on launcher startup. A minor cost for a tool that
+  # runs once per dev session.
+  local repo_unc
+  repo_unc="$(_to_windows_path "$repo_path")"
+  "$venv_python_wsl" -m pip install --upgrade pip --quiet \
+    || warn "pip self-upgrade failed; continuing"
+  "$venv_python_wsl" -m pip install --quiet --editable "$repo_unc" watchdog \
+    || { err "pip install bar_debug_launcher + watchdog failed"; return 1; }
+
+  ok "Windows venv ready: $venv_wsl"
+  export BAR_LAUNCH_VENV="$venv_wsl"
+}
+
+# Generate <BAR_DEVSYNC_DIR>/bin/bar-launch.cmd with absolute Windows paths
+# baked in. The shim is a dumb forwarder -- the Python in the venv does all
+# the real work. Regenerated by `just bar::regen-shim` if .env values change.
+#
+# Requirements: BAR_DEVSYNC_DIR set, the venv's python.exe present.
+regenerate_bar_launch_cmd_shim() {
+  is_wsl || return 0
+
+  local devsync_wsl="${BAR_DEVSYNC_DIR:-$(bar_devsync_dir_get)}"
+  if [ -z "$devsync_wsl" ]; then
+    err "BAR_DEVSYNC_DIR not set -- run 'just setup::init' on WSL first."
+    return 1
+  fi
+
+  local venv_python_wsl="$devsync_wsl/.venv/Scripts/python.exe"
+  if [ ! -f "$venv_python_wsl" ]; then
+    err "Windows venv python not found at $venv_python_wsl"
+    info "Run 'just setup::init' to create it."
+    return 1
+  fi
+
+  local shim_wsl="$devsync_wsl/bin/bar-launch.cmd"
+  mkdir -p "$(dirname "$shim_wsl")"
+
+  local venv_python_win devsync_win
+  venv_python_win="$(_to_windows_path "$venv_python_wsl")"
+  devsync_win="$(_to_windows_path "$devsync_wsl")"
+
+  # CRLF line endings: it's a .cmd file consumed by cmd.exe. Mostly cosmetic
+  # but stays consistent with how Windows shells render it in an editor.
+  cat > "$shim_wsl" <<EOF
+@echo off
+REM Generated by BAR-Devtools setup. Edit via: just bar::regen-shim
+"$venv_python_win" -m bar_launch --data-dir "$devsync_win" %*
+EOF
+  # Convert LF -> CRLF in place. unix2dos is the conventional tool but isn't
+  # always installed; sed handles it portably.
+  sed -i 's/$/\r/' "$shim_wsl"
+
+  ok "Generated $shim_wsl"
+}
+
 DEV_IMAGE="bar-dev"
 DEV_BOX="bar-dev"
 
@@ -963,6 +1276,9 @@ cmd_init() {
     cmd_install_deps || { err "Dependency installation failed. Fix and retry."; exit 1; }
   fi
   ensure_windows_python
+  if is_wsl; then
+    ensure_bar_devsync_dir || warn "Skipping BAR sync dir setup (set BAR_DEVSYNC_DIR in .env to retry)."
+  fi
   echo ""
 
   step "2/6  Dev environment (distrobox)"
@@ -1071,7 +1387,14 @@ cmd_init() {
 
   step "7/7  bar-launch venv (just bar::launch)"
   echo ""
-  cmd_setup_bar_launch
+  if is_wsl; then
+    # On WSL2 the launcher runs as a Windows-side Python process so it
+    # talks to the Windows engine binary directly. The Linux pipx venv
+    # would force WSL→Windows IPC for every engine spawn.
+    ensure_bar_launch_venv_windows && regenerate_bar_launch_cmd_shim
+  else
+    cmd_setup_bar_launch
+  fi
   echo ""
 
   echo -e "${BOLD}=== Setup Complete ===${NC}"
@@ -1171,6 +1494,20 @@ detect_game_dir() {
     echo "$BAR_GAME_DIR"
     return 0
   fi
+
+  # On WSL2 the dev-mode data dir is the sync target: that's where the
+  # engine reads cache/, demos/, the synced games/, and the local engine
+  # build from. Prefer it over the upstream Windows installer's data dir,
+  # which has no Devtools content in it.
+  if is_wsl; then
+    local devsync
+    devsync="$(bar_devsync_dir_get)"
+    if [ -n "$devsync" ] && [ -d "$devsync" ]; then
+      echo "$devsync"
+      return 0
+    fi
+  fi
+
   local xdg_state="${XDG_STATE_HOME:-$HOME/.local/state}"
   local candidate="$xdg_state/Beyond All Reason"
   if [ -d "$candidate" ]; then
@@ -1207,10 +1544,13 @@ cmd_link() {
     info "Game directory: ${game_dir}"
     echo ""
 
+    # game subdirs end in .sdd so spring's archive scanner registers them
+    # (without the suffix, scan() walks the dir but never registers it as
+    # a known archive, and --menu lookups fail content_error).
     local -A link_map=(
       [engine]="$game_dir/engine/local-build"
-      [chobby]="$game_dir/games/BYAR-Chobby"
-      [bar]="$game_dir/games/Beyond-All-Reason"
+      [chobby]="$game_dir/games/BYAR-Chobby.sdd"
+      [bar]="$game_dir/games/Beyond-All-Reason.sdd"
     )
     for name in engine chobby bar; do
       local link_path="${link_map[$name]}"
@@ -1248,11 +1588,11 @@ cmd_link() {
       ;;
     chobby)
       source_path="$DEVTOOLS_DIR/BYAR-Chobby"
-      link_path="$game_dir/games/BYAR-Chobby"
+      link_path="$game_dir/games/BYAR-Chobby.sdd"
       ;;
     bar)
       source_path="$DEVTOOLS_DIR/Beyond-All-Reason"
-      link_path="$game_dir/games/Beyond-All-Reason"
+      link_path="$game_dir/games/Beyond-All-Reason.sdd"
       ;;
     *)
       err "Unknown link target: $target"
@@ -1273,6 +1613,30 @@ cmd_link() {
       echo "  Clone the repo first: just repos::clone $target"
     fi
     exit 1
+  fi
+
+  # WSL2: link::create is a no-op for the symlink itself. The sync daemon
+  # (scripts/sync.sh + scripts/sync.py) is the analogue of the symlink: it
+  # mirrors source_path on WSL ext4 to link_path on Windows NTFS. We just
+  # need the target subdir present (so the engine doesn't choke on an empty
+  # games/ dir) and an initial cold-copy so dev edits land somewhere usable
+  # before the watcher comes online on the next `just bar::launch`.
+  if is_wsl; then
+    if [ ! -d "$source_path" ]; then
+      err "Source not present at $source_path -- can't seed sync target."
+      return 1
+    fi
+    mkdir -p "$link_path"
+    info "WSL2: $target tracks $source_path -> $link_path (via sync daemon)"
+    if command -v rsync &>/dev/null; then
+      info "Seeding $link_path with an initial cold copy"
+      rsync -a --delete --inplace "$source_path/" "$link_path/" \
+        || warn "rsync seed failed; the watcher will fill the dir on first launch."
+    else
+      warn "rsync not installed; skipping cold-copy seed (the watcher will fill this dir)."
+    fi
+    ok "Tracked $target: $link_path (mirrors $source_path)"
+    return 0
   fi
 
   if [ -L "$link_path" ]; then
