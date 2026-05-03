@@ -36,6 +36,10 @@ require-luals:
         | tar xz -C "{{LUALS_DIR}}"
     ok "Downloaded lua-language-server v{{LUALS_VERSION}}"
 
+# Launch BAR for development (GUI by default; --no-gui for headless flags)
+launch *FLAGS:
+    @"$DEVTOOLS_DIR/scripts/launch.sh" {{FLAGS}}
+
 # Type-check BAR Lua code (LuaLS diagnostics)
 check *args: require-bar require-luals
     #!/usr/bin/env bash

@@ -12,6 +12,7 @@ RecoilEngine
 lua-doc-extractor
 SPADS
 SpringLobbyInterface
+bar_debug_launcher
 
 # Personal config overrides
 repos.local.conf

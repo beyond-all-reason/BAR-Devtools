@@ -193,6 +193,30 @@ just engine::build linux        # build Recoil via docker-build-v2
 just link::create engine        # symlink into game directory
 ```
 
+### Launching the game (dev mode)
+
+`just bar::launch` hands off to [bar_debug_launcher](https://github.com/beyond-all-reason/bar_debug_launcher) with your local `Beyond-All-Reason/`, `BYAR-Chobby/`, and `RecoilEngine/` checkouts wired in via `just link::create`. The Tk GUI opens by default; pass flags for headless use:
+
+```bash
+just bar::launch                                      # GUI
+just bar::launch --no-gui --play chobby --source local
+just bar::launch --no-gui --play bar --source local --map "Quicksilver"
+just bar::launch --print-cmd --play bar --source latest
+```
+
+`--source local` requires the relevant `link::create` to have run; `--source latest` resolves to `rapid://...:test` and downloads on demand.
+
+The launcher boots the engine directly by default. To go through the AppImage launcher (handles splash + auto-update, mirrors how real users start the game), pass `--boot launcher` and point us at the AppImage:
+
+```bash
+export BAR_APPIMAGE_PATH=~/Applications/Beyond-All-Reason.AppImage
+just bar::launch --no-gui --play chobby --source latest --boot launcher
+```
+
+`~/Applications/` is [AppImageLauncher](https://github.com/TheAssassin/AppImageLauncher)'s canonical install path. Any AppImage matching `beyond-all-reason*.AppImage` (case-insensitive) is auto-discovered if `BAR_APPIMAGE_PATH` points at a directory.
+
+`just setup::init` runs `pipx install --editable` against the bar_debug_launcher checkout, so its `pyproject.toml` is the single source of truth for deps and edits to the launcher source reflect live. If you skipped that step, `just bar::launch` will tell you to run setup. The GUI imports `tkinter` -- on a pyenv install built without tk-devel, install your distro's tk package (`python3-tkinter` on Fedora, `python3-tk` on Debian, `tk` on Arch) and rebuild Python.
+
 ### Documentation
 
 ```bash

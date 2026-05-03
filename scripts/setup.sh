@@ -453,6 +453,163 @@ cmd_install_deps() {
   ok "Dependencies installed successfully."
 }
 
+# Resolve the bar_debug_launcher checkout. repos.local.conf may point it at an
+# external path; fall back to the in-tree default.
+bar_launch_repo_path() {
+  load_repos_conf
+  local i
+  for i in "${!REPO_DIRS[@]}"; do
+    if [ "${REPO_DIRS[$i]}" = "bar_debug_launcher" ]; then
+      local local_path="${REPO_LOCAL_PATHS[$i]}"
+      if [ -n "$local_path" ] && [ -d "$local_path" ]; then
+        echo "$local_path"
+        return 0
+      fi
+      break
+    fi
+  done
+  echo "$DEVTOOLS_DIR/bar_debug_launcher"
+}
+
+# True on rpm-ostree / Fedora Atomic / Bazzite / Silverblue. dnf installs
+# fail on these; the package layer is read-only at runtime.
+_is_ostree() {
+  command -v rpm-ostree &>/dev/null && [ -e /run/ostree-booted ]
+}
+
+# Install pipx if missing. pipx is the upstream-recommended way to install
+# Python CLI tools in their own isolated venvs; we use it instead of hand-
+# rolling a venv so bar_debug_launcher's pyproject.toml stays the single
+# source of truth for its deps. On atomic distros (rpm-ostree) we can't
+# layer packages without a reboot, so bootstrap pipx via `pip install --user`
+# instead.
+_ensure_pipx() {
+  if command -v pipx &>/dev/null; then return 0; fi
+
+  if _is_ostree; then
+    info "rpm-ostree system detected -- bootstrapping pipx via 'pip install --user'"
+    if ! command -v python3 &>/dev/null; then
+      err "python3 not found on PATH"
+      return 1
+    fi
+    # PEP 668 / EXTERNALLY-MANAGED is set on most modern distros' system
+    # Pythons, so we pass --break-system-packages. This only affects the
+    # user site-packages (~/.local), never the OS-managed Python.
+    python3 -m pip install --user --break-system-packages --quiet pipx \
+      || { err "pip install --user pipx failed"; return 1; }
+    python3 -m pipx ensurepath >/dev/null 2>&1 || true
+    # Make pipx visible in this shell without requiring a re-login.
+    export PATH="$HOME/.local/bin:$PATH"
+    hash -r
+    command -v pipx &>/dev/null && return 0
+    err "pipx installed to ~/.local/bin but still not on PATH"
+    info "Open a new shell, or add ~/.local/bin to PATH"
+    return 1
+  fi
+
+  local distro install_cmd
+  distro="$(detect_distro)"
+  case "$distro" in
+    arch)   install_cmd="sudo pacman -S --needed python-pipx" ;;
+    debian) install_cmd="sudo apt install -y pipx" ;;
+    fedora) install_cmd="sudo dnf install -y pipx" ;;
+    *)      install_cmd="" ;;
+  esac
+
+  if [ -z "$install_cmd" ]; then
+    err "pipx is not installed and your distro is unknown. Install pipx manually:"
+    info "  https://pipx.pypa.io/stable/installation/"
+    return 1
+  fi
+
+  info "pipx not found. Installing: $install_cmd"
+  $install_cmd || { err "pipx install failed"; return 1; }
+  pipx ensurepath >/dev/null 2>&1 || true
+  hash -r
+  command -v pipx &>/dev/null
+}
+
+# Find a Python ≥ 3.10 that can actually `import tkinter`. The launcher's GUI
+# imports tkinter at module top, and pyenv installs without tk-devel headers
+# silently ship a tkinter package whose _tkinter C extension is missing --
+# pipx happily creates a venv against such a Python and the import explodes
+# at first launch. We probe candidates explicitly (including absolute paths
+# under /usr/bin) so a pyenv shim can't shadow the distro's tkinter-capable
+# Python.
+_pick_tkinter_python() {
+  local cand
+  for cand in \
+      /usr/bin/python3.13 /usr/bin/python3.12 /usr/bin/python3.11 /usr/bin/python3.10 /usr/bin/python3 \
+      python3.13 python3.12 python3.11 python3.10 python3; do
+    local resolved
+    resolved="$(command -v "$cand" 2>/dev/null)" || continue
+    "$resolved" - <<'PY' 2>/dev/null && { echo "$resolved"; return 0; }
+import sys
+if sys.version_info < (3, 10):
+    sys.exit(1)
+import tkinter  # noqa: F401  -- imports _tkinter as a side effect
+PY
+  done
+  return 1
+}
+
+# Editable-install the launcher with pipx, which reads bar_debug_launcher's
+# pyproject.toml for deps and exposes the `bar-launch` entry point on PATH.
+# Idempotent: --force re-syncs if a previous install exists.
+ensure_bar_launch_installed() {
+  local repo_path="$1"
+  if [ ! -f "$repo_path/pyproject.toml" ]; then
+    err "bar_debug_launcher pyproject.toml missing at $repo_path"
+    return 1
+  fi
+
+  _ensure_pipx || return 1
+
+  local target_py
+  target_py="$(_pick_tkinter_python || true)"
+  if [ -z "$target_py" ]; then
+    err "No Python ≥ 3.10 with a working tkinter found."
+    info "The launcher's GUI imports tkinter; pipx will not auto-fix this."
+    info "Fedora:  sudo dnf install python3-tkinter   (or rpm-ostree install)"
+    info "Debian:  sudo apt install python3-tk"
+    info "Arch:    sudo pacman -S tk"
+    info "pyenv:   install tk-devel (Fedora) / tk-dev (Debian) and rebuild Python"
+    return 1
+  fi
+
+  step "Installing bar_debug_launcher via pipx (editable, --python $target_py)"
+  # `pipx install --force --python ...` silently ignores --python when an
+  # existing venv is reused, so uninstall first to guarantee the new Python
+  # actually sticks. Editable installs are cheap to rebuild.
+  pipx uninstall bar-launch >/dev/null 2>&1 || true
+  pipx uninstall bar_launch >/dev/null 2>&1 || true
+  pipx install --editable --python "$target_py" "$repo_path"
+
+  # Marker timestamps the install so launch.sh can detect manifest changes
+  # (new pip deps in pyproject.toml) and trigger a reinstall on next launch.
+  # Editable .py edits don't need this -- pipx symlinks the source, so they
+  # take effect immediately.
+  mkdir -p "${XDG_STATE_HOME:-$HOME/.local/state}/bar-devtools"
+  touch "${XDG_STATE_HOME:-$HOME/.local/state}/bar-devtools/bar-launch-installed"
+
+  ok "bar-launch installed (entry point: $(command -v bar-launch || echo "~/.local/bin/bar-launch"))"
+
+  if ! command -v bar-launch &>/dev/null; then
+    warn "bar-launch isn't on PATH yet. Open a new shell, or run: pipx ensurepath"
+  fi
+}
+
+cmd_setup_bar_launch() {
+  local repo_path
+  repo_path="$(bar_launch_repo_path)"
+  if [ ! -d "$repo_path/bar_launch" ]; then
+    info "bar_debug_launcher not checked out at $repo_path -- skipping bar-launch install."
+    info "Add it via: just repos::clone extra (or set local_path in repos.local.conf)."
+    return 0
+  fi
+  ensure_bar_launch_installed "$repo_path"
+}
+
 DEV_IMAGE="bar-dev"
 DEV_BOX="bar-dev"
 
@@ -785,7 +942,7 @@ cmd_init() {
   fi
   echo ""
 
-  step "6/6  Symlinks to game directory"
+  step "6/7  Symlinks to game directory"
   echo ""
   local game_dir
   game_dir="$(detect_game_dir 2>/dev/null)" || true
@@ -822,6 +979,11 @@ cmd_init() {
   fi
   echo ""
 
+  step "7/7  bar-launch venv (just bar::launch)"
+  echo ""
+  cmd_setup_bar_launch
+  echo ""
+
   echo -e "${BOLD}=== Setup Complete ===${NC}"
   echo ""
   echo "  Selected features: ${features}"
@@ -836,6 +998,7 @@ cmd_init() {
   fi
   if features_include "$features" bar; then
     echo -e "  ${CYAN}BAR (game content)${NC}"
+    echo -e "    ${BOLD}just bar::launch${NC}              Launch the engine against your local checkout"
     echo -e "    ${BOLD}just services::up lobby${NC}       Launch bar-lobby and connect"
     echo -e "    ${BOLD}just bar::units${NC}               Run busted Lua unit tests"
     echo -e "    ${BOLD}just bar::test-shell${NC}          Drop into an interactive busted shell"

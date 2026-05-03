@@ -1,0 +1,25 @@
+{
+    "title": "Beyond All Reason",
+    "setups": [
+        {
+            "package": {
+                "id": "dev-lobby",
+                "display": "Dev Lobby"
+            },
+            "downloads": {
+                "engines": [
+                    "recoil_2025.06.19"
+                ]
+            },
+            "no_start_script": true,
+            "no_downloads": true,
+            "auto_start": true,
+            "launch": {
+                "start_args": [
+                    "--menu",
+                    "rapid://byar-chobby:test"
+                ]
+            }
+        }
+    ]
+}
