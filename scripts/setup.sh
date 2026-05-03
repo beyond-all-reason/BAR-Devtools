@@ -604,10 +604,100 @@ cmd_setup_bar_launch() {
   repo_path="$(bar_launch_repo_path)"
   if [ ! -d "$repo_path/bar_launch" ]; then
     info "bar_debug_launcher not checked out at $repo_path -- skipping bar-launch install."
-    info "Add it via: just repos::clone extra (or set local_path in repos.local.conf)."
+    info "Add it via: just repos::clone bar (or set local_path in repos.local.conf)."
     return 0
   fi
   ensure_bar_launch_installed "$repo_path"
+  ensure_bar_appimage_path_set
+}
+
+# Find a Beyond-All-Reason*.AppImage in $1, case-insensitive. Echoes path or
+# nothing. Mirrors bar_launch.core's _APPIMAGE_RE.
+_find_appimage_in_dir() {
+  local dir="$1"
+  [ -d "$dir" ] || return 0
+  local f
+  while IFS= read -r f; do
+    echo "$f"
+    return 0
+  done < <(find "$dir" -maxdepth 1 -type f \( \
+              -iname 'beyond-all-reason*.appimage' -o \
+              -iname 'beyond_all_reason*.appimage' -o \
+              -iname 'beyondallreason*.appimage' \) 2>/dev/null | sort -r)
+}
+
+# Resolve $BAR_APPIMAGE_PATH for the AppImage launcher boot path. Preserves
+# existing values; auto-discovers ~/Applications first; falls back to a prompt.
+# Non-interactive shells skip the prompt and just warn -- bar-launch's GUI
+# still works for engine-direct boots, only --boot launcher needs this.
+ensure_bar_appimage_path_set() {
+  local env_file="$DEVTOOLS_DIR/.env"
+  touch "$env_file"
+
+  if grep -q "^BAR_APPIMAGE_PATH=" "$env_file" 2>/dev/null; then
+    info "BAR_APPIMAGE_PATH already set in .env"
+    return 0
+  fi
+
+  # Auto-discover the canonical AppImageLauncher location.
+  local found
+  found="$(_find_appimage_in_dir "$HOME/Applications")"
+  if [ -n "$found" ]; then
+    echo "BAR_APPIMAGE_PATH=$found" >> "$env_file"
+    ok "Discovered AppImage at $found (added to .env)"
+    return 0
+  fi
+
+  # Couldn't auto-discover. Prompt the user with the most-common locations.
+  if ! [ -t 0 ]; then
+    warn "Beyond-All-Reason AppImage not found in ~/Applications and no TTY for prompting."
+    info "If you want '--boot launcher' to work, add to BAR-Devtools/.env:"
+    info "  BAR_APPIMAGE_PATH=/path/to/Beyond-All-Reason.AppImage  (or a directory containing one)"
+    info "Engine-direct boots (--boot engine) work without this."
+    return 0
+  fi
+
+  echo ""
+  warn "Beyond-All-Reason AppImage not found in ~/Applications."
+  info "bar-launch needs this only when booting via the AppImage launcher"
+  info "(--boot launcher / chobby default). Engine-direct boots don't."
+  echo ""
+  echo "  Common locations:"
+  echo "    ~/Applications/Beyond-All-Reason.AppImage   (AppImageLauncher canonical)"
+  echo "    ~/apps/<anywhere>/                          (directory containing the AppImage)"
+  echo "    /opt/BAR/Beyond-All-Reason.AppImage"
+  echo ""
+  local response
+  read -rp "Path to AppImage (or directory containing it; blank to skip): " response
+  if [ -z "$response" ]; then
+    warn "Skipped. '--boot launcher' will fail until BAR_APPIMAGE_PATH is set in .env."
+    return 0
+  fi
+
+  # Expand ~ and validate.
+  local expanded="${response/#\~/$HOME}"
+  if [ -f "$expanded" ]; then
+    echo "BAR_APPIMAGE_PATH=$expanded" >> "$env_file"
+    ok "Added BAR_APPIMAGE_PATH=$expanded to .env"
+  elif [ -d "$expanded" ]; then
+    local resolved
+    resolved="$(_find_appimage_in_dir "$expanded")"
+    if [ -n "$resolved" ]; then
+      # Persist the directory: if you upgrade the AppImage in-place, you
+      # don't have to re-edit .env; bar_launch.core scans the dir.
+      echo "BAR_APPIMAGE_PATH=$expanded" >> "$env_file"
+      ok "Added BAR_APPIMAGE_PATH=$expanded to .env (resolves to $resolved)"
+    else
+      warn "$expanded is a directory but contains no Beyond-All-Reason*.AppImage."
+      warn "Saving anyway -- the launcher will scan it again at run time."
+      echo "BAR_APPIMAGE_PATH=$expanded" >> "$env_file"
+    fi
+  else
+    err "$expanded does not exist."
+    info "Edit BAR-Devtools/.env directly when you have the path:"
+    info "  BAR_APPIMAGE_PATH=/path/to/Beyond-All-Reason.AppImage"
+    return 1
+  fi
 }
 
 DEV_IMAGE="bar-dev"

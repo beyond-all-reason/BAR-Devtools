@@ -73,10 +73,40 @@ run_linux() {
 
   preflight_symlinks
 
+  # Auto-inject flags from what's locally checked out, so a contributor who
+  # ran `just link::create engine` doesn't also have to remember to type
+  # `--engine local-build`. We only inject flags the user didn't already
+  # supply -- explicit user args always win.
+  local injected=()
+  local user_args=("$@")
+  local game_dir
+  game_dir="$(detect_game_dir 2>/dev/null)" || true
+  if [ -n "$game_dir" ] && [ -e "$game_dir/engine/local-build" ]; then
+    if ! _has_flag --engine "${user_args[@]}"; then
+      injected+=(--engine local-build)
+    fi
+  fi
+
   # The launcher's autodetect anchors itself on $0's directory; we want it
   # anchored on the Devtools-managed checkout, not on this script.
   cd "$repo_path"
-  exec bar-launch "$@"
+
+  info "Running: bar-launch ${injected[*]:-} ${user_args[*]:-}"
+  exec bar-launch "${injected[@]}" "${user_args[@]}"
+}
+
+# True if $1 (a flag like --engine) appears anywhere in the remaining args.
+# Matches both "--engine X" and "--engine=X" forms.
+_has_flag() {
+  local needle="$1"
+  shift
+  local arg
+  for arg in "$@"; do
+    if [ "$arg" = "$needle" ] || [[ "$arg" == "$needle="* ]]; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 run_wsl_stub() {

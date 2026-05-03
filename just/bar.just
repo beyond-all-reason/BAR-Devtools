@@ -36,9 +36,32 @@ require-luals:
         | tar xz -C "{{LUALS_DIR}}"
     ok "Downloaded lua-language-server v{{LUALS_VERSION}}"
 
-# Launch BAR for development (GUI by default; --no-gui for headless flags)
+# Launch BAR for development. GUI by default; pass --headless (or --no-gui)
+# plus --play/--source/--boot to run without the Tk window. All flags forward
+# verbatim to `bar-launch`; see `just bar::launch --help` for the full set.
 launch *FLAGS:
     @"$DEVTOOLS_DIR/scripts/launch.sh" {{FLAGS}}
+
+# Tail the engine's infolog from the most recent BAR run. The engine writes
+# this itself -- we don't capture launch.sh output, since `bar-launch` exits
+# right after spawning the engine and stdout/stderr already inherit the user's
+# terminal. Use `just bar::log -- -n 200` to pass extra `tail` flags.
+log *TAIL_FLAGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    source "$DEVTOOLS_DIR/scripts/setup.sh"
+    game_dir="$(detect_game_dir 2>/dev/null)" || {
+      err "Game directory not detected. Set BAR_GAME_DIR or run 'just setup::init'."
+      exit 1
+    }
+    logfile="$game_dir/infolog.txt"
+    if [ ! -f "$logfile" ]; then
+      err "No infolog at $logfile yet -- has the engine run from this data dir?"
+      exit 1
+    fi
+    info "Tailing $logfile (Ctrl-C to stop)"
+    exec tail -F {{TAIL_FLAGS}} "$logfile"
 
 # Type-check BAR Lua code (LuaLS diagnostics)
 check *args: require-bar require-luals
