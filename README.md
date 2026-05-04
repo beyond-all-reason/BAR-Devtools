@@ -143,19 +143,27 @@ Everything -- services, testing, formatting, engine IDE integration -- works unc
 
 #### Optional: prompt that doesn't make you sad
 
-The default bash prompt in a fresh WSL distro is `user@host:~$` with no git info, no exit-status hint, no color discipline. If you're going to spend hours in this terminal, install **[starship](https://starship.rs/)**:
+The default bash prompt in a fresh WSL distro is `user@host:~$` with no git info, no exit-status hint, no color discipline. If you're going to spend hours in this terminal, install **[starship](https://starship.rs/)** on the host:
 
 ```bash
 curl -sS https://starship.rs/install.sh | sh
 echo 'eval "$(starship init bash)"' >> ~/.bashrc   # or zsh, fish, etc.
 ```
 
-One binary, one line, works in any shell.
+`starship` is also baked into the dev distrobox image (`docker/dev.Containerfile`), so `distrobox enter bar-dev` won't trip on `eval "$(starship init bash)"` in your `~/.bashrc`.
 
 Starship's default config uses Nerd Font glyphs (git branch, language icons), which render as `?` boxes without one installed. Two ways to fix:
 
 - **Install a [Nerd Font](https://www.nerdfonts.com/font-downloads)** on Windows (e.g. JetBrainsMono Nerd Font), then in Windows Terminal: *Settings → your WSL profile → Appearance → Font face*. Keeps the pretty defaults.
 - **Or strip glyphs from starship**: `starship preset plain-text-symbols -o ~/.config/starship.toml`. Pure ASCII, no font install.
+
+#### Password-manager SSH agent integrations (optional)
+
+If you store SSH keys in a password manager and want the agent to live there instead of in `~/.ssh`, the `ssh::` module has per-vendor recipes. Currently implemented:
+
+- **1Password** — `just ssh::op-setup`. Bridges the Windows 1Password agent into WSL via `socat` + `npiperelay`, or points `SSH_AUTH_SOCK` at `~/.1password/agent.sock` on native Linux (incl. Bazzite via Flatpak). Idempotent.
+
+Other managers (Bitwarden, KeePassXC, etc.) can be added under `scripts/ssh/` following the same pattern — see `scripts/ssh/lib.sh` for the shared helpers (`bashrc_apply`, `detect_env`, `pause`).
 
 ## Common Workflows
 

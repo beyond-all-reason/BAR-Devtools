@@ -9,6 +9,7 @@ mod lua      'just/lua.just'
 mod docs     'just/docs.just'
 mod bar      'just/bar.just'
 mod tei      'just/tei.just'
+mod ssh      'just/ssh.just'
 
 default:
     @just --list --list-submodules

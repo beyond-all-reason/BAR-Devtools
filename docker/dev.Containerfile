@@ -15,6 +15,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
         libvorbis-devel freetype-devel fontconfig-devel \
         libunwind-devel libcurl-devel jsoncpp-devel minizip-devel \
         expat-devel libXcursor-devel p7zip \
+    && (dnf install -y starship || curl -sS https://starship.rs/install.sh | sh -s -- -y -b /usr/local/bin) \
     && dnf clean all \
     && ln -s /usr/bin/lua-5.1 /usr/local/bin/lua
 
