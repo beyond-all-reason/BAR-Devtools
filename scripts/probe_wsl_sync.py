@@ -6,11 +6,18 @@ not invoked by any recipe. Run by hand on a Windows/WSL2 box, paste the
 result table into bar_design_docs/bar_launch/plan.md under "Probe results",
 then delete this file once Phase 3's architecture is chosen.
 
-Three architectures, four scenarios each:
+Five architectures, four scenarios each:
 
   (i)   WSL ext4 -> /mnt/c/... via rsync (+ watchexec for sustained)
   (ii)  Direct \\\\wsl$\\<distro>\\... reads from Windows (baseline)
   (iii) Windows-side poll + copy from \\\\wsl$\\... -> Windows-local NTFS
+  (iv)  WSL-side watchdog.Observer (native inotify on ext4) + python copy
+        through /mnt/c. The "what production sync.py *should* have done"
+        candidate; (iii)'s watchdog ran on Windows where Plan 9 swallowed
+        fsevents and degraded it to polling.
+  (vi)  WSL-side inotifywait (-m) | cp through /mnt/c. Bash baseline that
+        bounds how much overhead Python threading and watchdog add over a
+        minimal C+coreutils pipeline.
 
   (a) cold copy / cold read of the full ~3000-file tree
   (b) incremental, 1 file changed
@@ -26,6 +33,10 @@ Subcommands (each refuses to run on the wrong host):
   win-read         (Windows) architecture (ii): all four scenarios; (d)
                              pairs with `wsl-touch-loop` running in WSL
   win-watch        (Windows) architecture (iii): same pairing
+  linux-watch      (WSL)     architecture (iv): all four scenarios,
+                             self-contained (no Windows process needed)
+  linux-inotifywait (WSL)    architecture (vi): same shape as (iv) using
+                             inotifywait | cp instead of python+watchdog
   wsl-touch-loop   (WSL)     standalone touch loop for win-read/win-watch
   auto             (WSL)     fully automated rerun of (ii) and/or (iii)
                              over WSL2 interop -- launches the Windows-side
@@ -98,6 +109,12 @@ def _default_src() -> Path:
 
 def _default_rsync_dst() -> Path:
     return Path(f"/mnt/c/Users/{_windows_user()}/AppData/Local/BAR-DevSync-probe")
+
+def _default_linux_watch_dst() -> Path:
+    return Path(f"/mnt/c/Users/{_windows_user()}/AppData/Local/BAR-DevSync-probe-linwatch")
+
+def _default_linux_inotify_dst() -> Path:
+    return Path(f"/mnt/c/Users/{_windows_user()}/AppData/Local/BAR-DevSync-probe-inotify")
 
 def _default_unc_src() -> str:
     return f"\\\\wsl$\\{DEFAULT_DISTRO}\\home\\{DEFAULT_LINUX_USER}\\bar-probe-src"
@@ -350,6 +367,33 @@ def _poll_for_propagation(
         time.sleep(POLL_INTERVAL_S)
     return latencies
 
+def _poll_until_drained(
+    src_to_dst,
+    expected: list,
+    max_wait_s: float = 60.0,
+    timeout_per_event_s: float = 30.0,
+) -> list[int]:
+    """Like _poll_for_propagation but bounded: takes a fully-known list of
+    (touch_ns, src_path) and returns as soon as every entry has propagated
+    (or its own timeout has expired). Used for the (b)/(c) incremental
+    scenarios where we know up-front how many writes to expect."""
+    pending = [(ns, src_to_dst(p), time.monotonic() + timeout_per_event_s)
+               for ns, p in expected]
+    latencies: list[int] = []
+    end = time.monotonic() + max_wait_s
+    while pending and time.monotonic() < end:
+        still: list[tuple[int, Path, float]] = []
+        for ns, dst, expire in pending:
+            obs = read_marker_ns(dst)
+            if obs == ns:
+                latencies.append(time.time_ns() - ns)
+            elif time.monotonic() < expire:
+                still.append((ns, dst, expire))
+        pending = still
+        if pending:
+            time.sleep(POLL_INTERVAL_S)
+    return latencies
+
 # ---------------------------------------------------------------------------
 # Architecture (i): WSL rsync to /mnt/c
 # ---------------------------------------------------------------------------
@@ -450,6 +494,255 @@ def cmd_rsync(args: argparse.Namespace) -> None:
     results["d_sustained_raw_ms"] = [round(l / 1e6, 3) for l in latencies]
     print(f"(d) sustained: {results['d_sustained']}")
     _emit(args, results)
+
+# ---------------------------------------------------------------------------
+# Architectures (iv)/(vi): WSL-side native fsevents -> /mnt/c
+# ---------------------------------------------------------------------------
+# Both arms share the same scenario shape -- (a) cold copy via rsync (the
+# watcher only handles deltas, just like a real sync daemon), then (b)/(c)/(d)
+# driven by a watcher running on the Linux side. The only thing that differs
+# is the watcher implementation: (iv) is python-watchdog with a worker thread,
+# (vi) is `inotifywait -m` piped into a `cp` worker.
+#
+# Why both: the user's previous (iii) probe ran watchdog on Windows over Plan
+# 9, where the OS doesn't deliver fsevents -- so it silently degraded into a
+# polling loop. The proposed redesign moves detection back to the Linux side
+# where inotify is native; (iv) measures the python implementation we'd
+# actually ship in sync.py, and (vi) bounds how much of any tail latency is
+# python+threading overhead vs. the underlying /mnt/c write path.
+
+def _start_watchdog_observer(src: Path, dst: Path):
+    """Spin up a watchdog.Observer on `src` plus a worker thread that mirrors
+    every CLOSE_WRITE / CREATE event to `dst` via shutil.copyfile. Returns
+    (stop_callable, errors_list). Errors during copy are swallowed into the
+    list so they don't kill the worker but stay surfaceable in results."""
+    try:
+        from watchdog.events import FileSystemEventHandler
+        from watchdog.observers import Observer
+    except ImportError:
+        sys.stderr.write(
+            "watchdog not installed. On Ubuntu/WSL2 install via:\n"
+            "  sudo apt-get install -y python3-watchdog\n"
+        )
+        sys.exit(1)
+
+    q: Queue = Queue()
+    errors: list[str] = []
+
+    class H(FileSystemEventHandler):
+        def on_modified(self, event):
+            if not event.is_directory:
+                q.put(Path(event.src_path))
+        def on_created(self, event):
+            if not event.is_directory:
+                q.put(Path(event.src_path))
+
+    observer = Observer()
+    observer.schedule(H(), str(src), recursive=True)
+    observer.start()
+
+    stop = threading.Event()
+
+    def worker():
+        while not stop.is_set():
+            try:
+                p = q.get(timeout=0.1)
+            except Empty:
+                continue
+            try:
+                rel = p.relative_to(src)
+            except ValueError:
+                continue
+            target = dst / rel
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(p, target)
+            except OSError as e:
+                errors.append(f"{p}: {e}")
+
+    worker_t = threading.Thread(target=worker, daemon=True)
+    worker_t.start()
+
+    def stop_all():
+        stop.set()
+        worker_t.join(timeout=5)
+        observer.stop()
+        observer.join(timeout=5)
+
+    return stop_all, errors
+
+
+def _start_inotifywait_pipeline(src: Path, dst: Path):
+    """Same shape as `_start_watchdog_observer` but uses `inotifywait -m -r`
+    over a stdout reader plus a python copy worker. The copy is still
+    `shutil.copyfile`; isolating only the *detection* side keeps the diff vs
+    arm (iv) minimal and the comparison interpretable. (A pure-bash variant
+    with `cp` instead of shutil would be even leaner but adds a fork per
+    event, which we suspect is the dominant overhead -- not worth measuring
+    until (iv) actually loses to (vi) by a meaningful margin.)"""
+    if not have("inotifywait"):
+        sys.stderr.write(
+            "inotifywait not installed. On Ubuntu/WSL2 install via:\n"
+            "  sudo apt-get install -y inotify-tools\n"
+        )
+        sys.exit(1)
+
+    proc = subprocess.Popen(
+        ["inotifywait", "-m", "-r", "-q",
+         "-e", "close_write", "-e", "create",
+         "--format", "%w%f",
+         str(src)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, bufsize=1,
+    )
+
+    q: Queue = Queue()
+    errors: list[str] = []
+    stop = threading.Event()
+
+    def reader():
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            if stop.is_set():
+                return
+            line = line.rstrip("\n")
+            if line:
+                q.put(Path(line))
+
+    def worker():
+        while not stop.is_set():
+            try:
+                p = q.get(timeout=0.1)
+            except Empty:
+                continue
+            try:
+                rel = p.relative_to(src)
+            except ValueError:
+                continue
+            target = dst / rel
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(p, target)
+            except OSError as e:
+                errors.append(f"{p}: {e}")
+
+    reader_t = threading.Thread(target=reader, daemon=True)
+    worker_t = threading.Thread(target=worker, daemon=True)
+    reader_t.start()
+    worker_t.start()
+
+    # Give inotifywait a moment to install watches before we return; otherwise
+    # the first writes in (b) can race the watch setup. inotifywait -q means
+    # we don't get the "Watches established." line; 250ms is generous on ext4.
+    time.sleep(0.25)
+
+    def stop_all():
+        stop.set()
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        reader_t.join(timeout=5)
+        worker_t.join(timeout=5)
+
+    return stop_all, errors
+
+
+def _run_linux_watch_scenarios(arch_label: str, watcher_starter,
+                               src: Path, dst: Path) -> dict:
+    """Shared scenario runner for arms (iv)/(vi). watcher_starter is one of
+    `_start_watchdog_observer` / `_start_inotifywait_pipeline`."""
+    if not src.exists():
+        sys.stderr.write(f"{src} missing; run `setup` first.\n")
+        sys.exit(1)
+
+    results: dict = {"architecture": arch_label, "src": str(src), "dst": str(dst)}
+
+    # (a) cold copy via rsync. Watchers only carry deltas in production, so
+    # the cold-path number is rsync's, same as arm (i). Apples-to-apples.
+    if dst.exists():
+        shutil.rmtree(dst)
+    cold_s, _ = time_call(_rsync, src, dst)
+    results["a_cold_copy_s"] = round(cold_s, 2)
+    print(f"(a) cold copy (rsync): {cold_s:.2f}s")
+
+    stop_watcher, errors = watcher_starter(src, dst)
+
+    def src_to_dst(p: Path) -> Path:
+        return dst / p.relative_to(src)
+
+    try:
+        files = all_lua_files(src)
+        rng = random.Random(2)
+
+        # (b) 1-file incremental
+        chosen = rng.choice(files)
+        ns_b = time.time_ns()
+        chosen.write_bytes(make_payload(ns_b))
+        lat_b = _poll_until_drained(src_to_dst, [(ns_b, chosen)], max_wait_s=10)
+        results["b_inc1_ms"] = round(lat_b[0] / 1e6, 2) if lat_b else None
+        print(f"(b) inc 1 file:  {results['b_inc1_ms']} ms")
+
+        # (c) 50-file incremental
+        expected50 = []
+        for p in rng.sample(files, 50):
+            ns = time.time_ns()
+            p.write_bytes(make_payload(ns))
+            expected50.append((ns, p))
+        lat_c = _poll_until_drained(src_to_dst, expected50, max_wait_s=60)
+        results["c_inc50"] = stats_ms(lat_c)
+        print(f"(c) inc 50 files: {results['c_inc50']}")
+
+        # (d) sustained 60s loop
+        print(f"(d) sustained {SUSTAINED_SECS}s loop...")
+        notify: Queue = Queue()
+        stop_touch = threading.Event()
+        touch_t = threading.Thread(
+            target=_touch_loop,
+            args=(src, SUSTAINED_SECS, notify, None, stop_touch),
+            daemon=True,
+        )
+        touch_t.start()
+        deadline = time.monotonic() + SUSTAINED_SECS + 5
+        latencies = _poll_for_propagation(src_to_dst, notify, deadline)
+        stop_touch.set()
+        touch_t.join(timeout=5)
+        results["d_sustained"] = stats_ms(latencies)
+        results["d_sustained_raw_ms"] = [round(l / 1e6, 3) for l in latencies]
+        print(f"(d) sustained: {results['d_sustained']}")
+    finally:
+        stop_watcher()
+
+    if errors:
+        results["copy_errors"] = errors[:20]
+        results["copy_errors_total"] = len(errors)
+    return results
+
+
+def cmd_linux_watch(args: argparse.Namespace) -> None:
+    require_host("wsl")
+    src = Path(args.src).expanduser()
+    dst = Path(args.dst).expanduser()
+    results = _run_linux_watch_scenarios(
+        "iv_linux_watchdog_to_mntc",
+        _start_watchdog_observer,
+        src, dst,
+    )
+    _emit(args, results)
+
+
+def cmd_linux_inotifywait(args: argparse.Namespace) -> None:
+    require_host("wsl")
+    src = Path(args.src).expanduser()
+    dst = Path(args.dst).expanduser()
+    results = _run_linux_watch_scenarios(
+        "vi_linux_inotifywait_to_mntc",
+        _start_inotifywait_pipeline,
+        src, dst,
+    )
+    _emit(args, results)
+
 
 # ---------------------------------------------------------------------------
 # Architecture (ii): direct UNC reads (Windows-side)
@@ -866,6 +1159,14 @@ RECOMMENDED PATH — fully automated (ii) + (iii)
      python3 scripts/probe_wsl_sync.py rsync \
          --json-out {_default_probes_dir()}/probe-i.json
 
+1b. [WSL] Architectures (iv) and (vi) — Linux-side native fsevents to /mnt/c.
+    Self-contained on WSL; no Windows process. Both follow the same shape.
+    Prereqs (sudo apt-get install -y python3-watchdog inotify-tools):
+      python3 scripts/probe_wsl_sync.py linux-watch \
+          --json-out {_default_probes_dir()}/probe-iv.json
+      python3 scripts/probe_wsl_sync.py linux-inotifywait \
+          --json-out {_default_probes_dir()}/probe-vi.json
+
 2. [WSL] Architectures (ii) and (iii), automated. Launches the Windows
    measurer over WSL2 interop (py.exe via \\\\wsl$\\... script path),
    coordinates entry into the (d) phase via a ready-flag file, drives
@@ -932,6 +1233,24 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--dst", default=str(_default_rsync_dst()))
     sp.add_argument("--json-out", default=None)
     sp.set_defaults(func=cmd_rsync)
+
+    sp = sub.add_parser(
+        "linux-watch",
+        help="(WSL) architecture (iv): python-watchdog (native inotify) -> /mnt/c",
+    )
+    sp.add_argument("--src", default=str(_default_src()))
+    sp.add_argument("--dst", default=str(_default_linux_watch_dst()))
+    sp.add_argument("--json-out", default=None)
+    sp.set_defaults(func=cmd_linux_watch)
+
+    sp = sub.add_parser(
+        "linux-inotifywait",
+        help="(WSL) architecture (vi): inotifywait -m | python copy worker -> /mnt/c",
+    )
+    sp.add_argument("--src", default=str(_default_src()))
+    sp.add_argument("--dst", default=str(_default_linux_inotify_dst()))
+    sp.add_argument("--json-out", default=None)
+    sp.set_defaults(func=cmd_linux_inotifywait)
 
     sp = sub.add_parser("win-read", help="(Windows) architecture (ii): direct UNC reads")
     sp.add_argument("--src", default=_default_unc_src(),
