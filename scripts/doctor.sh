@@ -121,27 +121,43 @@ check_doctor_repos() {
     return
   fi
 
-  local i missing_extras=()
+  local i missing_features_set=""
+  local -a missing=()
   for i in "${!REPO_DIRS[@]}"; do
     local dir="${REPO_DIRS[$i]}"
-    local group="${REPO_GROUPS[$i]}"
+    local feature="${REPO_FEATURES[$i]:--}"
     local target="$DEVTOOLS_DIR/$dir"
 
     if [ -L "$target" ] && [ -d "$target" ]; then
-      _pass "${dir} (${group}) — linked"
+      _pass "${dir} (${feature}) — linked"
     elif [ -d "$target/.git" ]; then
-      _pass "${dir} (${group})"
-    elif [ "$group" = "core" ]; then
-      _fail "${dir} (${group}) — not cloned"
-      echo "       Run: just repos::clone core"
+      _pass "${dir} (${feature})"
     else
-      missing_extras+=("$dir")
+      missing+=("${dir} (${feature})")
+      # Accumulate distinct feature tags from every missing repo so the
+      # hint can point at the exact `just repos::clone <feature>` calls.
+      local IFS=','
+      local f
+      for f in $feature; do
+        [ -z "$f" ] && continue
+        case ",$missing_features_set," in
+          *",$f,"*) ;;
+          *)        missing_features_set="${missing_features_set:+$missing_features_set,}$f" ;;
+        esac
+      done
     fi
   done
 
-  if [ "${#missing_extras[@]}" -gt 0 ]; then
-    _warn "${#missing_extras[@]} extra repos not cloned: ${missing_extras[*]}"
-    echo "       Run: just repos::clone extra"
+  if [ "${#missing[@]}" -gt 0 ]; then
+    _warn "${#missing[@]} repos not cloned: ${missing[*]}"
+    if [ -n "$missing_features_set" ]; then
+      local IFS=','
+      local f
+      for f in $missing_features_set; do
+        echo "       Run: just repos::clone $f"
+      done
+    fi
+    echo "       (Or 'just setup::init' for the interactive picker.)"
   fi
 
   echo ""
@@ -164,7 +180,7 @@ check_doctor_images() {
     _pass "Teiserver image built"
   elif [ ! -d "$DEVTOOLS_DIR/teiserver" ]; then
     _fail "Teiserver image not built (teiserver repo not cloned)"
-    echo "       Run: just repos::clone core && just services::build"
+    echo "       Run: just repos::clone teiserver && just services::build"
   else
     _fail "Teiserver image not built"
     echo "       Run: just services::build"

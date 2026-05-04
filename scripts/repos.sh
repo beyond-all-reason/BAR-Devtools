@@ -3,10 +3,10 @@
 # Expects: DEVTOOLS_DIR, REPOS_CONF, REPOS_LOCAL (exported by Justfile)
 # Source scripts/common.sh before this file.
 
-declare -a REPO_DIRS=() REPO_URLS=() REPO_BRANCHES=() REPO_GROUPS=() REPO_LOCAL_PATHS=()
+declare -a REPO_DIRS=() REPO_URLS=() REPO_BRANCHES=() REPO_FEATURES=() REPO_LOCAL_PATHS=()
 
 load_repos_conf() {
-  REPO_DIRS=(); REPO_URLS=(); REPO_BRANCHES=(); REPO_GROUPS=(); REPO_LOCAL_PATHS=()
+  REPO_DIRS=(); REPO_URLS=(); REPO_BRANCHES=(); REPO_FEATURES=(); REPO_LOCAL_PATHS=()
   local -A seen=()
   local local_root="" protocol=""
 
@@ -29,13 +29,15 @@ load_repos_conf() {
         continue
       fi
 
-      local dir url branch group local_path
-      read -r dir url branch group local_path <<< "$line"
+      local dir url branch feature local_path
+      read -r dir url branch feature local_path <<< "$line"
       [ -z "$dir" ] || [ -z "$url" ] && continue
       branch="${branch:-master}"
-      group="${group:-extra}"
+      feature="${feature:-}"
       local_path="${local_path/#\~/$HOME}"
-      seen[$dir]="$url $branch $group $local_path"
+      # Use a separator unlikely to appear in any field so the round-trip
+      # through `read` survives empty feature/local_path columns.
+      seen[$dir]="$url|$branch|$feature|$local_path"
     done < "$file"
   }
 
@@ -44,8 +46,8 @@ load_repos_conf() {
 
   local dir
   for dir in "${!seen[@]}"; do
-    local url branch group local_path
-    read -r url branch group local_path <<< "${seen[$dir]}"
+    local url branch feature local_path
+    IFS='|' read -r url branch feature local_path <<< "${seen[$dir]}"
 
     # @protocol: rewrite github.com URLs between https and ssh forms.
     if [ "$protocol" = "ssh" ] && [[ "$url" =~ ^https://github\.com/(.+)$ ]]; then
@@ -62,9 +64,20 @@ load_repos_conf() {
     REPO_DIRS+=("$dir")
     REPO_URLS+=("$url")
     REPO_BRANCHES+=("$branch")
-    REPO_GROUPS+=("$group")
+    REPO_FEATURES+=("$feature")
     REPO_LOCAL_PATHS+=("$local_path")
   done
+}
+
+# True if comma-separated feature list $1 contains tag $2.
+repo_has_feature() {
+  local list="$1" tag="$2"
+  local IFS=','
+  local f
+  for f in $list; do
+    [ "$f" = "$tag" ] && return 0
+  done
+  return 1
 }
 
 clone_or_update_repo() {
@@ -125,7 +138,7 @@ clone_or_update_repo() {
 }
 
 cmd_clone() {
-  local group_filter="${1:-all}"
+  local feature_filter="${1:-all}"
   load_repos_conf
 
   if [ "${#REPO_DIRS[@]}" -eq 0 ]; then
@@ -146,10 +159,10 @@ cmd_clone() {
     local dir="${REPO_DIRS[$i]}"
     local url="${REPO_URLS[$i]}"
     local branch="${REPO_BRANCHES[$i]}"
-    local group="${REPO_GROUPS[$i]}"
+    local feature="${REPO_FEATURES[$i]}"
     local local_path="${REPO_LOCAL_PATHS[$i]}"
 
-    if [ "$group_filter" != "all" ] && [ "$group" != "$group_filter" ]; then
+    if [ "$feature_filter" != "all" ] && ! repo_has_feature "$feature" "$feature_filter"; then
       skipped=$((skipped + 1))
       continue
     fi
@@ -177,13 +190,13 @@ cmd_repos() {
 
   echo -e "${BOLD}=== Repository Status ===${NC}"
   echo ""
-  printf "  ${DIM}%-24s %-8s %-18s %s${NC}\n" "DIRECTORY" "GROUP" "BRANCH" "STATUS"
+  printf "  ${DIM}%-24s %-22s %-18s %s${NC}\n" "DIRECTORY" "FEATURE" "BRANCH" "STATUS"
   echo "  $(printf '%.0s-' {1..80})"
 
   local i
   for i in "${!REPO_DIRS[@]}"; do
     local dir="${REPO_DIRS[$i]}"
-    local group="${REPO_GROUPS[$i]}"
+    local feature="${REPO_FEATURES[$i]:--}"
     local target="$DEVTOOLS_DIR/$dir"
 
     local status current_branch
@@ -218,7 +231,7 @@ cmd_repos() {
       current_branch="-"
     fi
 
-    printf "  %-24s %-8s %-18s %b\n" "$dir" "$group" "$current_branch" "$status"
+    printf "  %-24s %-22s %-18s %b\n" "$dir" "$feature" "$current_branch" "$status"
   done
   echo ""
 }

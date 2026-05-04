@@ -519,16 +519,18 @@ cmd_setup_distrobox() {
   echo "  To rebuild after changes:   just setup::distrobox"
 }
 
-# Feature -> repo dirs it pulls in.
+# Feature -> repo dirs it pulls in. Reads from the loaded repos.conf so the
+# feature column is the single source of truth — no hand-maintained mapping
+# in this file. Caller must have run load_repos_conf already.
 feature_repos() {
-  case "$1" in
-    bar)          echo "Beyond-All-Reason bar-lobby" ;;
-    recoil)       echo "RecoilEngine" ;;
-    teiserver)    echo "teiserver spads_config_bar" ;;
-    chobby)       echo "BYAR-Chobby bar-lobby" ;;
-    spads-source) echo "SPADS SpringLobbyInterface ansible-spads-setup" ;;
-    *)            echo "" ;;
-  esac
+  local feature="$1"
+  local i out=""
+  for i in "${!REPO_DIRS[@]}"; do
+    if repo_has_feature "${REPO_FEATURES[$i]}" "$feature"; then
+      out="${out}${REPO_DIRS[$i]} "
+    fi
+  done
+  echo "${out% }"
 }
 
 # True if the comma-separated feature list contains $2.
@@ -662,10 +664,9 @@ clone_for_features() {
   if [ -z "$features" ]; then
     return 0
   fi
+  load_repos_conf
   local wanted
   wanted="$(features_to_repos "$features")"
-
-  load_repos_conf
 
   echo -e "${BOLD}=== Cloning repositories for: ${features} ===${NC}"
   echo ""
@@ -879,19 +880,23 @@ cmd_setup() {
   echo ""
   check_prerequisites || exit 1
 
-  local missing_core=0
+  # cmd_setup is the docker-compose teiserver stack init. It needs the
+  # teiserver feature repos (teiserver, spads_config_bar, …); auto-clone
+  # them if any are missing.
+  local missing_teiserver=0
   load_repos_conf
   for i in "${!REPO_DIRS[@]}"; do
-    if [ "${REPO_GROUPS[$i]}" = "core" ] && [ ! -d "$DEVTOOLS_DIR/${REPO_DIRS[$i]}/.git" ]; then
-      missing_core=1
+    if repo_has_feature "${REPO_FEATURES[$i]}" "teiserver" \
+       && [ ! -d "$DEVTOOLS_DIR/${REPO_DIRS[$i]}/.git" ]; then
+      missing_teiserver=1
       break
     fi
   done
 
-  if [ "$missing_core" -eq 1 ]; then
-    warn "Core repositories are missing. Cloning them now..."
+  if [ "$missing_teiserver" -eq 1 ]; then
+    warn "Teiserver repositories are missing. Cloning them now..."
     echo ""
-    cmd_clone core
+    cmd_clone teiserver
     echo ""
   fi
 
@@ -1012,7 +1017,7 @@ cmd_link() {
         echo "  Build the engine first: just engine::build linux"
       fi
     else
-      echo "  Clone the repo first: just repos::clone extra"
+      echo "  Clone the repo first: just repos::clone $target"
     fi
     exit 1
   fi

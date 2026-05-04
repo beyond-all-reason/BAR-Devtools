@@ -14,7 +14,7 @@ require-bar:
     #!/usr/bin/env bash
     if [ ! -d "{{BAR_DIR}}" ]; then
         echo "Error: Beyond-All-Reason is not cloned." >&2
-        echo "Run: just repos::clone extra" >&2
+        echo "Run: just repos::clone bar" >&2
         exit 1
     fi
 
@@ -104,7 +104,7 @@ setup-hooks:
     hook="$BAR_DIR/.git/hooks/pre-commit"
     if [ ! -d "$BAR_DIR/.git" ]; then
         err "BAR repo not found at $BAR_DIR"
-        info "Clone it first: just repos::clone extra"
+        info "Clone it first: just repos::clone bar"
         exit 1
     fi
     mkdir -p "$(dirname "$hook")"

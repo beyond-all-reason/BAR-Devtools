@@ -12,7 +12,7 @@ build-lde:
     source "$DEVTOOLS_DIR/scripts/common.sh"
     if [ ! -d "$LDE_DIR" ]; then
         err "lua-doc-extractor not found at $LDE_DIR"
-        info "Clone it first: just repos::clone extra"
+        info "Clone it first: just repos::clone recoil"
         exit 1
     fi
     cd "$LDE_DIR"

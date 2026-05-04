@@ -9,7 +9,7 @@ build *args:
     source "$DEVTOOLS_DIR/scripts/common.sh"
     build_script="$DEVTOOLS_DIR/RecoilEngine/docker-build-v2/build.sh"
     if [ ! -f "$build_script" ]; then
-        err "RecoilEngine not found. Clone it first: just repos::clone extra"
+        err "RecoilEngine not found. Clone it first: just repos::clone recoil"
         exit 1
     fi
     if [ -z "{{args}}" ]; then

@@ -221,14 +221,14 @@ cp repos.conf repos.local.conf
 Edit `repos.local.conf` -- only include the repos you want to override:
 
 ```
-teiserver  https://github.com/yourname/teiserver.git  your-branch  core
-bar-lobby  https://github.com/yourname/bar-lobby.git  your-branch  core
+teiserver  https://github.com/yourname/teiserver.git  your-branch  teiserver
+bar-lobby  https://github.com/yourname/bar-lobby.git  your-branch  bar,chobby
 ```
 
 Then clone or re-clone:
 
 ```bash
-just repos::clone core
+just repos::clone teiserver
 ```
 
 `repos.local.conf` is gitignored so it won't affect anyone else.
@@ -238,7 +238,7 @@ just repos::clone core
 You can also point a repo entry at a local directory instead of cloning. Add a fifth column with the path:
 
 ```
-lua-doc-extractor  https://github.com/rhys-vdw/lua-doc-extractor.git  your-branch  extra  ~/code/lua-doc-extractor
+lua-doc-extractor  https://github.com/rhys-vdw/lua-doc-extractor.git  your-branch  recoil  ~/code/lua-doc-extractor
 ```
 
 This creates a symlink instead of cloning.
@@ -248,14 +248,15 @@ This creates a symlink instead of cloning.
 `repos.conf` uses a simple whitespace-delimited format:
 
 ```
-# directory    url    branch    group    [local_path]
-teiserver      https://github.com/beyond-all-reason/teiserver.git    master    core
+# directory    url    branch    feature    [local_path]
+teiserver      https://github.com/beyond-all-reason/teiserver.git    master    teiserver
+bar-lobby      https://github.com/beyond-all-reason/bar-lobby.git    master    bar,chobby
 ```
 
 - **directory** -- local folder name (created by `clone`)
 - **url** -- git clone URL
 - **branch** -- branch to checkout
-- **group** -- `core` (required for the dev stack) or `extra` (optional)
+- **feature** -- comma-separated feature tags. Valid tags: `bar`, `recoil`, `teiserver`, `chobby`, `spads-source`. A repo with multiple tags is pulled in by any of those features (e.g. `bar-lobby` is needed for both `bar` and `chobby`).
 - **local_path** -- (optional) absolute or `~`-relative path to symlink instead of cloning
 
 ## Architecture
