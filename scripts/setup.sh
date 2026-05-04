@@ -238,7 +238,7 @@ ensure_windows_python() {
   fi
 
   echo ""
-  info "Phase 3 sync watcher and probe_wsl_sync.py both need py.exe / python.exe on Windows."
+  info "The Windows-side cold-copy mirror needs py.exe / python.exe on Windows."
   read -rp "Install Python 3.12 via winget on Windows now? [Y/n] " ans
   if [[ "$ans" =~ ^[Nn]$ ]]; then
     info "Skipped. Run later: winget install Python.Python.3.12"
@@ -782,6 +782,55 @@ _default_devsync_dir() {
   fi
 }
 
+# Idempotently set `<key> = <value>` in a springsettings.cfg. If the key is
+# already present (any whitespace / casing), replace its value; otherwise
+# append. The engine treats unknown keys as warnings and rewrites the cfg
+# on graceful shutdown -- so callers should re-apply on every launch rather
+# than relying on prior writes surviving.
+springsettings_set() {
+  local cfg="${1:-}" key="${2:-}" value="${3:-}"
+  if [ -z "$cfg" ] || [ -z "$key" ]; then
+    return 1
+  fi
+  # Auto-create cfg if missing (engine creates a default on first run; if we
+  # write before first run it'll merge ours with its defaults).
+  if [ ! -f "$cfg" ]; then
+    : > "$cfg" 2>/dev/null || { warn "Couldn't create $cfg"; return 1; }
+  fi
+  if grep -qE "^[[:space:]]*${key}[[:space:]]*=" "$cfg" 2>/dev/null; then
+    local tmp="$cfg.tmp.$$"
+    # Use # as sed delimiter so values with / don't bite us. Anchor on ^...$.
+    sed -E "s#^[[:space:]]*${key}[[:space:]]*=.*\$#${key} = ${value}#" \
+      "$cfg" > "$tmp" 2>/dev/null \
+      && mv "$tmp" "$cfg" \
+      || { rm -f "$tmp"; warn "Couldn't update $key in $cfg"; return 1; }
+  else
+    printf '%s = %s\n' "$key" "$value" >> "$cfg" \
+      || { warn "Couldn't append $key to $cfg"; return 1; }
+  fi
+}
+
+# Drop an empty devmode.txt at the engine's data dir to enable Recoil's
+# developer mode (unsigned LuaUI/gadgets, /cheat, hot-reload, loosened VFS
+# write rules). Presence is what matters; content is ignored. Idempotent --
+# never overwrites an existing file, and stays silent unless it creates one,
+# so launch-time invocations don't spam the log.
+ensure_devmode_marker() {
+  local data_dir="${1:-}"
+  [ -n "$data_dir" ] || return 0
+  [ -d "$data_dir" ] || return 0
+  local marker="$data_dir/devmode.txt"
+  [ -e "$marker" ] && return 0
+  # `2>/dev/null` on a single redirect only catches the command's stderr,
+  # not the redirect-setup failure ("Permission denied" lands on bash's
+  # stderr first). Wrap the redirect in `{}` so the suppressor sees both.
+  if { : > "$marker"; } 2>/dev/null; then
+    info "Created $marker (Recoil dev mode marker)"
+  else
+    warn "Couldn't create $marker (continuing without dev mode)"
+  fi
+}
+
 # WSL2-only: prompt for BAR_DEVSYNC_DIR, persist to .env, create the three
 # subpaths the sync daemon mirrors into plus bin/ for the cmd shim. Idempotent;
 # safe to re-run after an upgrade.
@@ -867,6 +916,9 @@ ensure_bar_devsync_dir() {
       return 1
     }
   done
+
+  ensure_devmode_marker "$current"
+
   ok "BAR data dir ready: $current"
 
   export BAR_DEVSYNC_DIR="$current"
@@ -1573,6 +1625,8 @@ cmd_link() {
     exit 1
   fi
 
+  ensure_devmode_marker "$game_dir"
+
   local source_path link_path
   case "$target" in
     engine)
@@ -1630,10 +1684,20 @@ cmd_link() {
     info "WSL2: $target tracks $source_path -> $link_path (via sync daemon)"
     if command -v rsync &>/dev/null; then
       info "Seeding $link_path with an initial cold copy"
-      rsync -a --delete --inplace "$source_path/" "$link_path/" \
-        || warn "rsync seed failed; the watcher will fill the dir on first launch."
+      # Exclude list mirrors sync.py's _SKIP_DIRS plus .github/.gitignore --
+      # the engine's archive scanner walks the whole .sdd, and multi-GB of
+      # .git internals will either crash it (older Recoil) or refuse to
+      # register the archive at all (alpha-tagged 2026.06.04+ surfaces this
+      # as `Dependent archive "BYAR Chobby local" not found`). The watcher
+      # already skips these, so this only matters for the cold-copy seed.
+      rsync -a --delete --inplace \
+        --exclude='.git' --exclude='.github' \
+        --exclude='__pycache__' --exclude='node_modules' \
+        --exclude='.gitignore' \
+        "$source_path/" "$link_path/" \
+        || warn "rsync seed failed; 'just bar::launch' will cold-copy on first run."
     else
-      warn "rsync not installed; skipping cold-copy seed (the watcher will fill this dir)."
+      warn "rsync not installed; skipping seed ('just bar::launch' will cold-copy on first run)."
     fi
     ok "Tracked $target: $link_path (mirrors $source_path)"
     return 0

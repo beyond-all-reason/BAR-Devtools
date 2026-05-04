@@ -55,31 +55,22 @@ except ImportError as exc:
 log = logging.getLogger("bar-launch.sync")
 
 
-# Sentinel substitution for the $VERSION placeholder in modinfo.lua. The
-# rapid build pipeline replaces $VERSION at archive-build time (e.g. with
-# "test-3548-a453477"); a raw checkout has the literal placeholder, which
-# spring's archive scanner silently skips -- the archive never gets
-# registered and --menu lookups fail with "dependent archive not found".
-# Substituting at sync time keeps the source repo clean while giving spring
-# a concrete name to register and resolve against.
-_LOCAL_VERSION = "local"
-_VERSION_PLACEHOLDER = b"$VERSION"
-
-
 def _copy_inplace(src: Path, dst: Path) -> None:
-    """Mirror src -> dst with in-place write (no rename, no inode rotation)."""
+    """Mirror src -> dst with in-place write (no rename, no inode rotation).
+
+    Mirrors verbatim: spring's archive scanner accepts the literal "$VERSION"
+    placeholder in modinfo.lua and registers the archive as
+    "<name> $VERSION", which is what chobby's byar-dev gameConfig expects
+    (and what Linux symlinks already produce). An earlier revision of this
+    file substituted "$VERSION" -> "local" here, on the mistaken premise
+    that the scanner skipped it; that broke the byar-dev path on WSL2 by
+    diverging from the Linux flow's archive name.
+    """
     dst.parent.mkdir(parents=True, exist_ok=True)
-    if src.name == "modinfo.lua":
-        # Substitute on read+write to dst; src is left untouched.
-        content = src.read_bytes()
-        if _VERSION_PLACEHOLDER in content:
-            content = content.replace(_VERSION_PLACEHOLDER, _LOCAL_VERSION.encode())
-        dst.write_bytes(content)
-    else:
-        # shutil.copyfile opens dst with 'wb' which truncates and writes in
-        # place. That's what we want: an mmaped reader on dst sees the file
-        # change content, not a new inode.
-        shutil.copyfile(src, dst)
+    # shutil.copyfile opens dst with 'wb' which truncates and writes in
+    # place. That's what we want: an mmaped reader on dst sees the file
+    # change content, not a new inode.
+    shutil.copyfile(src, dst)
     # Preserve mtime so timestamp-based reload heuristics work.
     try:
         st = src.stat()
@@ -91,7 +82,7 @@ def _copy_inplace(src: Path, dst: Path) -> None:
 # Subtrees that the engine never reads but cost a lot to sync. .git pack
 # files are also stored read-only on disk, which makes them un-overwritable
 # on subsequent cold copies (Errno 13 storms in the log).
-_SKIP_DIRS = frozenset({".git", "__pycache__", "node_modules"})
+_SKIP_DIRS = frozenset({".git", ".github", "__pycache__", "node_modules"})
 
 
 def _is_skipped(rel: Path) -> bool:

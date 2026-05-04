@@ -42,19 +42,19 @@ require-luals:
 launch *FLAGS:
     @bash "$DEVTOOLS_DIR/scripts/launch.sh" {{FLAGS}}
 
-# Stop the Phase 3 sync watcher (Windows-side python.exe). `just bar::launch`
-# starts the watcher and leaves it running so subsequent launches are instant
-# and game shutdown isn't blocked on watcher teardown -- run this when you
-# want to actually free the watcher (e.g. before rebooting WSL2). WSL2-only.
-stop:
+# Cold-copy WSL Devtools sources to the Windows data dir without launching.
+# Useful when you've edited Lua and want the patched copy in place before
+# poking the engine some other way. Same op `just bar::launch` runs first.
+# WSL2-only.
+sync:
     #!/usr/bin/env bash
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
     if ! grep -qi microsoft /proc/version 2>/dev/null; then
-      err "stop is WSL2-only (Linux uses symlinks; no sync daemon to stop)."
+      err "sync is WSL2-only (Linux uses symlinks; no copy needed)."
       exit 1
     fi
-    bash "$DEVTOOLS_DIR/scripts/sync.sh" stop
+    bash "$DEVTOOLS_DIR/scripts/sync.sh" once
 
 # Regenerate the Windows-side launcher shim ($BAR_DEVSYNC_DIR/bin/bar-launch.cmd)
 # from the current BAR_DEVSYNC_DIR / venv-python paths. Use this after editing
@@ -70,17 +70,19 @@ regen-shim:
     fi
     regenerate_bar_launch_cmd_shim
 
-# Tail the Phase 3 sync watcher's log. Pass tail flags after `--`,
+# Tail the cold-copy sync log. Pass tail flags after `--`,
 # e.g. `just bar::sync-logs -- -f -n 200`. WSL2-only.
 sync-logs *TAIL_FLAGS:
     #!/usr/bin/env bash
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
     if ! grep -qi microsoft /proc/version 2>/dev/null; then
-      err "sync-logs is WSL2-only (Linux uses symlinks; no sync daemon to log)."
+      err "sync-logs is WSL2-only (Linux uses symlinks; nothing to log)."
       exit 1
     fi
-    exec bash "$DEVTOOLS_DIR/scripts/sync.sh" logs {{TAIL_FLAGS}}
+    set -- {{TAIL_FLAGS}}
+    [ "${1:-}" = "--" ] && shift
+    exec bash "$DEVTOOLS_DIR/scripts/sync.sh" logs "$@"
 
 # Tail the engine's infolog from the most recent BAR run. The engine writes
 # this itself -- we don't capture launch.sh output, since `bar-launch` exits
@@ -101,7 +103,11 @@ log *TAIL_FLAGS:
       exit 1
     fi
     info "Tailing $logfile (Ctrl-C to stop)"
-    exec tail -F {{TAIL_FLAGS}} "$logfile"
+    # `just bar::log -- -n 200` forwards the `--` into TAIL_FLAGS; drop it
+    # so tail doesn't read `-n`/`200` as filenames after the option terminator.
+    set -- {{TAIL_FLAGS}}
+    [ "${1:-}" = "--" ] && shift
+    exec tail -F "$@" "$logfile"
 
 # Type-check BAR Lua code (LuaLS diagnostics)
 check *args: require-bar require-luals

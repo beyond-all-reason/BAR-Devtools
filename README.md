@@ -230,13 +230,14 @@ just bar::launch --no-gui --play chobby --source latest --boot launcher
 On WSL2 the engine has to run as a native Windows process for usable performance (WSLg / Plan9 game-load measured ~7m30s vs ~24s native), so `just bar::launch` looks different:
 
 1. `just setup::init` (on WSL) prompts for a `BAR_DEVSYNC_DIR` -- a Windows-side data directory the engine reads from (default `%LOCALAPPDATA%\BAR-DevSync`). Persisted to `.env`.
-2. Setup also installs Python on Windows via winget (if missing), creates a venv at `%BAR_DEVSYNC_DIR%\.venv`, installs `bar_debug_launcher` + `watchdog` into it, and writes a `bin\bar-launch.cmd` shim with absolute paths baked in.
-3. `just bar::launch` then: starts a Windows-side Python watcher that mirrors `Beyond-All-Reason/`, `BYAR-Chobby/`, and `RecoilEngine/build-amd64-windows/install/` from WSL ext4 onto NTFS (`%BAR_DEVSYNC_DIR%\games\...`, `engine\local-build\`); shells out to `cmd.exe /c bar-launch.cmd <flags>`; tears the watcher down on exit.
+2. Setup also installs Python on Windows via winget (if missing), creates a venv at `%BAR_DEVSYNC_DIR%\.venv`, installs `bar_debug_launcher` into it, and writes a `bin\bar-launch.cmd` shim with absolute paths baked in.
+3. `just bar::launch` then: cold-copies `Beyond-All-Reason/` and `BYAR-Chobby/` (and the engine if built) from WSL ext4 onto NTFS (`%BAR_DEVSYNC_DIR%\games\...`, `engine\local-build\`); shells out to `cmd.exe /c bar-launch.cmd <flags>`. `just engine::build windows` cold-copies the rebuilt engine artifacts the same way.
 
-Edits to your WSL-side checkouts propagate to the engine in ~110 ms median (per the Phase 1 perf probe). The watcher uses inplace writes (no inode rotation) so the engine's mmaps stay valid across edits.
+The cold copy uses inplace writes (no inode rotation) so engine mmaps stay valid if you re-launch quickly. We previously ran a `\\wsl.localhost\` watchdog watcher for live edit propagation, but `ReadDirectoryChangesW` over Plan 9 doesn't receive Linux-side inotify events; the watcher logged zero mirrored events in practice. Cold-copy at known sync points (launch, build) replaced it.
 
 ```bash
-just bar::sync-logs -- -f      # tail the watcher's log
+just bar::sync                 # cold-copy sources without launching
+just bar::sync-logs -- -f      # tail the cold-copy log
 just bar::regen-shim           # rewrite bar-launch.cmd if BAR_DEVSYNC_DIR changes
 ```
 
