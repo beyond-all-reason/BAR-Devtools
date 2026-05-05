@@ -99,12 +99,15 @@ op_ssh_verify() {
     echo ""
 
     step "    Probing github.com for end-to-end auth"
-    local gh_out gh_rc
+    # github.com's SSH greeting ALWAYS exits 1 even on a successful auth
+    # (it doesn't run a shell). Trailing `|| true` stops `set -e` from
+    # aborting the function on the substitution — without it, the if/else
+    # below never runs and the caller falsely reports op-setup as failed.
+    local gh_out
     gh_out="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-                  -o ConnectTimeout=5 -T git@github.com 2>&1)"
-    gh_rc=$?
-    # github.com always exits 1 even on success; the success signal is the
-    # "Hi <user>! You've successfully authenticated" message.
+                  -o ConnectTimeout=5 -T git@github.com 2>&1 || true)"
+    # Success signal is the "Hi <user>! You've successfully authenticated"
+    # message in stderr, not the exit code.
     if printf '%s' "$gh_out" | grep -q "successfully authenticated"; then
         ok "github.com authenticated as $(printf '%s' "$gh_out" | sed -n 's/^Hi \([^!]*\)!.*/\1/p')."
         op_ssh_pin_protocol_ssh
