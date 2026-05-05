@@ -164,7 +164,7 @@ Run `just` with no arguments for the full recipe list.
 just bar::fmt           # format with stylua
 just bar::lint          # lint with luacheck
 just bar::units         # run busted unit tests
-just bar::test-shell    # interactive busted shell,
+just bar::units-shell   # interactive busted shell,
                         #   run `busted -t focus` to test specs tagged "#focus"
                         #   for example: `it "should do something #focus", function()`
 ```

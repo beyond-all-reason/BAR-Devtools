@@ -145,8 +145,10 @@ units *args: require-bar
     enter_distrobox
     (cd "$BAR_DIR" && lx --lua-version 5.1 test {{args}})
 
-# Drop into an interactive test shell (busted on PATH)
-test-shell: require-bar
+# Drop into an interactive shell with busted on PATH (for unit-test work).
+# Named units-shell, not test-shell, because `bar::test` runs both units AND
+# integrations -- this REPL is specifically the unit-test environment.
+units-shell: require-bar
     #!/usr/bin/env bash
     set -e
     source "$DEVTOOLS_DIR/scripts/common.sh"

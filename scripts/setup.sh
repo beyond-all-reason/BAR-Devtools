@@ -1995,7 +1995,7 @@ cmd_init() {
     echo -e "    ${BOLD}just bar::launch${NC}              Launch the engine against your local checkout"
     echo -e "    ${BOLD}just services::up lobby${NC}       Launch bar-lobby and connect"
     echo -e "    ${BOLD}just bar::units${NC}               Run busted Lua unit tests"
-    echo -e "    ${BOLD}just bar::test-shell${NC}          Drop into an interactive busted shell"
+    echo -e "    ${BOLD}just bar::units-shell${NC}         Drop into an interactive busted shell"
     echo -e "    ${BOLD}just bar::check${NC}               EmmyLua type-check across the repo"
     echo -e "    ${BOLD}just bar::lint${NC}                luacheck (via lux)"
     echo -e "    ${BOLD}just bar::fmt${NC}                 stylua format"
