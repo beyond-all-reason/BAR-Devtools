@@ -14,6 +14,7 @@ load_repos_conf() {
     local file="$1"
     [ -f "$file" ] || return 0
     while IFS= read -r line || [ -n "$line" ]; do
+      line="${line%$'\r'}"
       line="${line%%#*}"
       line="$(echo "$line" | xargs 2>/dev/null || true)"
       [ -z "$line" ] && continue
