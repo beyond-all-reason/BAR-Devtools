@@ -76,8 +76,10 @@ bashrc_apply() {
 # `git push`. SSH_AUTH_SOCK must be set in the calling shell.
 op_ssh_verify() {
     local listing rc
-    listing="$(ssh-add -l 2>&1)"
-    rc=$?
+    # `if cmd; then ...; fi` for the substitution so set -e doesn't abort on
+    # ssh-add's non-zero exits (1 = no keys, 2 = no agent) -- those are the
+    # cases the rc==1/rc==2 branches below exist to diagnose.
+    if listing="$(ssh-add -l 2>&1)"; then rc=0; else rc=$?; fi
 
     if [ $rc -eq 2 ]; then
         err "Could not reach the SSH agent at \$SSH_AUTH_SOCK ($SSH_AUTH_SOCK)."
@@ -143,7 +145,9 @@ op_ssh_pin_protocol_ssh() {
 # WSL-only. Echoes the Windows %USERPROFILE% as a WSL path (e.g. /mnt/c/Users/keith).
 win_userprofile() {
     local raw
-    raw="$(cmd.exe /c 'echo %USERPROFILE%' 2>/dev/null | tr -d '\r\n')"
+    # || true so set -e + pipefail doesn't abort here when cmd.exe interop
+    # is missing -- the empty-$raw branch below is the intended diagnostic.
+    raw="$(cmd.exe /c 'echo %USERPROFILE%' 2>/dev/null | tr -d '\r\n')" || true
     [ -n "$raw" ] || { err "could not read Windows %USERPROFILE%"; return 1; }
     wslpath -u "$raw"
 }
