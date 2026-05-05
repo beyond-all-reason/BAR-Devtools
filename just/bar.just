@@ -153,8 +153,19 @@ units-shell: require-bar
     set -e
     source "$DEVTOOLS_DIR/scripts/common.sh"
     cd "$BAR_DIR"
-    ok "Entering lx test shell (busted is available)."
-    ok "Type 'exit' to return."
+    ok "Entering lx test shell (busted on PATH)."
+    echo ""
+    info "Filter to specific tests by tagging their description with #<tag>"
+    info "and running busted with -t <tag>. Example:"
+    echo ""
+    echo -e "  ${DIM}-- in some_spec.lua${NC}"
+    echo -e "  ${CYAN}it(\"computes attack range #focus\", function() ... end)${NC}"
+    echo ""
+    echo -e "  ${DIM}# in this shell${NC}"
+    echo -e "  ${CYAN}busted -t focus${NC}"
+    echo ""
+    info "Type 'exit' to return."
+    echo ""
     distrobox_exec_interactive lx --lua-version 5.1 shell --test --no-loader
 
 # Run headless integration tests (x86-64 only)
