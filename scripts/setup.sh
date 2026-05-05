@@ -1499,22 +1499,18 @@ prompt_ssh_setup_choice() {
   echo "  you'd like to set up an SSH key now (we'll run the actual setup"
   echo "  after the long steps, you don't have to babysit this prompt):"
   echo ""
-  echo "    1) op         1Password Desktop + agent bridge"
-  echo "    2) bitwarden  Bitwarden Desktop SSH agent  (stub, not yet implemented)"
-  echo "    3) keepassxc  KeePassXC SSH integration    (stub, not yet implemented)"
-  echo "    4) manual     Generate ~/.ssh/id_ed25519 + walk through GitHub"
-  echo "    5) skip       Don't configure now (clone over HTTPS; re-run later)"
+  echo "    1) op      1Password Desktop + agent bridge"
+  echo "    2) manual  Generate ~/.ssh/id_ed25519 + walk through GitHub"
+  echo "    3) skip    Don't configure now (clone over HTTPS; re-run later)"
   echo ""
   local ans choice=""
   while [ -z "$choice" ]; do
-    read -r -p "Choice [1-5]: " ans
+    read -r -p "Choice [1-3]: " ans
     case "${ans:-}" in
-      1|op)         choice="op" ;;
-      2|bitwarden)  choice="bitwarden" ;;
-      3|keepassxc)  choice="keepassxc" ;;
-      4|manual)     choice="manual" ;;
-      5|skip|"")    choice="skip" ;;
-      *)            echo "  Invalid choice: ${ans}" ;;
+      1|op)      choice="op" ;;
+      2|manual)  choice="manual" ;;
+      3|skip|"") choice="skip" ;;
+      *)         echo "  Invalid choice: ${ans}" ;;
     esac
   done
   echo "BAR_SSH_SETUP=$choice" >> "$env_file"
@@ -1529,10 +1525,8 @@ run_ssh_setup_choice() {
   local choice
   choice="$(grep -E "^BAR_SSH_SETUP=" "$env_file" 2>/dev/null | tail -1 | cut -d= -f2-)"
   case "${choice:-skip}" in
-    op)         bash "$DEVTOOLS_DIR/scripts/ssh/setup-op-ssh.sh" || warn "ssh::op-setup failed; you can re-run it with 'just ssh::op-setup'." ;;
-    manual)     bash "$DEVTOOLS_DIR/scripts/ssh/setup-manual-ssh.sh" || warn "ssh::manual-setup failed; you can re-run it with 'just ssh::manual-setup'." ;;
-    bitwarden)  bash "$DEVTOOLS_DIR/scripts/ssh/setup-bitwarden-ssh.sh" || true ;;
-    keepassxc)  bash "$DEVTOOLS_DIR/scripts/ssh/setup-keepassxc-ssh.sh" || true ;;
+    op)              bash "$DEVTOOLS_DIR/scripts/ssh/setup-op-ssh.sh"     || warn "ssh::op-setup failed; you can re-run it with 'just ssh::op-setup'." ;;
+    manual)          bash "$DEVTOOLS_DIR/scripts/ssh/setup-manual-ssh.sh" || warn "ssh::manual-setup failed; you can re-run it with 'just ssh::manual-setup'." ;;
     existing|skip|*) : ;;
   esac
 }

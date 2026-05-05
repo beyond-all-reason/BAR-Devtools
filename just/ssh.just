@@ -16,20 +16,6 @@ manual-setup *args:
     source "$DEVTOOLS_DIR/scripts/common.sh"
     bash "$DEVTOOLS_DIR/scripts/ssh/setup-manual-ssh.sh" {{args}}
 
-# Bitwarden Desktop SSH agent (stub -- not yet implemented)
-bitwarden-setup *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    source "$DEVTOOLS_DIR/scripts/common.sh"
-    bash "$DEVTOOLS_DIR/scripts/ssh/setup-bitwarden-ssh.sh" {{args}}
-
-# KeePassXC SSH integration (stub -- not yet implemented)
-keepassxc-setup *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    source "$DEVTOOLS_DIR/scripts/common.sh"
-    bash "$DEVTOOLS_DIR/scripts/ssh/setup-keepassxc-ssh.sh" {{args}}
-
 # Just the WSL bridge half (assumes 1Password Desktop is already on Windows)
 wsl-bridge:
     #!/usr/bin/env bash
