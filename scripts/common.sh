@@ -2,14 +2,18 @@
 # Shared helpers for BAR-Devtools scripts.
 # Source this file; it only defines functions and variables.
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-DIM='\033[2m'
-NC='\033[0m'
+# $'...' ANSI-C quoting embeds real ESC (0x1b) bytes so the variables work
+# in `cat <<EOF`, `printf "%s"`, and `echo` without -e. Keeping `echo -e`
+# in the helpers below is still fine — there's nothing left for -e to
+# interpret in these strings, but the flag is harmless.
+RED=$'\033[0;31m'
+GREEN=$'\033[0;32m'
+YELLOW=$'\033[1;33m'
+BLUE=$'\033[0;34m'
+CYAN=$'\033[0;36m'
+BOLD=$'\033[1m'
+DIM=$'\033[2m'
+NC=$'\033[0m'
 
 info()  { echo -e "${BLUE}[info]${NC}  $*"; }
 ok()    { echo -e "${GREEN}[ok]${NC}    $*"; }
