@@ -340,7 +340,9 @@ stop_wsl() {
     # Windows taskkill /F is synchronous-ish but the CIM cache can lag.
     sleep 0.3
     local survivors
-    survivors="$(powershell.exe -NoProfile -Command "$pid_cmd" 2>/dev/null | tr -d '\r' | grep -v '^$')"
+    # awk 'NF' (not grep -v '^$') so the no-survivors case -- the success
+    # case -- exits 0. grep returns 1 on no matches, which trips set -e.
+    survivors="$(powershell.exe -NoProfile -Command "$pid_cmd" 2>/dev/null | tr -d '\r' | awk 'NF')"
     if [ -n "$survivors" ]; then
       warn "bar_launch python.exe survivors after kill:"
       while IFS= read -r pid; do
