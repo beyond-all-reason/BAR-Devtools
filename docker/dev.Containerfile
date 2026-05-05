@@ -47,27 +47,21 @@ RUN ARCH=$(uname -m) \
     && rm /tmp/stylua.zip
 
 # emmylua_ls and emmylua_check are distrobox-exported by `just setup::editor`,
-# so the host-side wrappers always use this exact version.
+# so the host-side wrappers always use this exact version. Direct download
+# (no GitHub API hop) — `/releases/<tag>` isn't a valid endpoint, only
+# `/releases/tags/<tag>` is, and unauthenticated API requests rate-limit
+# to 60/hour anyway. The release-asset CDN has neither problem.
 ARG EMMYLUA_VERSION=0.22.0
 RUN ARCH=$(uname -m) \
     && case "$ARCH" in \
-         x86_64) \
-           LS_ASSET="emmylua_ls-linux-x64.tar.gz" \
-           CHECK_ASSET="emmylua_check-linux-x64.tar.gz" \
-           ;; \
-         aarch64) \
-           LS_ASSET="emmylua_ls-linux-arm64-glibc.2.17.tar.gz" \
-           CHECK_ASSET="emmylua_check-linux-arm64-glibc.2.17.tar.gz" \
-           ;; \
+         x86_64)  LS_ASSET="emmylua_ls-linux-x64.tar.gz";              CHECK_ASSET="emmylua_check-linux-x64.tar.gz" ;; \
+         aarch64) LS_ASSET="emmylua_ls-linux-arm64-glibc.2.17.tar.gz"; CHECK_ASSET="emmylua_check-linux-arm64-glibc.2.17.tar.gz" ;; \
          *) echo "unsupported arch for EmmyLua binaries: $ARCH" >&2; exit 1;; \
        esac \
-    && JSON=$(curl -fsSL "https://api.github.com/repos/EmmyLuaLs/emmylua-analyzer-rust/releases/${EMMYLUA_VERSION}") \
-    && LS_URL=$(echo "$JSON" | jq -r --arg n "$LS_ASSET" '.assets[] | select(.name == $n) | .browser_download_url') \
-    && CHECK_URL=$(echo "$JSON" | jq -r --arg n "$CHECK_ASSET" '.assets[] | select(.name == $n) | .browser_download_url') \
-    && curl -fsSL "$LS_URL" | tar xz -C /usr/local/bin \
-    && chmod +x /usr/local/bin/emmylua_ls \
-    && curl -fsSL "$CHECK_URL" | tar xz -C /usr/local/bin \
-    && chmod +x /usr/local/bin/emmylua_check
+    && BASE="https://github.com/EmmyLuaLs/emmylua-analyzer-rust/releases/download/${EMMYLUA_VERSION}" \
+    && curl -fsSL "$BASE/$LS_ASSET"    | tar xz -C /usr/local/bin \
+    && curl -fsSL "$BASE/$CHECK_ASSET" | tar xz -C /usr/local/bin \
+    && chmod +x /usr/local/bin/emmylua_ls /usr/local/bin/emmylua_check
 
 # Watchman: Meta publishes a current Fedora RPM but does NOT run an apt
 # repo, and explicitly warns against the distro-shipped 4.9.0. Inside the
