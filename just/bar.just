@@ -42,19 +42,13 @@ require-luals:
 launch *FLAGS:
     @bash "$DEVTOOLS_DIR/scripts/launch.sh" {{FLAGS}}
 
-# Cold-copy WSL Devtools sources to the Windows data dir without launching.
-# Useful when you've edited Lua and want the patched copy in place before
-# poking the engine some other way. Same op `just bar::launch` runs first.
-# WSL2-only.
-sync:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    source "$DEVTOOLS_DIR/scripts/common.sh"
-    if ! grep -qi microsoft /proc/version 2>/dev/null; then
-      err "sync is WSL2-only (Linux uses symlinks; no copy needed)."
-      exit 1
-    fi
-    bash "$DEVTOOLS_DIR/scripts/sync.sh" once
+# Stop BAR processes started by `just bar::launch` (and any standalone BAR
+# launcher / spring.exe still running). Idempotent. Useful before
+# `just engine::build` so the rsync that mirrors new DLLs doesn't hit
+# Windows file locks. Does NOT stop the WSL sync daemon -- that's
+# `bash scripts/sync.sh stop` if you want to.
+stop:
+    @BAR_LAUNCH_MODE=stop bash "$DEVTOOLS_DIR/scripts/launch.sh"
 
 # Regenerate the Windows-side launcher shim ($BAR_DEVSYNC_DIR/bin/bar-launch.cmd)
 # from the current BAR_DEVSYNC_DIR / venv-python paths. Use this after editing
@@ -70,8 +64,8 @@ regen-shim:
     fi
     regenerate_bar_launch_cmd_shim
 
-# Tail the cold-copy sync log. Pass tail flags after `--`,
-# e.g. `just bar::sync-logs -- -f -n 200`. WSL2-only.
+# Tail the WSL sync daemon log (cold-copy + watcher). Follows by default.
+# Pass tail flags after `--`, e.g. `just bar::sync-logs -- -n 200`. WSL2-only.
 sync-logs *TAIL_FLAGS:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -80,9 +74,21 @@ sync-logs *TAIL_FLAGS:
       err "sync-logs is WSL2-only (Linux uses symlinks; nothing to log)."
       exit 1
     fi
+    if [ -z "${BAR_DEVSYNC_DIR:-}" ]; then
+      err "BAR_DEVSYNC_DIR not set. Run 'just setup::init' on WSL2 first."
+      exit 1
+    fi
+    logfile="$BAR_DEVSYNC_DIR/.bar-launch/sync.log"
+    if [ ! -f "$logfile" ]; then
+      err "No sync log at $logfile yet -- has 'just bar::launch' or 'sync.sh start' run?"
+      exit 1
+    fi
+    info "Tailing $logfile (Ctrl-C to stop)"
+    # `just bar::sync-logs -- -n 200` forwards the `--` into TAIL_FLAGS; drop it
+    # so tail doesn't read `-n`/`200` as filenames after the option terminator.
     set -- {{TAIL_FLAGS}}
     [ "${1:-}" = "--" ] && shift
-    exec bash "$DEVTOOLS_DIR/scripts/sync.sh" logs "$@"
+    exec tail -F "$@" "$logfile"
 
 # Tail the engine's infolog from the most recent BAR run. The engine writes
 # this itself -- we don't capture launch.sh output, since `bar-launch` exits
@@ -108,6 +114,13 @@ log *TAIL_FLAGS:
     set -- {{TAIL_FLAGS}}
     [ "${1:-}" = "--" ] && shift
     exec tail -F "$@" "$logfile"
+
+# Alias: `just bar::logs` (plural) does the same thing as `bar::log`.
+# Both `log` and `logs` are common muscle memory; recipe aliases would be
+# cleaner but `just`'s `alias` directive only works at the root justfile,
+# not inside modules, so we delegate explicitly.
+logs *TAIL_FLAGS:
+    @just bar::log {{TAIL_FLAGS}}
 
 # Type-check BAR Lua code (LuaLS diagnostics)
 check *args: require-bar require-luals

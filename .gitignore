@@ -23,4 +23,8 @@ tasks/
 .devtools/
 *.log
 bar-lua-codemod/target/
-.claude
+.claude/settings.local.json
+.claude/projects/
+.claude/todos/
+.claude/cache/
+__pycache__/

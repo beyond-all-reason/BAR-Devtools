@@ -412,15 +412,8 @@ cmd_install_deps() {
     done
 
     info "Missing (via package manager): ${apt_missing[*]}"
-    info "Will run: ${install_cmd}${packages}"
+    info "Running: ${install_cmd}${packages}"
     echo ""
-
-    read -rp "Install now? [Y/n] " confirm
-    if [[ "$confirm" =~ ^[Nn]$ ]]; then
-      echo "Skipped. Install manually and retry."
-      return 1
-    fi
-
     $install_cmd $packages
     echo ""
   fi
@@ -957,9 +950,13 @@ ensure_bar_launch_python_persisted() {
 }
 
 # Bootstrap a Windows venv at <BAR_DEVSYNC_DIR>/.venv and install
-# bar_debug_launcher (editable) plus watchdog (sync daemon dep) into it.
-# Idempotent: skips if the venv's bar-launch entry point already exists and
-# the marker is newer than the launcher's pyproject.toml.
+# bar_debug_launcher (editable) into it. Idempotent: skips if the venv's
+# bar-launch entry point already exists and the marker is newer than the
+# launcher's pyproject.toml.
+#
+# (watchdog used to be installed here too, back when the sync daemon ran
+# on the Windows side. It now runs on the WSL side via python3-watchdog
+# from apt; see ensure_sync_daemon_deps_wsl below.)
 #
 # Why a Windows venv specifically: the Recoil engine must run as a native
 # Windows process, and the bar-launch CLI invokes it via subprocess. Running
@@ -1007,7 +1004,7 @@ ensure_bar_launch_venv_windows() {
     return 1
   fi
 
-  step "Installing bar_debug_launcher + watchdog into Windows venv"
+  step "Installing bar_debug_launcher into Windows venv"
   # pip install on the Windows side. UNC path to the WSL repo works for an
   # editable install -- pip writes a .pth file, and import-time resolution
   # crosses Plan9 once on launcher startup. A minor cost for a tool that
@@ -1016,8 +1013,8 @@ ensure_bar_launch_venv_windows() {
   repo_unc="$(_to_windows_path "$repo_path")"
   "$venv_python_wsl" -m pip install --upgrade pip --quiet \
     || warn "pip self-upgrade failed; continuing"
-  "$venv_python_wsl" -m pip install --quiet --editable "$repo_unc" watchdog \
-    || { err "pip install bar_debug_launcher + watchdog failed"; return 1; }
+  "$venv_python_wsl" -m pip install --quiet --editable "$repo_unc" \
+    || { err "pip install bar_debug_launcher failed"; return 1; }
 
   ok "Windows venv ready: $venv_wsl"
   export BAR_LAUNCH_VENV="$venv_wsl"
@@ -1065,6 +1062,162 @@ EOF
   ok "Generated $shim_wsl"
 }
 
+# Inspect the current state, list ONLY what's actually missing, then
+# pre-cache sudo and continue. No Y/n: running setup::init is itself the
+# consent. Press Enter is the user's chance to read what's about to
+# happen; Ctrl-C aborts. When nothing is missing the splash is skipped
+# entirely.
+_setup_consent_splash() {
+  is_wsl || return 0
+
+  local need_apt=() cur_limit need_sysctl=0 need_distrobox_setup=0 need_distrobox_install=0
+  python3 -c 'import watchdog' &>/dev/null || need_apt+=("python3-watchdog")
+  command -v inotifywait &>/dev/null     || need_apt+=("inotify-tools")
+  command -v rsync &>/dev/null           || need_apt+=("rsync")
+
+  cur_limit="$(cat /proc/sys/fs/inotify/max_user_watches 2>/dev/null || echo 0)"
+  [ "$cur_limit" -lt 131072 ] && need_sysctl=1
+
+  if ! command -v distrobox &>/dev/null; then
+    need_distrobox_install=1
+  elif [ -z "${DEVTOOLS_DISTROBOX:-}" ]; then
+    need_distrobox_setup=1
+  fi
+
+  if [ "${#need_apt[@]}" -eq 0 ] && [ "$need_sysctl" = "0" ] \
+     && [ "$need_distrobox_install" = "0" ] && [ "$need_distrobox_setup" = "0" ]; then
+    info "System deps already in place; no install steps needed."
+    return 0
+  fi
+
+  echo ""
+  echo -e "${BOLD}=== System changes setup::init will make ===${NC}"
+  echo ""
+
+  if [ "${#need_apt[@]}" -gt 0 ]; then
+    echo "  apt install (sudo):"
+    local pkg
+    for pkg in "${need_apt[@]}"; do
+      echo "    $pkg"
+    done
+    echo ""
+  fi
+
+  if [ "$need_sysctl" = "1" ]; then
+    echo "  sysctl drop-in (sudo, /etc/sysctl.d/99-bar-devtools.conf):"
+    echo "    fs.inotify.max_user_watches=524288  (currently $cur_limit)"
+    echo ""
+  fi
+
+  if [ "$need_distrobox_install" = "1" ]; then
+    echo "  distrobox install (sudo apt):"
+    echo "    distrobox          dev toolchain habitat"
+    echo ""
+  fi
+
+  if [ "$need_distrobox_setup" = "1" ]; then
+    echo "  distrobox container (~3-5min, network):"
+    echo "    bar-dev    per docker/dev.Containerfile; toolchain habitat."
+    echo "               Toolchain (emmylua_ls, clangd, stylua, lux, watchman)"
+    echo "               exposed on host PATH via distrobox-export."
+    echo ""
+  fi
+
+  echo "  Press Enter to proceed, Ctrl-C to abort."
+  read -r _
+  sudo -v 2>/dev/null || warn "sudo -v could not pre-cache credentials; subsequent steps may re-prompt."
+}
+
+# Verify the WSL-side sync daemon's deps are in place:
+#   1. python3-watchdog (apt) -- the Observer's inotify backend.
+#   2. fs.inotify.max_user_watches large enough for the BAR tree (~100k+
+#      files including .git/, .lux/, vendored Lua). Distro default is 8192.
+#   3. watchman (Meta's tree-state tracker) -- used by sync.py for fast
+#      incremental cold-copy. Without it, every daemon start re-rsyncs
+#      the whole tree (~80s on /mnt/c). With it, only files changed since
+#      the last sync are touched (~1s typical).
+# Each of these requires sudo, so we don't install silently -- we report
+# what's missing and surface the exact commands. Idempotent and safe to
+# re-run; quiet when everything's already in place.
+ensure_sync_daemon_deps_wsl() {
+  is_wsl || return 0
+
+  step "Checking WSL sync daemon deps"
+
+  local missing=0
+
+  if python3 -c 'import watchdog' &>/dev/null; then
+    info "python3-watchdog: present"
+  else
+    step "  installing python3-watchdog (apt)"
+    sudo apt-get install -y python3-watchdog >/dev/null 2>&1 \
+      && ok "python3-watchdog installed" \
+      || { err "python3-watchdog install failed"; missing=1; }
+  fi
+
+  if command -v inotifywait &>/dev/null; then
+    info "inotify-tools: present"
+  else
+    step "  installing inotify-tools (apt)"
+    sudo apt-get install -y inotify-tools >/dev/null 2>&1 \
+      && ok "inotify-tools installed" \
+      || warn "inotify-tools install failed"
+  fi
+
+  if command -v rsync &>/dev/null; then
+    info "rsync: present"
+  else
+    step "  installing rsync (apt)"
+    sudo apt-get install -y rsync >/dev/null 2>&1 \
+      && ok "rsync installed" \
+      || { err "rsync install failed"; missing=1; }
+  fi
+
+  # 524288 is the canonical bump everyone (watchdog, dropbox, jetbrains)
+  # converges on; the kernel default of 8192 is below BAR's directory count.
+  local cur_limit min_limit=131072
+  cur_limit="$(cat /proc/sys/fs/inotify/max_user_watches 2>/dev/null || echo 0)"
+  if [ "$cur_limit" -ge "$min_limit" ]; then
+    info "fs.inotify.max_user_watches=$cur_limit (≥ $min_limit)"
+  else
+    step "  bumping fs.inotify.max_user_watches → 524288 (sysctl drop-in)"
+    if echo 'fs.inotify.max_user_watches=524288' \
+         | sudo tee /etc/sysctl.d/99-bar-devtools.conf >/dev/null \
+       && sudo sysctl -p /etc/sysctl.d/99-bar-devtools.conf >/dev/null 2>&1; then
+      ok "fs.inotify.max_user_watches set to 524288"
+    else
+      warn "Could not write /etc/sysctl.d/99-bar-devtools.conf"
+      missing=1
+    fi
+  fi
+
+  ensure_watchman_wsl || missing=1
+
+  if [ "$missing" = "1" ]; then
+    warn "Some sync deps are still missing; sync daemon may not start cleanly."
+    return 1
+  fi
+  ok "WSL sync daemon deps OK"
+  return 0
+}
+
+# Wire watchman through to the host PATH via distrobox-export. Watchman
+# is installed in the bar-dev container by dev.Containerfile; the
+# wrapper at ~/.local/bin/watchman runs `distrobox enter -- watchman`
+# so sync.py calls `watchman -j` like any host binary.
+ensure_watchman_wsl() {
+  if command -v watchman &>/dev/null; then
+    info "watchman: present ($(watchman --version 2>/dev/null | head -1))"
+    return 0
+  fi
+
+  step "exporting watchman from $DEVTOOLS_DISTROBOX → ~/.local/bin"
+  mkdir -p "$HOME/.local/bin"
+  distrobox enter "$DEVTOOLS_DISTROBOX" -- \
+    distrobox-export --bin /usr/bin/watchman --export-path "$HOME/.local/bin" >/dev/null
+  ok "watchman wrapper exported"
+}
+
 DEV_IMAGE="bar-dev"
 DEV_BOX="bar-dev"
 
@@ -1087,13 +1240,10 @@ cmd_setup_distrobox() {
   ok "Image built: $DEV_IMAGE"
   echo ""
 
-  if distrobox list 2>/dev/null | grep -q "$DEV_BOX" || $runtime ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$DEV_BOX"; then
-    warn "Distrobox '$DEV_BOX' already exists. Recreating..."
-    distrobox stop "$DEV_BOX" 2>/dev/null || true
-    distrobox rm -f "$DEV_BOX" 2>/dev/null \
-      || $runtime rm -f "$DEV_BOX" 2>/dev/null \
-      || true
-  fi
+  distrobox stop --yes "$DEV_BOX" >/dev/null 2>&1 || true
+  distrobox rm -f --yes "$DEV_BOX" >/dev/null 2>&1 \
+    || $runtime rm -f "$DEV_BOX" >/dev/null 2>&1 \
+    || true
 
   step "Creating distrobox '$DEV_BOX'..."
   local image_ref="$DEV_IMAGE"
@@ -1270,6 +1420,47 @@ write_features_env() {
   fi
 }
 
+# Persist ALLOW_SPRINGSETTINGS_MOD=<0|1> to .env.
+write_springsettings_optin_env() {
+  local choice="$1"   # 1 to opt in, 0 to opt out
+  local env_file="$DEVTOOLS_DIR/.env"
+  touch "$env_file"
+  if grep -q "^ALLOW_SPRINGSETTINGS_MOD=" "$env_file"; then
+    sed -i "s|^ALLOW_SPRINGSETTINGS_MOD=.*|ALLOW_SPRINGSETTINGS_MOD=${choice}|" "$env_file"
+    info "Updated ALLOW_SPRINGSETTINGS_MOD in .env: ${choice}"
+  else
+    echo "ALLOW_SPRINGSETTINGS_MOD=${choice}" >> "$env_file"
+    ok "Added ALLOW_SPRINGSETTINGS_MOD=${choice} to .env"
+  fi
+}
+
+# Ask the user once whether bar::launch is allowed to modify the engine's
+# springsettings.cfg in service of its own --debug-* flags. Default no:
+# the cfg is the user's territory and most contributors will never use
+# the debug flags. Idempotent -- if the key is already set in .env, this
+# is a no-op so re-running setup::init doesn't re-prompt.
+prompt_springsettings_opt_in() {
+  local env_file="$DEVTOOLS_DIR/.env"
+  if [ -f "$env_file" ] && grep -q "^ALLOW_SPRINGSETTINGS_MOD=" "$env_file"; then
+    info "ALLOW_SPRINGSETTINGS_MOD already set in .env -- not re-prompting"
+    return 0
+  fi
+
+  echo ""
+  echo -e "${BOLD}springsettings.cfg modification opt-in${NC}"
+  echo "  Some bar::launch flags (currently --debug-gl) need to write keys to"
+  echo "  the engine's springsettings.cfg. Without your permission this"
+  echo "  launcher will refuse to touch the file -- the flags will warn and"
+  echo "  no-op. The keys we manage are listed in scripts/launch.sh under"
+  echo "  _MANAGED_SPRINGSETTINGS; nothing else in the cfg is read or written."
+  echo ""
+  read -r -p "Allow bar::launch to modify springsettings.cfg for its managed flags? [y/N] " ans
+  case "${ans:-}" in
+    y|Y|yes|YES) write_springsettings_optin_env 1 ;;
+    *)           write_springsettings_optin_env 0 ;;
+  esac
+}
+
 # Clone only the repos that map to the selected features.
 clone_for_features() {
   local features="$1"
@@ -1319,40 +1510,20 @@ cmd_init() {
   echo ""
 
   ensure_wsl_setup
+  _setup_consent_splash
 
-  step "1/6  Checking & installing dependencies"
-  echo ""
-  if check_git &>/dev/null && check_docker &>/dev/null; then
-    ok "Core dependencies (git, docker) already installed."
-  else
-    cmd_install_deps || { err "Dependency installation failed. Fix and retry."; exit 1; }
-  fi
-  ensure_windows_python
-  if is_wsl; then
-    ensure_bar_devsync_dir || warn "Skipping BAR sync dir setup (set BAR_DEVSYNC_DIR in .env to retry)."
-  fi
-  echo ""
-
-  step "2/6  Dev environment (distrobox)"
-  echo ""
-  if [ -n "${DEVTOOLS_DISTROBOX:-}" ]; then
-    ok "Distrobox already configured: $DEVTOOLS_DISTROBOX"
-  elif command -v distrobox &>/dev/null; then
-    read -rp "Set up a distrobox dev environment? (recommended) [Y/n] " setup_box
-    if [[ ! "$setup_box" =~ ^[Nn]$ ]]; then
-      cmd_setup_distrobox
-    fi
-  else
-    info "distrobox not installed -- skipping dev environment setup."
-    info "Install distrobox and run 'just setup::distrobox' later for the full toolchain."
-  fi
-  echo ""
-
-  step "3/6  Component selection & cloning"
-  echo ""
+  # ===== Front-load all interactive decisions =====
+  # Everything below is one big batch of prompts so the user can answer
+  # them up front and walk away while the long-running steps roll.
   if [ ! -f "$REPOS_CONF" ]; then
     err "repos.conf not found at: $REPOS_CONF"
     exit 1
+  fi
+
+  step "0/7  Configuration"
+  echo ""
+  if is_wsl; then
+    ensure_bar_devsync_dir || warn "Skipping BAR sync dir setup (set BAR_DEVSYNC_DIR in .env to retry)."
   fi
 
   pick_features
@@ -1362,11 +1533,42 @@ cmd_init() {
     return 0
   fi
   write_features_env "$features"
+
+  # Capture the symlink decision now; the actual symlinking happens later
+  # once the repos exist on disk.
+  local game_dir do_link=""
+  game_dir="$(detect_game_dir 2>/dev/null)" || true
+  if [ -n "$game_dir" ]; then
+    echo ""
+    info "Game directory detected: $game_dir"
+    warn "Symlinking will replace any existing engine/chobby/bar dirs there."
+    read -rp "Symlink all selected components into the game dir after build? [y/N] " do_link
+  fi
+
+  prompt_springsettings_opt_in
+  echo ""
+
+  step "1/7  Checking & installing dependencies"
+  echo ""
+  if check_git &>/dev/null && check_docker &>/dev/null; then
+    ok "Core dependencies (git, docker) already installed."
+  else
+    cmd_install_deps || { err "Dependency installation failed. Fix and retry."; exit 1; }
+  fi
+  ensure_windows_python
+  echo ""
+
+  step "2/7  Dev environment (distrobox -- required)"
+  echo ""
+  cmd_setup_distrobox
+  echo ""
+
+  step "3/7  Cloning repositories"
   echo ""
   clone_for_features "$features"
   echo ""
 
-  step "4/6  Building Docker images"
+  step "4/7  Building Docker images"
   echo ""
   if features_include "$features" teiserver; then
     install_dockerignore
@@ -1379,7 +1581,7 @@ cmd_init() {
   fi
   echo ""
 
-  step "5/6  Engine build"
+  step "5/7  Engine build"
   echo ""
   if features_include "$features" recoil; then
     if [ -d "$DEVTOOLS_DIR/RecoilEngine/docker-build-v2" ]; then
@@ -1402,38 +1604,19 @@ cmd_init() {
 
   step "6/7  Symlinks to game directory"
   echo ""
-  local game_dir
-  game_dir="$(detect_game_dir 2>/dev/null)" || true
   if [ -z "$game_dir" ]; then
     info "No game directory detected. Set BAR_GAME_DIR to enable linking."
-  else
-    local available=()
+  elif [[ "$do_link" =~ ^[Yy]$ ]]; then
+    local available=() name
     features_include "$features" recoil && [ -d "$DEVTOOLS_DIR/RecoilEngine" ] && available+=("engine")
     features_include "$features" chobby && [ -d "$DEVTOOLS_DIR/BYAR-Chobby" ]    && available+=("chobby")
     features_include "$features" bar    && [ -d "$DEVTOOLS_DIR/Beyond-All-Reason" ] && available+=("bar")
-
-    if [ "${#available[@]}" -gt 0 ]; then
-      echo "  Repos to symlink into $game_dir:"
-      local name
-      for name in "${available[@]}"; do
-        case "$name" in
-          engine) echo -e "    ${BOLD}engine${NC}  -> $game_dir/engine/local-build/" ;;
-          chobby) echo -e "    ${BOLD}chobby${NC}  -> $game_dir/games/BYAR-Chobby/" ;;
-          bar)    echo -e "    ${BOLD}bar${NC}     -> $game_dir/games/Beyond-All-Reason/" ;;
-        esac
-      done
-      echo ""
-      warn "This will replace any existing directories at these paths with symlinks."
-      read -rp "Symlink all? [y/N] " do_link
-      if [[ "$do_link" =~ ^[Yy]$ ]]; then
-        BAR_GAME_DIR="$game_dir"
-        for name in "${available[@]}"; do
-          cmd_link "$name"
-        done
-      fi
-    else
-      info "No linkable repos for the selected features."
-    fi
+    BAR_GAME_DIR="$game_dir"
+    for name in "${available[@]}"; do
+      cmd_link "$name"
+    done
+  else
+    info "Skipping symlinks (declined at configuration step)."
   fi
   echo ""
 
@@ -1444,6 +1627,7 @@ cmd_init() {
     # talks to the Windows engine binary directly. The Linux pipx venv
     # would force WSL→Windows IPC for every engine spawn.
     ensure_bar_launch_venv_windows && regenerate_bar_launch_cmd_shim
+    ensure_sync_daemon_deps_wsl
   else
     cmd_setup_bar_launch
   fi

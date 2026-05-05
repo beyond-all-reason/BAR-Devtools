@@ -86,7 +86,7 @@ run_linux() {
   game_dir="$(detect_game_dir 2>/dev/null)" || true
   if [ -n "$game_dir" ]; then
     ensure_devmode_marker "$game_dir"
-    _apply_debug_gl_if_requested "$game_dir/springsettings.cfg" "${user_args[@]}"
+    _apply_managed_springsettings "$game_dir/springsettings.cfg" "${user_args[@]}"
     if [ -e "$game_dir/engine/local-build" ] && ! _has_flag --engine "${user_args[@]}"; then
       injected+=(--engine local-build)
     fi
@@ -130,26 +130,91 @@ _strip_flag() {
   done
 }
 
-# If --debug-gl is in the user's args, set DebugGL=1 and LogFlush=1 in the
-# right springsettings.cfg before launch. The engine rewrites that cfg on
-# graceful shutdown (and silently strips keys it doesn't normalise on the
-# round-trip), so we re-apply every launch instead of trusting persistence.
-# LogFlush=1 ensures driver-callback messages aren't lost if the engine
-# crashes before the buffered writer flushes -- exactly the case we want
-# logging for. springsettings_set is sourced from setup.sh.
-_apply_debug_gl_if_requested() {
+# Whitelist of springsettings.cfg keys this launcher manages on behalf of
+# its own --flag opts. One row per (flag, key) pair:
+#   <bar-launch-flag>  <SpringSettingsKey>  <on_value>  <off_value>
+#
+# This is the *only* place we touch springsettings.cfg programmatically;
+# every launch resets every key in this table to either its on_value
+# (flag present in args) or its off_value (flag absent), so a prior
+# launch's settings cannot leak into the current one. Adding a new
+# debug-knob flag = adding rows here, nothing else.
+#
+# The cfg is otherwise managed by the engine and the user; keys we don't
+# list here are never read or written by us.
+_MANAGED_SPRINGSETTINGS=(
+  "--debug-gl  DebugGL   1  0"
+  "--debug-gl  LogFlush  1  0"
+)
+
+# Reset every managed key to the value matching the current arg set. Each
+# row in _MANAGED_SPRINGSETTINGS is applied independently; flags can share
+# keys (last-write wins per row order) but in practice each key has one
+# owning flag.
+#
+# Gated on ALLOW_SPRINGSETTINGS_MOD (1/true/yes). Default off: we will
+# never touch the user's springsettings.cfg unless they explicitly opted
+# in during `just setup::init`. If a managed flag was passed without the
+# opt-in, we surface a single-line warning per flag so the user knows the
+# flag was ignored and how to enable it -- but we do not silently apply.
+_apply_managed_springsettings() {
   local cfg="$1"; shift
-  if _has_flag --debug-gl "$@"; then
-    if [ -z "$cfg" ]; then
-      warn "--debug-gl requested but no springsettings.cfg path resolved; skipping"
+
+  local opt_in="${ALLOW_SPRINGSETTINGS_MOD:-0}"
+  case "$opt_in" in
+    1|true|TRUE|yes|YES) ;;
+    *)
+      local entry flag _rest seen=()
+      for entry in "${_MANAGED_SPRINGSETTINGS[@]}"; do
+        read -r flag _rest <<<"$entry"
+        if _has_flag "$flag" "$@"; then
+          # Each flag may own multiple keys; warn once per flag.
+          local already=0 s
+          for s in "${seen[@]}"; do [ "$s" = "$flag" ] && already=1 && break; done
+          if [ "$already" = "0" ]; then
+            warn "$flag was ignored: ALLOW_SPRINGSETTINGS_MOD is not enabled"
+            info "  This launcher does not modify springsettings.cfg by default."
+            info "  To enable: re-run 'just setup::init' and opt in, or set"
+            info "    ALLOW_SPRINGSETTINGS_MOD=1"
+            info "  in $DEVTOOLS_DIR/.env"
+            seen+=("$flag")
+          fi
+        fi
+      done
       return 0
-    fi
-    info "--debug-gl: setting DebugGL=1 LogFlush=1 in $cfg"
-    springsettings_set "$cfg" DebugGL 1 \
-      || warn "Could not set DebugGL=1; OpenGL debug callback will stay off."
-    springsettings_set "$cfg" LogFlush 1 \
-      || warn "Could not set LogFlush=1; log buffering may drop driver messages on crash."
+      ;;
+  esac
+
+  if [ -z "$cfg" ]; then
+    # Surface a warning per flag the user did request, since we couldn't
+    # honor it. Keys without a requesting flag stay silent.
+    local entry flag _rest
+    for entry in "${_MANAGED_SPRINGSETTINGS[@]}"; do
+      read -r flag _rest <<<"$entry"
+      if _has_flag "$flag" "$@"; then
+        warn "$flag requested but no springsettings.cfg path resolved; skipping"
+      fi
+    done
+    return 0
   fi
+
+  # Log once per flag that's actually on (not once per key it owns).
+  local -A logged_on=()
+  local entry flag key on_v off_v
+  for entry in "${_MANAGED_SPRINGSETTINGS[@]}"; do
+    read -r flag key on_v off_v <<<"$entry"
+    if _has_flag "$flag" "$@"; then
+      if [ -z "${logged_on[$flag]:-}" ]; then
+        info "$flag: applying managed springsettings in $cfg"
+        logged_on[$flag]=1
+      fi
+      springsettings_set "$cfg" "$key" "$on_v" \
+        || warn "Could not set $key=$on_v (override for $flag)"
+    else
+      # Silent reset to off_value so a prior on-launch doesn't carry over.
+      springsettings_set "$cfg" "$key" "$off_v" >/dev/null 2>&1 || true
+    fi
+  done
 }
 
 run_wsl() {
@@ -159,7 +224,7 @@ run_wsl() {
   fi
 
   ensure_devmode_marker "$BAR_DEVSYNC_DIR"
-  _apply_debug_gl_if_requested "$BAR_DEVSYNC_DIR/springsettings.cfg" "$@"
+  _apply_managed_springsettings "$BAR_DEVSYNC_DIR/springsettings.cfg" "$@"
 
   # Strip --debug-gl from forwarded args so the Windows-side launcher /
   # spring.exe doesn't try to interpret it.
@@ -177,14 +242,14 @@ run_wsl() {
     exit 1
   fi
 
-  # Cold-copy sources before launch. We previously ran a long-lived watcher,
-  # but ReadDirectoryChangesW over `\\wsl.localhost\` does not receive
-  # Linux-side inotify events (Plan 9 doesn't forward them) -- the watcher
-  # logged zero mirrored events across an entire dev session. The propagation
-  # contributors thought they were getting was actually from cold-copy at
-  # watcher startup. We made cold-copy the explicit, synchronous step here.
-  bash "$DEVTOOLS_DIR/scripts/sync.sh" once \
-    || { err "sync (cold copy) failed"; exit 1; }
+  # Start (or attach to) the WSL-side sync daemon. The watcher uses native
+  # inotify on the WSL ext4 source trees and writes through /mnt/c, so live
+  # edits propagate at ~100 ms median (probe arm iv). `--wait-ready` blocks
+  # until the daemon's initial cold copy is done and the watcher is up, so
+  # spring.exe doesn't see a half-mirrored data dir. If a daemon is already
+  # running this is a fast no-op.
+  bash "$DEVTOOLS_DIR/scripts/sync.sh" start --wait-ready \
+    || { err "sync daemon failed to start (see logs: just bar::sync-logs)"; exit 1; }
 
   local shim_win
   shim_win="$(wslpath -w "$shim_wsl")"
@@ -212,9 +277,120 @@ run_wsl() {
   return 0
 }
 
-if is_wsl; then
-  run_wsl "$@"
-  exit $?
-else
-  run_linux "$@"
-fi
+# Counterpart to run_wsl: kill the Windows-side processes a `bar::launch` run
+# spawned. Targets are exact image-name matches that match what the launcher
+# actually starts:
+#   spring.exe              the engine itself
+#   Beyond-All-Reason.exe   the prod BAR launcher (Electron). Only present if
+#                           the user double-clicked it; bar::launch does not
+#                           start it, but it locks the same engine DLLs, so
+#                           include it for the engine::build preflight.
+#   python.exe (filtered)   bar_debug_launcher's Windows venv interpreter.
+#                           Filter on command line so we don't kill unrelated
+#                           Pythons (pyenv, jupyter, system tools).
+# Each kill is best-effort: missing processes are not an error.
+stop_wsl() {
+  if ! command -v cmd.exe &>/dev/null; then
+    err "cmd.exe interop unavailable -- can't stop Windows processes from here"
+    return 1
+  fi
+
+  step "Stopping BAR processes"
+  local killed_any=0
+  local proc
+  for proc in spring.exe Beyond-All-Reason.exe; do
+    # taskkill /F: force; /T: kill child tree; /IM: by image name. Returns
+    # 128 ("not found") when nothing matches -- swallow that as success.
+    local out rc
+    out="$(cmd.exe /c "taskkill /F /IM $proc /T" 2>&1)" || rc=$? && rc=${rc:-0}
+    if [ "$rc" -eq 0 ]; then
+      info "  killed: $proc"
+      killed_any=1
+    fi
+  done
+
+  # bar_debug_launcher runs as `python.exe -m bar_launch ...`. Multiple
+  # python.exe instances may be live; identify ours by command line via
+  # PowerShell's CIM (wmic is deprecated, removed in Win11 24H2+). Then
+  # actually kill via `taskkill /F /T /PID`, not PowerShell's
+  # Stop-Process: an earlier version used Stop-Process and silently
+  # under-killed (PowerShell reported the PIDs without confirming the
+  # kill succeeded; processes survived). taskkill returns a clear exit
+  # code per PID and uses the same system call that successfully kills
+  # spring.exe above.
+  local pid_cmd='Get-CimInstance Win32_Process -Filter "Name='\''python.exe'\''" | Where-Object { $_.CommandLine -like "*bar_launch*" } | Select-Object -ExpandProperty ProcessId'
+  local pids
+  pids="$(powershell.exe -NoProfile -Command "$pid_cmd" 2>/dev/null | tr -d '\r')"
+  if [ -n "$pids" ]; then
+    local pid
+    while IFS= read -r pid; do
+      [ -z "$pid" ] && continue
+      local rc=0
+      cmd.exe /c "taskkill /F /T /PID $pid" >/dev/null 2>&1 || rc=$?
+      if [ "$rc" = "0" ]; then
+        info "  killed: python.exe (PID $pid, bar_launch)"
+        killed_any=1
+      else
+        warn "  taskkill /PID $pid (bar_launch) returned $rc -- process may still be running"
+      fi
+    done <<<"$pids"
+
+    # Verify kill actually took effect: re-query and warn on any survivors.
+    # Brief sleep gives the OS a beat to reap the killed processes -- on
+    # Windows taskkill /F is synchronous-ish but the CIM cache can lag.
+    sleep 0.3
+    local survivors
+    survivors="$(powershell.exe -NoProfile -Command "$pid_cmd" 2>/dev/null | tr -d '\r' | grep -v '^$')"
+    if [ -n "$survivors" ]; then
+      warn "bar_launch python.exe survivors after kill:"
+      while IFS= read -r pid; do
+        [ -n "$pid" ] && warn "  PID $pid still running"
+      done <<<"$survivors"
+      warn "  Likely cause: process running as a different user, or a"
+      warn "  protection policy is blocking taskkill. Try from an elevated"
+      warn "  PowerShell:  taskkill /F /T /PID <pid>"
+    fi
+  fi
+
+  # Bring down the WSL-side sync daemon too. `bar::launch` is what brought
+  # it up (start --wait-ready), so symmetric tear-down is what users will
+  # expect. Cheap to bring back up on the next launch (rsync skips
+  # unchanged files; sub-second on a warm tree). Falls through silently if
+  # the daemon was already stopped.
+  if [ -n "${BAR_DEVSYNC_DIR:-}" ] \
+     && [ -f "$BAR_DEVSYNC_DIR/.bar-launch/sync.pid" ]; then
+    bash "$DEVTOOLS_DIR/scripts/sync.sh" stop \
+      && killed_any=1 \
+      || warn "sync daemon stop returned non-zero (see $BAR_DEVSYNC_DIR/.bar-launch/sync.log)"
+  fi
+
+  if [ "$killed_any" = "0" ]; then
+    info "no BAR processes were running"
+  else
+    ok "BAR processes stopped"
+  fi
+}
+
+stop_linux() {
+  # On Linux, bar::launch execs `bar-launch` which itself execs spring;
+  # there is no separate launcher process to kill, and pkill spring would
+  # hit unrelated processes on a shared dev box. Surface the limitation
+  # rather than guessing.
+  warn "bar::stop on Linux: no launcher daemon to stop."
+  info "  If a runaway spring is consuming resources: pkill -INT spring"
+}
+
+case "${BAR_LAUNCH_MODE:-launch}" in
+  stop)
+    if is_wsl; then stop_wsl; else stop_linux; fi
+    exit $?
+    ;;
+  launch|*)
+    if is_wsl; then
+      run_wsl "$@"
+      exit $?
+    else
+      run_linux "$@"
+    fi
+    ;;
+esac
