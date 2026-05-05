@@ -88,13 +88,20 @@ log *TAIL_FLAGS:
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
     source "$DEVTOOLS_DIR/scripts/setup.sh"
-    game_dir="$(detect_game_dir 2>/dev/null)" || {
-      err "Game directory not detected. Set BAR_GAME_DIR or run 'just setup::init'."
-      exit 1
-    }
-    logfile="$game_dir/infolog.txt"
+    # WSL2: the engine writes infolog into C:\Program Files\Beyond-All-Reason\data
+    # regardless of which install actually launched it (BAR launcher quirk).
+    # Linux: detect_game_dir gives the spring data dir we sync to.
+    if is_wsl; then
+      logfile="/mnt/c/Program Files/Beyond-All-Reason/data/infolog.txt"
+    else
+      game_dir="$(detect_game_dir 2>/dev/null)" || {
+        err "Game directory not detected. Set BAR_GAME_DIR or run 'just setup::init'."
+        exit 1
+      }
+      logfile="$game_dir/infolog.txt"
+    fi
     if [ ! -f "$logfile" ]; then
-      err "No infolog at $logfile yet -- has the engine run from this data dir?"
+      err "No infolog at $logfile yet -- has the engine run?"
       exit 1
     fi
     info "Tailing $logfile (Ctrl-C to stop)"

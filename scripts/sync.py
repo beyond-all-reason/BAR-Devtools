@@ -340,13 +340,13 @@ class _MirrorHandler(FileSystemEventHandler):
     def drain(self, max_age_seconds: float = 0.10) -> None:
         """Flush pending events older than max_age_seconds."""
         now = time.monotonic()
-        ready: list[str] = []
+        ready: list[tuple[str, float]] = []
         with self._lock:
             for path, ts in list(self._pending.items()):
                 if now - ts >= max_age_seconds:
-                    ready.append(path)
+                    ready.append((path, ts))
                     del self._pending[path]
-        for src_path in ready:
+        for src_path, event_ts in ready:
             try:
                 src = Path(src_path)
                 if not src.is_file():
@@ -357,8 +357,13 @@ class _MirrorHandler(FileSystemEventHandler):
                 # events live -- a silent log is hard to distinguish from
                 # a broken watcher when nothing seems to be syncing. The
                 # 100 ms coalesce in self._pending keeps this from
-                # spamming under burst writes.
-                log.info("mirrored %s", rel)
+                # spamming under burst writes. The trailing `(Nms)` is
+                # the wall time from first inotify event to rsync
+                # completion -- the headline number for "is the dev loop
+                # actually fast" and the thing that pays for this whole
+                # architecture.
+                latency_ms = (time.monotonic() - event_ts) * 1000.0
+                log.info("mirrored %s (%dms)", rel, round(latency_ms))
             except ValueError as exc:
                 # relative_to() raised -- the event path didn't resolve
                 # under self._src. Almost always a symlink-target change
@@ -456,14 +461,20 @@ def main(argv: list[str] | None = None) -> int:
 
     pairs = _parse_pairs(args.pair)
 
-    log.info("cold copy: %d pair(s)", len(pairs))
+    log.info("sync: %d pair(s)", len(pairs))
     for src, dst in pairs:
         if not src.exists():
-            log.warning("skipping cold copy: %s does not exist", src)
+            log.warning("skipping sync: %s does not exist", src)
             continue
         t0 = time.monotonic()
         _cold_copy(src, dst)
-        log.info("  %s -> %s (rsync, %.1fs)", src, dst, time.monotonic() - t0)
+        # The "cold copy" name is historical -- _cold_copy_via_watchman
+        # picks between full-rsync seed and watchman-incremental delta
+        # based on the per-pair state file. The follow-up log line from
+        # inside that function ("watchman: initial clock recorded ..."
+        # vs "watchman incremental: N changed, M deleted ...") tells you
+        # which branch ran. We just print the wall time here.
+        log.info("  %s -> %s (%.1fs)", src, dst, time.monotonic() - t0)
 
     if args.cold_copy:
         if args.ready_file is not None:
