@@ -1606,8 +1606,11 @@ _editor_render_state() {
       printf "  ${DIM}?${NC} %-40s %s\n"                        "$ext" "$label"
     fi
   done
-  [ "${EDITOR_HAS_SUMNEKO:-0}" = "1" ] && \
+  # if/then/fi (not `[ ... ] && printf`) so the function returns 0 when
+  # sumneko isn't installed -- otherwise set -e in the caller exits here.
+  if [ "${EDITOR_HAS_SUMNEKO:-0}" = "1" ]; then
     printf "  ${YELLOW}!${NC} %-40s ${DIM}(installed; conflicts with tangzx.emmylua)${NC}\n" "sumneko.lua"
+  fi
 }
 
 # Full "what this is and what it'll do" preamble, shared between the Step
