@@ -43,32 +43,6 @@ editor:
     local_bin="$HOME/.local/bin"
     mkdir -p "$local_bin"
 
-    for bin in /usr/local/bin/emmylua_ls /usr/local/bin/emmylua_check /usr/bin/clangd /usr/local/bin/stylua /usr/bin/lx; do
-        name="$(basename "$bin")"
-        info "Exporting $name..."
-        distrobox enter "$DEVTOOLS_DISTROBOX" -- distrobox-export --bin "$bin" --export-path "$local_bin"
-    done
-    echo ""
-    if [ -f "$DEVTOOLS_DIR/RecoilEngine/CMakeLists.txt" ]; then
-        step "Generating compile_commands.json for clangd..."
-        distrobox enter "$DEVTOOLS_DISTROBOX" -- bash -c "
-            cd '$DEVTOOLS_DIR/RecoilEngine' \
-            && mkdir -p build \
-            && cd build \
-            && cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON .. 2>&1 | tail -3
-        "
-        ln -sf build/compile_commands.json "$DEVTOOLS_DIR/RecoilEngine/compile_commands.json"
-        ok "compile_commands.json ready"
-    else
-        info "RecoilEngine not cloned — skipping compile_commands.json"
-    fi
-    echo ""
-
-    # Show recommended extensions and (if `code` is on PATH) offer to install
-    # the missing ones. Also offer to uninstall sumneko.lua, which conflicts
-    # with tangzx.emmylua — two Lua LSPs produce duplicate diagnostics and
-    # competing completions.
-    echo ""
     recommended=(
         "tangzx.emmylua|EmmyLua (Lua language server)"
         "JohnnyMorganz.stylua|StyLua (Lua formatter)"
@@ -100,53 +74,88 @@ editor:
         state["$ext"]="$(state_for "$ext")"
         render "$ext" "$label" "${state[$ext]}"
     done
+    echo ""
 
-    if [ "$have_code" -eq 1 ] && [ -t 0 ]; then
-        missing=()
+    # Front-load both interactive prompts (extension install + sumneko
+    # uninstall) before the slow work (binary exports + cmake). Stash answers
+    # in flags and apply them after the unattended phase. Non-interactive
+    # stdin -> default to "no" silently.
+    install_missing=0
+    uninstall_sumneko=0
+    missing=()
+    if [ "$have_code" -eq 1 ]; then
         for entry in "${recommended[@]}"; do
             ext="${entry%%|*}"
             [ "${state[$ext]}" = missing ] && missing+=("$ext")
         done
-        if [ ${#missing[@]} -gt 0 ]; then
-            echo ""
+        if [ ${#missing[@]} -gt 0 ] && [ -t 0 ]; then
             read -r -p "Install the missing extensions into VS Code? [y/N] " reply
-            if [[ "$reply" =~ ^[Yy]$ ]]; then
-                for ext in "${missing[@]}"; do
-                    code --install-extension "$ext" --force >/dev/null
-                    state["$ext"]=just_installed
-                    info "Installed $ext"
-                done
-                echo ""
-                info "Updated state:"
-                for entry in "${recommended[@]}"; do
-                    ext="${entry%%|*}"; label="${entry#*|}"
-                    render "$ext" "$label" "${state[$ext]}"
-                done
-            fi
+            [[ "$reply" =~ ^[Yy]$ ]] && install_missing=1
         fi
-    elif [ "$have_code" -eq 0 ]; then
+
+        if grep -qixF sumneko.lua <<<"$installed"; then
+            warn 'The "LuaLS" (sumneko.lua) extension should go. Reasons:'
+            info '  - We officially recommend tangzx.emmylua. This is The Will Of The Project.'
+            info '  - Running both LSPs at once means duplicate diagnostics, fighting completions,'
+            info '    and your hover popups developing trust issues.'
+            info '  - sumneko on this codebase is slower than caramelized molasses uphill in January.'
+            info '  - You will not miss it. Promise.'
+            if [ -t 0 ]; then
+                read -r -p "Uninstall sumneko.lua? [y/N] " reply
+                [[ "$reply" =~ ^[Yy]$ ]] && uninstall_sumneko=1
+            fi
+            echo ""
+        fi
+    else
         info "Install 'code' CLI (Command Palette → 'Shell Command: Install code command in PATH') to manage these automatically."
         info "Cursor users: install tangzx.emmylua from VSIX — marketplace version is outdated."
-    fi
-
-    if [ "$have_code" -eq 1 ] && grep -qixF sumneko.lua <<<"$installed"; then
         echo ""
-        warn 'The "LuaLS" (sumneko.lua) extension should go. Reasons:'
-        info '  - We officially recommend tangzx.emmylua. This is The Will Of The Project.'
-        info '  - Running both LSPs at once means duplicate diagnostics, fighting completions,'
-        info '    and your hover popups developing trust issues.'
-        info '  - sumneko on this codebase is slower than caramelized molasses uphill in January.'
-        info '  - You will not miss it. Promise.'
-        if [ -t 0 ]; then
-            read -r -p "Uninstall sumneko.lua? [y/N] " reply
-            if [[ "$reply" =~ ^[Yy]$ ]]; then
-                code --uninstall-extension sumneko.lua >/dev/null
-                ok "sumneko.lua uninstalled"
-            fi
-        fi
     fi
 
+    # ---- end prompts; everything below runs unattended ----
+
+    for bin in /usr/local/bin/emmylua_ls /usr/local/bin/emmylua_check /usr/bin/clangd /usr/local/bin/stylua /usr/bin/lx; do
+        name="$(basename "$bin")"
+        info "Exporting $name..."
+        distrobox enter "$DEVTOOLS_DISTROBOX" -- distrobox-export --bin "$bin" --export-path "$local_bin"
+    done
     echo ""
+    if [ -f "$DEVTOOLS_DIR/RecoilEngine/CMakeLists.txt" ]; then
+        step "Generating compile_commands.json for clangd..."
+        distrobox enter "$DEVTOOLS_DISTROBOX" -- bash -c "
+            cd '$DEVTOOLS_DIR/RecoilEngine' \
+            && mkdir -p build \
+            && cd build \
+            && cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON .. 2>&1 | tail -3
+        "
+        ln -sf build/compile_commands.json "$DEVTOOLS_DIR/RecoilEngine/compile_commands.json"
+        ok "compile_commands.json ready"
+    else
+        info "RecoilEngine not cloned — skipping compile_commands.json"
+    fi
+    echo ""
+
+    if [ "$install_missing" = "1" ]; then
+        for ext in "${missing[@]}"; do
+            code --install-extension "$ext" --force >/dev/null
+            state["$ext"]=just_installed
+            info "Installed $ext"
+        done
+        echo ""
+        info "Updated extension state:"
+        for entry in "${recommended[@]}"; do
+            ext="${entry%%|*}"; label="${entry#*|}"
+            render "$ext" "$label" "${state[$ext]}"
+        done
+        echo ""
+    fi
+
+    if [ "$uninstall_sumneko" = "1" ]; then
+        code --uninstall-extension sumneko.lua >/dev/null
+        ok "sumneko.lua uninstalled"
+        echo ""
+    fi
+
     info "Binaries exported to ~/.local/bin:"
     for bin in emmylua_ls emmylua_check clangd stylua lx; do
         if [ -x "$HOME/.local/bin/$bin" ]; then
