@@ -1564,6 +1564,18 @@ run_ssh_setup_choice() {
     manual)          bash "$DEVTOOLS_DIR/scripts/ssh/setup-manual-ssh.sh" || warn "ssh::manual-setup failed; you can re-run it with 'just ssh::manual-setup'." ;;
     existing|skip|*) : ;;
   esac
+  # The ssh setup scripts append SSH_AUTH_SOCK to the user's rc, but the
+  # currently running setup::init shell doesn't pick that up -- so a later
+  # `git clone git@github.com:...` in this same process fails with
+  # "Permission denied (publickey)". Export the socket here based on the
+  # paths the wsl/linux scripts wire up.
+  for _sock in "$HOME/.1password/agent.sock" "$HOME/.ssh/agent.sock"; do
+    if [ -S "$_sock" ]; then
+      export SSH_AUTH_SOCK="$_sock"
+      break
+    fi
+  done
+  unset _sock
 }
 
 # Editor integration: collects state for the front-load prompt and the
