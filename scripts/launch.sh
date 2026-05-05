@@ -26,6 +26,13 @@ source "$DEVTOOLS_DIR/scripts/common.sh"
 source "$DEVTOOLS_DIR/scripts/setup.sh"
 source "$DEVTOOLS_DIR/scripts/repos.sh"
 
+# bar::launch touches /mnt/c, the WSL sync daemon, watchman state, and (on
+# WSL2) Windows-interop tools like cmd.exe / tasklist.exe. None of that works
+# from inside the bar-dev distrobox container, where watchman in particular
+# fails with PermissionError on its per-user state dir. Refuse early with a
+# clear message rather than letting the daemon crash mid cold-copy.
+require_host
+
 # True if a path looks linked-by-Devtools: a symlink (Linux) or, in the future,
 # a sync target. For now Linux-only, the WSL2 case is the stub below.
 preflight_symlinks() {

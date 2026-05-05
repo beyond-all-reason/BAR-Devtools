@@ -25,6 +25,11 @@ set -euo pipefail
 : "${DEVTOOLS_DIR:?DEVTOOLS_DIR must be set (Justfile exports it)}"
 source "$DEVTOOLS_DIR/scripts/common.sh"
 
+# Watchman, /mnt/c writes, and Windows interop (tasklist.exe etc.) all need
+# the WSL host -- not the bar-dev distrobox where watchman's per-user state
+# dir is unreadable.
+require_host
+
 if [ -z "${BAR_DEVSYNC_DIR:-}" ]; then
   err "BAR_DEVSYNC_DIR not set. Run 'just setup::init' on WSL2 first."
   exit 1

@@ -1237,15 +1237,19 @@ ensure_sync_daemon_deps_wsl() {
 # wrapper at ~/.local/bin/watchman runs `distrobox enter -- watchman`
 # so sync.py calls `watchman -j` like any host binary.
 ensure_watchman_wsl() {
-  if command -v watchman &>/dev/null; then
-    info "watchman: present ($(watchman --version 2>/dev/null | head -1))"
-    return 0
-  fi
-
+  # Don't short-circuit on `command -v watchman`: if setup::init runs from
+  # inside bar-dev (where /usr/bin/watchman is on PATH from the dnf install),
+  # that check returns 0 and we silently skip creating the host wrapper at
+  # ~/.local/bin/watchman -- so later host invocations of sync.py find no
+  # watchman at all. distrobox-export is idempotent; just always run it.
   step "exporting watchman from $DEVTOOLS_DISTROBOX → ~/.local/bin"
   mkdir -p "$HOME/.local/bin"
   distrobox enter "$DEVTOOLS_DISTROBOX" -- \
-    distrobox-export --bin /usr/bin/watchman --export-path "$HOME/.local/bin" >/dev/null
+    distrobox-export --bin /usr/local/bin/watchman --export-path "$HOME/.local/bin" >/dev/null
+  if [ ! -x "$HOME/.local/bin/watchman" ]; then
+    err "distrobox-export ran but $HOME/.local/bin/watchman is missing or not executable"
+    return 1
+  fi
   ok "watchman wrapper exported"
 }
 
@@ -2201,33 +2205,19 @@ cmd_link() {
   # WSL2: link::create is a no-op for the symlink itself. The sync daemon
   # (scripts/sync.sh + scripts/sync.py) is the analogue of the symlink: it
   # mirrors source_path on WSL ext4 to link_path on Windows NTFS. We just
-  # need the target subdir present (so the engine doesn't choke on an empty
-  # games/ dir) and an initial cold-copy so dev edits land somewhere usable
-  # before the watcher comes online on the next `just bar::launch`.
+  # need the target subdir present so the engine doesn't choke on an empty
+  # games/ dir; the cold-copy + watchman clock seed happens exactly once on
+  # the next `just bar::launch`. Doing an rsync here would just be a slow
+  # duplicate of that seed -- it doesn't record the clock sync.py needs,
+  # so the daemon would re-rsync everything anyway.
   if is_wsl; then
     if [ ! -d "$source_path" ]; then
-      err "Source not present at $source_path -- can't seed sync target."
+      err "Source not present at $source_path -- can't register sync target."
       return 1
     fi
     mkdir -p "$link_path"
     info "WSL2: $target tracks $source_path -> $link_path (via sync daemon)"
-    if command -v rsync &>/dev/null; then
-      info "Seeding $link_path with an initial cold copy"
-      # Exclude list mirrors sync.py's _SKIP_DIRS plus .github/.gitignore --
-      # the engine's archive scanner walks the whole .sdd, and multi-GB of
-      # .git internals will either crash it (older Recoil) or refuse to
-      # register the archive at all (alpha-tagged 2026.06.04+ surfaces this
-      # as `Dependent archive "BYAR Chobby local" not found`). The watcher
-      # already skips these, so this only matters for the cold-copy seed.
-      rsync -a --delete --inplace \
-        --exclude='.git' --exclude='.github' \
-        --exclude='__pycache__' --exclude='node_modules' \
-        --exclude='.gitignore' \
-        "$source_path/" "$link_path/" \
-        || warn "rsync seed failed; 'just bar::launch' will cold-copy on first run."
-    else
-      warn "rsync not installed; skipping seed ('just bar::launch' will cold-copy on first run)."
-    fi
+    info "  Initial cold copy will run on first 'just bar::launch'."
     ok "Tracked $target: $link_path (mirrors $source_path)"
     return 0
   fi
