@@ -6,7 +6,7 @@ not invoked by any recipe. Run by hand on a Windows/WSL2 box, paste the
 result table into bar_design_docs/bar_launch/plan.md under "Probe results",
 then delete this file once Phase 3's architecture is chosen.
 
-Five architectures, four scenarios each:
+Six architectures, four scenarios each:
 
   (i)   WSL ext4 -> /mnt/c/... via rsync (+ watchexec for sustained)
   (ii)  Direct \\\\wsl$\\<distro>\\... reads from Windows (baseline)
@@ -15,6 +15,11 @@ Five architectures, four scenarios each:
         through /mnt/c. The "what production sync.py *should* have done"
         candidate; (iii)'s watchdog ran on Windows where Plan 9 swallowed
         fsevents and degraded it to polling.
+  (v)   Split-brain: WSL inotifywait writes a UNC-visible event log; a
+        Windows-side python tails the log and shutil.copyfiles each touched
+        file from \\\\wsl$\\... to Windows-local NTFS. Reference point for
+        "what's the floor if we eat the IPC complexity?" -- compare against
+        (iv) to decide whether single-process or split-brain is justified.
   (vi)  WSL-side inotifywait (-m) | cp through /mnt/c. Bash baseline that
         bounds how much overhead Python threading and watchdog add over a
         minimal C+coreutils pipeline.
@@ -37,6 +42,12 @@ Subcommands (each refuses to run on the wrong host):
                              self-contained (no Windows process needed)
   linux-inotifywait (WSL)    architecture (vi): same shape as (iv) using
                              inotifywait | cp instead of python+watchdog
+  split-brain      (WSL)     architecture (v): inotifywait on WSL relays
+                             into a UNC-visible event log; spawns a Windows-
+                             side python copier via py.exe that tails the
+                             log and shutil.copyfiles each event UNC->local
+  split-brain-copier (Windows) windows side of (v); not invoked by hand,
+                               called by `split-brain` over WSL2 interop
   wsl-touch-loop   (WSL)     standalone touch loop for win-read/win-watch
   auto             (WSL)     fully automated rerun of (ii) and/or (iii)
                              over WSL2 interop -- launches the Windows-side
@@ -115,6 +126,9 @@ def _default_linux_watch_dst() -> Path:
 
 def _default_linux_inotify_dst() -> Path:
     return Path(f"/mnt/c/Users/{_windows_user()}/AppData/Local/BAR-DevSync-probe-inotify")
+
+def _default_split_brain_dst() -> Path:
+    return Path(f"/mnt/c/Users/{_windows_user()}/AppData/Local/BAR-DevSync-probe-splitbrain")
 
 def _default_unc_src() -> str:
     return f"\\\\wsl$\\{DEFAULT_DISTRO}\\home\\{DEFAULT_LINUX_USER}\\bar-probe-src"
@@ -745,6 +759,224 @@ def cmd_linux_inotifywait(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Architecture (v): split-brain (WSL detects via inotifywait, Windows copies)
+# ---------------------------------------------------------------------------
+# Reference-point arm. Compared against (iv): if (v) is materially faster,
+# the split-brain design is justified despite needing two processes and an
+# IPC layer. If (iv) is within noise, single-process wins on simplicity.
+#
+# IPC mechanism: a UNC-visible event log file. WSL-side inotifywait emits
+# `<wsl_abs_path>\n` per event into a python relay that fsync()s every line
+# (plain inotifywait stdio is block-buffered, and Plan 9 read-side caching
+# punishes that). Windows-side reader tails the file by readline polling
+# and copies each event from \\wsl$\<distro>\... -> local NTFS.
+
+def _start_inotifywait_relay(src: Path, event_log: Path):
+    """Run inotifywait on `src` and relay every `<wsl_abs_path>\\n` line to
+    `event_log` with explicit flush+fsync per line. Returns a stop_callable
+    plus the relay thread + subprocess so the caller can clean up."""
+    if not have("inotifywait"):
+        sys.stderr.write(
+            "inotifywait not installed. On Ubuntu/WSL2 install via:\n"
+            "  sudo apt-get install -y inotify-tools\n"
+        )
+        sys.exit(1)
+
+    # Truncate any stale log so the Windows tailer doesn't see prior events.
+    event_log.parent.mkdir(parents=True, exist_ok=True)
+    event_log.write_text("")
+
+    proc = subprocess.Popen(
+        ["inotifywait", "-m", "-r", "-q",
+         "-e", "close_write", "-e", "create",
+         "--format", "%w%f",
+         str(src)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, bufsize=1,
+    )
+
+    log_f = open(event_log, "w", buffering=1)
+    stop = threading.Event()
+
+    def relay():
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            if stop.is_set():
+                return
+            log_f.write(line)
+            log_f.flush()
+            try:
+                os.fsync(log_f.fileno())
+            except OSError:
+                pass
+
+    relay_t = threading.Thread(target=relay, daemon=True)
+    relay_t.start()
+
+    # Give inotifywait a moment to install watches before the caller writes.
+    time.sleep(0.3)
+
+    def stop_all():
+        stop.set()
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        relay_t.join(timeout=5)
+        try:
+            log_f.close()
+        except OSError:
+            pass
+
+    return stop_all
+
+
+def cmd_split_brain(args: argparse.Namespace) -> None:
+    require_host("wsl")
+    src = Path(args.src).expanduser()
+    dst = Path(args.dst).expanduser()
+    if not src.exists():
+        sys.stderr.write(f"{src} missing; run `setup` first.\n")
+        sys.exit(1)
+
+    runtime = Path(args.runtime_dir).expanduser()
+    runtime.mkdir(parents=True, exist_ok=True)
+    event_log = runtime / "bar-probe-split-events.log"
+
+    pywin = find_windows_python()
+    script_unc = wsl_to_unc(Path(__file__).resolve())
+    src_unc = wsl_to_unc(src)
+    dst_win = wsl_to_unc(dst)
+    event_log_unc = wsl_to_unc(event_log)
+
+    results: dict = {
+        "architecture": "v_split_brain_wsl_detect_win_copy",
+        "src": str(src), "dst": str(dst),
+    }
+
+    # (a) cold copy via rsync. Same convention as (iv)/(vi) -- the watcher
+    # only carries deltas; cold uses the same primitive as arm (i).
+    if dst.exists():
+        shutil.rmtree(dst)
+    cold_s, _ = time_call(_rsync, src, dst)
+    results["a_cold_copy_s"] = round(cold_s, 2)
+    print(f"(a) cold copy (rsync): {cold_s:.2f}s")
+
+    # Spawn the Windows-side copier first so it's tailing before any events.
+    # Duration buffer = SUSTAINED + (b)/(c) wall + slack.
+    win_argv = [pywin, "-3", script_unc, "split-brain-copier",
+                "--src", src_unc,
+                "--dst", dst_win,
+                "--event-log", event_log_unc,
+                "--duration", str(SUSTAINED_SECS + 180)]
+    print(f"spawning windows copier: {' '.join(win_argv)}", flush=True)
+    win_proc = subprocess.Popen(win_argv, cwd="/mnt/c/")
+
+    # Start inotifywait relay second so any events it produces are real
+    # (post-cold-copy) deltas the windows side will have to carry.
+    stop_relay = _start_inotifywait_relay(src, event_log)
+
+    def src_to_dst(p: Path) -> Path:
+        return dst / p.relative_to(src)
+
+    try:
+        files = all_lua_files(src)
+        rng = random.Random(2)
+
+        # (b) 1-file
+        chosen = rng.choice(files)
+        ns_b = time.time_ns()
+        chosen.write_bytes(make_payload(ns_b))
+        lat_b = _poll_until_drained(src_to_dst, [(ns_b, chosen)], max_wait_s=15)
+        results["b_inc1_ms"] = round(lat_b[0] / 1e6, 2) if lat_b else None
+        print(f"(b) inc 1 file:  {results['b_inc1_ms']} ms")
+
+        # (c) 50-file
+        expected50 = []
+        for p in rng.sample(files, 50):
+            ns = time.time_ns()
+            p.write_bytes(make_payload(ns))
+            expected50.append((ns, p))
+        lat_c = _poll_until_drained(src_to_dst, expected50, max_wait_s=90)
+        results["c_inc50"] = stats_ms(lat_c)
+        print(f"(c) inc 50 files: {results['c_inc50']}")
+
+        # (d) sustained 60s
+        print(f"(d) sustained {SUSTAINED_SECS}s loop...")
+        notify: Queue = Queue()
+        stop_touch = threading.Event()
+        touch_t = threading.Thread(
+            target=_touch_loop,
+            args=(src, SUSTAINED_SECS, notify, None, stop_touch),
+            daemon=True,
+        )
+        touch_t.start()
+        deadline = time.monotonic() + SUSTAINED_SECS + 5
+        latencies = _poll_for_propagation(src_to_dst, notify, deadline)
+        stop_touch.set()
+        touch_t.join(timeout=5)
+        results["d_sustained"] = stats_ms(latencies)
+        results["d_sustained_raw_ms"] = [round(l / 1e6, 3) for l in latencies]
+        print(f"(d) sustained: {results['d_sustained']}")
+    finally:
+        stop_relay()
+        win_proc.terminate()
+        try:
+            win_proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            win_proc.kill()
+
+    _emit(args, results)
+
+
+def cmd_split_brain_copier(args: argparse.Namespace) -> None:
+    """Windows side of arch (v). Tails an event log written by inotifywait
+    on the WSL side; for each line copies the file from \\\\wsl$\\... to a
+    Windows-local NTFS dst. Not intended to be invoked directly -- launched
+    over WSL2 interop by `split-brain`."""
+    require_host("windows")
+    src = Path(args.src)        # \\wsl$\<distro>\...\bar-probe-src
+    dst = Path(args.dst)        # C:\Users\...\BAR-DevSync-probe-splitbrain
+    event_log = Path(args.event_log)
+    dst.mkdir(parents=True, exist_ok=True)
+
+    # Wait for the WSL side to create the event log. inotifywait + relay
+    # does this within ~500ms of `split-brain` start; 30s is a safe bound.
+    deadline_init = time.monotonic() + 30
+    while time.monotonic() < deadline_init and not event_log.exists():
+        time.sleep(0.1)
+    if not event_log.exists():
+        sys.stderr.write(f"event log {event_log} never appeared\n")
+        sys.exit(1)
+
+    deadline = time.monotonic() + args.duration
+    copied = 0
+    errors = 0
+    with open(event_log, "r") as f:
+        while time.monotonic() < deadline:
+            line = f.readline()
+            if not line:
+                time.sleep(0.02)
+                continue
+            wsl_path = line.rstrip("\r\n")
+            if not wsl_path:
+                continue
+            rel = _wsl_to_relative(wsl_path)
+            if rel is None:
+                continue
+            src_file = src / rel
+            target = dst / rel
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(src_file, target)
+                copied += 1
+            except OSError:
+                errors += 1
+    print(f"split-brain-copier: copied={copied} errors={errors}")
+
+
+# ---------------------------------------------------------------------------
 # Architecture (ii): direct UNC reads (Windows-side)
 # ---------------------------------------------------------------------------
 
@@ -1163,9 +1395,17 @@ RECOMMENDED PATH — fully automated (ii) + (iii)
     Self-contained on WSL; no Windows process. Both follow the same shape.
     Prereqs (sudo apt-get install -y python3-watchdog inotify-tools):
       python3 scripts/probe_wsl_sync.py linux-watch \
-          --json-out {_default_probes_dir()}/probe-iv.json
+          --json-out probes/probe-iv.json
       python3 scripts/probe_wsl_sync.py linux-inotifywait \
-          --json-out {_default_probes_dir()}/probe-vi.json
+          --json-out probes/probe-vi.json
+
+1c. [WSL] Architecture (v) — split-brain reference point. Spawns a Windows
+    python copier over WSL2 interop; communicates via a Plan9-visible event
+    log written by inotifywait. Compare against (iv) to decide whether the
+    extra IPC complexity buys anything.
+    Prereqs: inotify-tools on WSL, py.exe reachable from WSL via interop.
+      python3 scripts/probe_wsl_sync.py split-brain \
+          --json-out probes/probe-v.json
 
 2. [WSL] Architectures (ii) and (iii), automated. Launches the Windows
    measurer over WSL2 interop (py.exe via \\\\wsl$\\... script path),
@@ -1251,6 +1491,36 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--dst", default=str(_default_linux_inotify_dst()))
     sp.add_argument("--json-out", default=None)
     sp.set_defaults(func=cmd_linux_inotifywait)
+
+    sp = sub.add_parser(
+        "split-brain",
+        help="(WSL) architecture (v): WSL inotifywait -> UNC event log -> "
+             "Windows python copier -> local NTFS",
+    )
+    sp.add_argument("--src", default=str(_default_src()))
+    sp.add_argument("--dst", default=str(_default_split_brain_dst()),
+                    help="Windows-local NTFS dst expressed as a /mnt/c/... path; "
+                         "wsl_to_unc converts it for the windows side.")
+    sp.add_argument("--runtime-dir", default="/tmp",
+                    help="Where to put the inotify event log (must be visible "
+                         "via UNC to the Windows side, so /tmp under the WSL "
+                         "rootfs is the natural choice).")
+    sp.add_argument("--json-out", default=None)
+    sp.set_defaults(func=cmd_split_brain)
+
+    sp = sub.add_parser(
+        "split-brain-copier",
+        help="(Windows) windows side of arch (v); not invoked by hand.",
+    )
+    sp.add_argument("--src", required=True,
+                    help="UNC path to the WSL source tree (\\\\wsl$\\<distro>\\...)")
+    sp.add_argument("--dst", required=True,
+                    help="Windows-local NTFS dst (C:\\...)")
+    sp.add_argument("--event-log", required=True,
+                    help="UNC path to the WSL-side event log written by inotifywait")
+    sp.add_argument("--duration", type=int, default=SUSTAINED_SECS + 180,
+                    help="Seconds to keep tailing before exiting.")
+    sp.set_defaults(func=cmd_split_brain_copier)
 
     sp = sub.add_parser("win-read", help="(Windows) architecture (ii): direct UNC reads")
     sp.add_argument("--src", default=_default_unc_src(),
