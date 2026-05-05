@@ -7,18 +7,34 @@ COMPOSE      := "docker compose -f " + COMPOSE_FILE
 
 # Generate Lua API pages (full pipeline: extract -> JSON -> markdown)
 generate:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    require_host
     {{COMPOSE}} run --rm recoil-docs lua_pages
 
 # Generate everything then start Hugo dev server
 server:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    require_host
     {{COMPOSE}} run --rm --service-ports recoil-docs server_full -- --bind 0.0.0.0
 
 # Start Hugo dev server without regenerating
 server-only:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    require_host
     {{COMPOSE}} run --rm --service-ports recoil-docs server -- --bind 0.0.0.0
 
 # Rebuild the docs container image
 build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    require_host
     {{COMPOSE}} build recoil-docs
 
 #   TODO: Same workaround as lua::reset. doc/site/data/* are pipeline outputs tracked in git, so

@@ -12,6 +12,7 @@ build *args:
     #!/usr/bin/env bash
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
+    require_host
     source "$DEVTOOLS_DIR/scripts/setup.sh"
     build_script="$DEVTOOLS_DIR/RecoilEngine/docker-build-v2/build.sh"
     if [ ! -f "$build_script" ]; then

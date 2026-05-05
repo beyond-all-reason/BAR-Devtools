@@ -171,6 +171,9 @@ units-shell: require-bar
 # Run headless integration tests (x86-64 only)
 integrations *args: require-bar
     #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    require_host
     if [[ "$(uname -m)" == arm64 ]]; then
         echo "Error: integration tests require an x86-64 host." >&2
         echo "The Spring engine used by headless tests has no arm64 build." >&2

@@ -16,11 +16,19 @@ require-setup:
 
 # Initialize and migrate the test database
 setup-test-db: require-setup
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    require_host
     {{COMPOSE}} run --rm -e MIX_ENV=test --entrypoint "" \
         teiserver bash -c "mix ecto.create --quiet 2>/dev/null; mix ecto.migrate --quiet"
 
 # Run teiserver mix tests
 mix *args: require-setup
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    require_host
     {{COMPOSE}} run --rm -e MIX_ENV=test --entrypoint "" \
         -v {{TEISERVER_DIR}}/test:/app/test:z \
         teiserver mix test {{args}}
@@ -29,6 +37,10 @@ alias test := mix
 
 # Drop into an interactive test shell for teiserver
 test-shell: require-setup
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    require_host
     {{COMPOSE}} run --rm -e MIX_ENV=test --entrypoint "" \
         -v {{TEISERVER_DIR}}/test:/app/test:z \
         teiserver bash -c "echo 'Entering teiserver test shell (MIX_ENV=test). Type exit to return.' && exec bash"

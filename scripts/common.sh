@@ -60,6 +60,19 @@ _in_container() {
     [ -n "${_DEVTOOLS_IN_DISTROBOX:-}" ] || [ -f /run/.containerenv ] || [ -f /.dockerenv ]
 }
 
+# Inverse of enter_distrobox: refuse to run if we're inside a container.
+# Use at the top of recipes that need the host's docker / podman daemon
+# (services::*, engine::build, etc.) so contributors who exec'd into
+# bar-dev get a clear "wrong layer" message instead of a cryptic
+# "docker: command not found" 127.
+require_host() {
+    if _in_container; then
+        err "This recipe runs on the host (needs docker / podman) -- not from inside bar-dev."
+        info "  Exit the container ('exit' or Ctrl-D), then re-run."
+        exit 1
+    fi
+}
+
 # Auto-enter the configured distrobox and re-exec the rest of the calling
 # script inside it. No-op when DEVTOOLS_DISTROBOX is unset or we're already
 # in a container. Used at the top of recipe shell snippets.

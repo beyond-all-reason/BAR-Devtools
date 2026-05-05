@@ -10,6 +10,7 @@ up *args:
     #!/usr/bin/env bash
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
+    require_host
     source "$DEVTOOLS_DIR/scripts/setup.sh"
     install_dockerignore
 
@@ -102,18 +103,28 @@ up *args:
 
 # Stop all services
 down:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    require_host
     $COMPOSE --profile spads down
 
 # Show running services
 status:
     #!/usr/bin/env bash
-    echo -e "\033[1m=== Service Status ===\033[0m"
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    require_host
+    echo -e "${BOLD}=== Service Status ===${NC}"
     echo ""
     $COMPOSE --profile spads ps -a
 
 # Tail service logs
 logs service="":
     #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    require_host
     if [ -z "{{service}}" ]; then
         $COMPOSE --profile spads logs -f --tail=100
     else
@@ -147,6 +158,10 @@ lobby:
 
 # Open a shell in a container
 shell service="teiserver":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    require_host
     $COMPOSE --profile spads exec {{service}} bash
 
 # Build Docker images
@@ -154,6 +169,7 @@ build:
     #!/usr/bin/env bash
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
+    require_host
     source "$DEVTOOLS_DIR/scripts/setup.sh"
     install_dockerignore
     info "Building Docker images..."
@@ -171,6 +187,7 @@ reset:
     #!/usr/bin/env bash
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
+    require_host
     info "Stopping services and removing volumes..."
     $COMPOSE --profile spads down -v
     info "Rebuilding images from scratch..."
