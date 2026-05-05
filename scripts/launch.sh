@@ -374,12 +374,70 @@ stop_wsl() {
 }
 
 stop_linux() {
-  # On Linux, bar::launch execs `bar-launch` which itself execs spring;
-  # there is no separate launcher process to kill, and pkill spring would
-  # hit unrelated processes on a shared dev box. Surface the limitation
-  # rather than guessing.
-  warn "bar::stop on Linux: no launcher daemon to stop."
-  info "  If a runaway spring is consuming resources: pkill -INT spring"
+  step "Stopping BAR processes"
+  local killed_any=0
+
+  # bar_debug_launcher: matches `python -m bar_launch ...`. -f matches
+  # against the full cmdline so we don't mistake other Pythons for ours.
+  local pids
+  pids="$(pgrep -f 'python.* -m bar_launch' 2>/dev/null | awk 'NF')"
+  if [ -n "$pids" ]; then
+    while IFS= read -r pid; do
+      [ -z "$pid" ] && continue
+      if kill -TERM "$pid" 2>/dev/null; then
+        info "  killed: python -m bar_launch (PID $pid)"
+        killed_any=1
+      fi
+    done <<<"$pids"
+  fi
+
+  # Engine: scope the kill to spring binaries running out of *our* game
+  # dir. The previous version refused to touch spring at all because a
+  # naive `pkill spring` on a shared dev box would hit unrelated engines.
+  # Filtering by /proc/<pid>/exe path makes this safe.
+  local game_dir
+  game_dir="$(detect_game_dir 2>/dev/null)" || true
+  if [ -n "$game_dir" ]; then
+    local spring_pids
+    spring_pids="$(pgrep -x 'spring|spring-headless|spring-dedicated' 2>/dev/null | awk 'NF')"
+    if [ -n "$spring_pids" ]; then
+      while IFS= read -r pid; do
+        [ -z "$pid" ] && continue
+        local exe
+        exe="$(readlink "/proc/$pid/exe" 2>/dev/null)" || continue
+        case "$exe" in
+          "$game_dir"/*)
+            if kill -TERM "$pid" 2>/dev/null; then
+              info "  killed: $(basename "$exe") (PID $pid, $game_dir)"
+              killed_any=1
+            fi
+            ;;
+        esac
+      done <<<"$spring_pids"
+    fi
+  fi
+
+  # Verify TERM took. Anything still alive after a brief grace period
+  # gets SIGKILL -- mirrors the `taskkill /F` semantics on the WSL side.
+  sleep 0.3
+  local survivors
+  survivors="$(pgrep -f 'python.* -m bar_launch' 2>/dev/null | awk 'NF')"
+  if [ -n "$survivors" ]; then
+    while IFS= read -r pid; do
+      [ -z "$pid" ] && continue
+      if kill -KILL "$pid" 2>/dev/null; then
+        warn "  SIGKILL'd surviving python -m bar_launch (PID $pid)"
+      else
+        warn "  PID $pid (bar_launch) survived SIGTERM and SIGKILL failed"
+      fi
+    done <<<"$survivors"
+  fi
+
+  if [ "$killed_any" = "0" ]; then
+    info "no BAR processes were running"
+  else
+    ok "BAR processes stopped"
+  fi
 }
 
 case "${BAR_LAUNCH_MODE:-launch}" in
