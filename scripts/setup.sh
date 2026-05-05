@@ -1901,6 +1901,18 @@ cmd_init() {
   cmd_setup_distrobox
   echo ""
 
+  # Run SSH setup before clones when the mode is non-interactive, so the
+  # clones use the git@ URLs from repos.local.conf directly instead of
+  # failing or falling back. `manual` stays at the end of cmd_init because
+  # it blocks on the user pasting a pubkey into github.com. `skip` and
+  # `existing` are already no-ops here. run_ssh_setup_choice is idempotent,
+  # so the late call below is a no-op for the early-run modes.
+  local _ssh_choice
+  _ssh_choice="$(grep -E "^BAR_SSH_SETUP=" "$DEVTOOLS_DIR/.env" 2>/dev/null | tail -1 | cut -d= -f2-)"
+  case "${_ssh_choice:-skip}" in
+    op|existing) run_ssh_setup_choice ;;
+  esac
+
   step "3/8  Cloning repositories"
   echo ""
   clone_for_features "$features"
