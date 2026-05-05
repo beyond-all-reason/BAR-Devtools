@@ -151,12 +151,9 @@ test-shell: require-bar
     set -e
     source "$DEVTOOLS_DIR/scripts/common.sh"
     cd "$BAR_DIR"
-    echo -e "${GREEN}[ok]${NC}    Entering lx test shell (busted is available)."
-    echo -e "${GREEN}[ok]${NC}    Type 'exit' to return."
-    if [ -n "${DEVTOOLS_DISTROBOX:-}" ] && [ -z "${_DEVTOOLS_IN_DISTROBOX:-}" ] && [ ! -f /run/.containerenv ]; then
-        exec script -qec "distrobox enter '${DEVTOOLS_DISTROBOX}' -- lx --lua-version 5.1 shell --test --no-loader" /dev/null
-    fi
-    exec lx --lua-version 5.1 shell --test --no-loader
+    ok "Entering lx test shell (busted is available)."
+    ok "Type 'exit' to return."
+    distrobox_exec_interactive lx --lua-version 5.1 shell --test --no-loader
 
 # Run headless integration tests (x86-64 only)
 integrations *args: require-bar

@@ -51,20 +51,48 @@ clean_dir() {
 # Re-execute the calling script inside a distrobox if DEVTOOLS_DISTROBOX is set.
 # Just writes shebang scripts to temp files under /run/user/... which isn't
 # shared with distrobox, so we feed the script via stdin (< "$0") before exec.
+# True if we're already inside a container -- either because we spawned it
+# (_DEVTOOLS_IN_DISTROBOX) or because the user opened it interactively
+# (/run/.containerenv from podman, /.dockerenv from docker). Used by both
+# enter_distrobox and distrobox_exec_interactive so "what counts as
+# in-container" lives in one place.
+_in_container() {
+    [ -n "${_DEVTOOLS_IN_DISTROBOX:-}" ] || [ -f /run/.containerenv ] || [ -f /.dockerenv ]
+}
+
+# Auto-enter the configured distrobox and re-exec the rest of the calling
+# script inside it. No-op when DEVTOOLS_DISTROBOX is unset or we're already
+# in a container. Used at the top of recipe shell snippets.
 enter_distrobox() {
-    # Already-in-container guards (any one is enough):
-    #   _DEVTOOLS_IN_DISTROBOX  set when *we* spawned the container below
-    #   /run/.containerenv      podman writes this in every container
-    #   /.dockerenv             docker writes this in every container
-    # Without these, running `just <recipe>` from an interactive `distrobox
-    # enter bar-dev` shell would re-exec `distrobox` -- which isn't on PATH
-    # inside the container -- and fail with 127.
-    if [ -n "${DEVTOOLS_DISTROBOX:-}" ] \
-       && [ -z "${_DEVTOOLS_IN_DISTROBOX:-}" ] \
-       && [ ! -f /run/.containerenv ] \
-       && [ ! -f /.dockerenv ]; then
+    if [ -n "${DEVTOOLS_DISTROBOX:-}" ] && ! _in_container; then
         info "Entering distrobox '$DEVTOOLS_DISTROBOX'..."
         exec distrobox enter "$DEVTOOLS_DISTROBOX" -- \
             env _DEVTOOLS_IN_DISTROBOX=1 bash -s -- "$@" < "$0"
     fi
+}
+
+# Run a single interactive command inside the distrobox with a real PTY.
+# Use this for REPLs / TUIs / shells where the inner command needs an
+# attached terminal (busted shell, lua repl, ncurses tools). Differs from
+# enter_distrobox: doesn't re-exec the calling script, just dispatches the
+# given command and exits.
+#
+# script(1) is the PTY wrapper. distrobox-enter from a non-tty shell would
+# otherwise hand the inner cmd a pipe and interactive prompts misbehave.
+# `script -qec` parses its command argument via /bin/sh, so we re-quote
+# every arg with printf %q to survive that round-trip.
+distrobox_exec_interactive() {
+    if _in_container; then
+        exec "$@"
+    fi
+    if [ -z "${DEVTOOLS_DISTROBOX:-}" ]; then
+        err "DEVTOOLS_DISTROBOX not set. Run: just setup::distrobox"
+        return 1
+    fi
+    local quoted_box quoted_cmd="" arg
+    quoted_box="$(printf '%q' "$DEVTOOLS_DISTROBOX")"
+    for arg in "$@"; do
+        quoted_cmd+=" $(printf '%q' "$arg")"
+    done
+    exec script -qec "distrobox enter ${quoted_box} --${quoted_cmd}" /dev/null
 }
