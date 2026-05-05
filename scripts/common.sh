@@ -52,7 +52,17 @@ clean_dir() {
 # Just writes shebang scripts to temp files under /run/user/... which isn't
 # shared with distrobox, so we feed the script via stdin (< "$0") before exec.
 enter_distrobox() {
-    if [ -n "${DEVTOOLS_DISTROBOX:-}" ] && [ -z "${_DEVTOOLS_IN_DISTROBOX:-}" ]; then
+    # Already-in-container guards (any one is enough):
+    #   _DEVTOOLS_IN_DISTROBOX  set when *we* spawned the container below
+    #   /run/.containerenv      podman writes this in every container
+    #   /.dockerenv             docker writes this in every container
+    # Without these, running `just <recipe>` from an interactive `distrobox
+    # enter bar-dev` shell would re-exec `distrobox` -- which isn't on PATH
+    # inside the container -- and fail with 127.
+    if [ -n "${DEVTOOLS_DISTROBOX:-}" ] \
+       && [ -z "${_DEVTOOLS_IN_DISTROBOX:-}" ] \
+       && [ ! -f /run/.containerenv ] \
+       && [ ! -f /.dockerenv ]; then
         info "Entering distrobox '$DEVTOOLS_DISTROBOX'..."
         exec distrobox enter "$DEVTOOLS_DISTROBOX" -- \
             env _DEVTOOLS_IN_DISTROBOX=1 bash -s -- "$@" < "$0"
