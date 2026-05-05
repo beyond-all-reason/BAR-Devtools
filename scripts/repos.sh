@@ -31,10 +31,25 @@ load_repos_conf() {
 
       local dir url branch feature local_path
       read -r dir url branch feature local_path <<< "$line"
-      [ -z "$dir" ] || [ -z "$url" ] && continue
-      branch="${branch:-master}"
-      feature="${feature:-}"
+      [ -z "$dir" ] && continue
       local_path="${local_path/#\~/$HOME}"
+
+      # repos.local.conf is a per-field override: any column the user
+      # leaves blank falls back to whatever repos.conf set. Only `dir`
+      # is required (it's the join key); url/branch/feature/local_path
+      # all merge. This means a local override only needs to list the
+      # columns it actually wants to change -- typically just `url` for
+      # a fork or `local_path` for a sibling checkout.
+      local prev_url="" prev_branch="" prev_feature="" prev_local_path=""
+      if [ -n "${seen[$dir]:-}" ]; then
+        IFS='|' read -r prev_url prev_branch prev_feature prev_local_path <<< "${seen[$dir]}"
+      fi
+      url="${url:-$prev_url}"
+      branch="${branch:-${prev_branch:-master}}"
+      feature="${feature:-$prev_feature}"
+      local_path="${local_path:-$prev_local_path}"
+      [ -z "$url" ] && continue
+
       # Use a separator unlikely to appear in any field so the round-trip
       # through `read` survives empty feature/local_path columns.
       seen[$dir]="$url|$branch|$feature|$local_path"

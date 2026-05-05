@@ -69,6 +69,74 @@ bashrc_apply() {
     mv "$tmp" "$rc"
 }
 
+# Verify the agent is usable end-to-end. Distinguishes the three failure
+# modes contributors actually hit (no agent reachable / agent up but no
+# keys / keys present but github.com rejects them) and prints the exact
+# next step instead of letting the failure surface during their first
+# `git push`. SSH_AUTH_SOCK must be set in the calling shell.
+op_ssh_verify() {
+    local listing rc
+    listing="$(ssh-add -l 2>&1)"
+    rc=$?
+
+    if [ $rc -eq 2 ]; then
+        err "Could not reach the SSH agent at \$SSH_AUTH_SOCK ($SSH_AUTH_SOCK)."
+        err "  Confirm 1Password Desktop is running and signed in, and that"
+        err "  Settings → Developer → 'Use the SSH agent' is enabled."
+        return 1
+    fi
+    if [ $rc -eq 1 ]; then
+        warn "Agent is reachable but no SSH keys are loaded."
+        warn "  Open 1Password and add an SSH key item (or unlock an existing"
+        warn "  one), then re-run 'just ssh::op-setup'. Without a loaded key"
+        warn "  the bridge succeeds silently and the first git operation"
+        warn "  fails with 'Permission denied (publickey)'."
+        return 1
+    fi
+
+    ok "Agent is live and ssh-add sees keys:"
+    printf '%s\n' "$listing" | sed 's/^/    /'
+    echo ""
+
+    step "    Probing github.com for end-to-end auth"
+    local gh_out gh_rc
+    gh_out="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+                  -o ConnectTimeout=5 -T git@github.com 2>&1)"
+    gh_rc=$?
+    # github.com always exits 1 even on success; the success signal is the
+    # "Hi <user>! You've successfully authenticated" message.
+    if printf '%s' "$gh_out" | grep -q "successfully authenticated"; then
+        ok "github.com authenticated as $(printf '%s' "$gh_out" | sed -n 's/^Hi \([^!]*\)!.*/\1/p')."
+        op_ssh_pin_protocol_ssh
+    else
+        warn "github.com did not accept any loaded key:"
+        printf '%s\n' "$gh_out" | sed 's/^/    /'
+        warn "  The agent is bridged correctly, but the keys 1Password is"
+        warn "  exposing aren't registered on your GitHub account. Add one"
+        warn "  at https://github.com/settings/keys (the public key for any"
+        warn "  loaded item) and re-run."
+    fi
+}
+
+# Pin repos.local.conf to '@protocol ssh' once we've proven SSH works.
+# Future `just repos::clone` / `just setup::init` runs will rewrite
+# github.com URLs to SSH so clones/pushes use the bridged agent instead
+# of HTTPS (which is slow over Plan 9 from WSL and prompts for a token).
+# Idempotent: skips if the user already set any @protocol directive.
+op_ssh_pin_protocol_ssh() {
+    local conf="${DEVTOOLS_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}/repos.local.conf"
+    if [ -f "$conf" ] && grep -qE '^[[:space:]]*@protocol[[:space:]]' "$conf"; then
+        info "repos.local.conf already pins @protocol — leaving it alone."
+        return 0
+    fi
+    {
+        [ -s "$conf" ] && echo ""
+        echo "# Auto-pinned by just ssh::op-setup after github.com auth succeeded."
+        echo "@protocol ssh"
+    } >> "$conf"
+    ok "Pinned @protocol ssh in $conf — clones/pushes will use the bridged agent."
+}
+
 # WSL-only. Echoes the Windows %USERPROFILE% as a WSL path (e.g. /mnt/c/Users/keith).
 win_userprofile() {
     local raw

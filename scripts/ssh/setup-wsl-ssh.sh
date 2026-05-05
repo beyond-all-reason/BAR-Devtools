@@ -116,19 +116,6 @@ PATH="$HOME/.local/bin:$PATH" setsid socat UNIX-LISTEN:"$SSH_AUTH_SOCK",fork \
     EXEC:"npiperelay.exe -ei -s //./pipe/openssh-ssh-agent",nofork \
     >/dev/null 2>&1 &
 sleep 1
-if ssh-add -l 2>/dev/null; then
-    ok "Bridge is live and ssh-add sees keys."
-    echo ""
-    info "Open a new shell to pick up the bashrc snippet automatically."
-else
-    rc=$?
-    if [ $rc -eq 1 ]; then
-        warn "Bridge is live but no keys are loaded yet."
-        warn "Add at least one SSH key to 1Password and ensure 'Use the SSH agent' is enabled."
-    else
-        err "ssh-add could not reach the agent."
-        err "  - Confirm 1Password Desktop is running and signed in."
-        err "  - Confirm Settings → Developer → 'Use the SSH agent' is checked."
-        err "  - Confirm npiperelay.exe at: $NPR_EXE"
-    fi
-fi
+op_ssh_verify
+echo ""
+info "Open a new shell to pick up the bashrc snippet automatically."

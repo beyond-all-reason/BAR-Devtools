@@ -145,16 +145,6 @@ if [ ! -S "$SOCK" ]; then
     warn "1Password may still be starting; or the SSH agent toggle isn't enabled."
     exit 0
 fi
-if SSH_AUTH_SOCK="$SOCK" ssh-add -l 2>/dev/null; then
-    ok "Agent is live and ssh-add sees keys."
-    echo ""
-    info "Open a new shell to pick up the bashrc snippet automatically."
-else
-    rc=$?
-    if [ $rc -eq 1 ]; then
-        warn "Agent is reachable but has no keys yet."
-        warn "Add at least one SSH key item to your 1Password vault."
-    else
-        err "Could not reach the agent at $SOCK."
-    fi
-fi
+SSH_AUTH_SOCK="$SOCK" op_ssh_verify
+echo ""
+info "Open a new shell to pick up the bashrc snippet automatically."

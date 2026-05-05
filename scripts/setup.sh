@@ -1461,6 +1461,82 @@ prompt_springsettings_opt_in() {
   esac
 }
 
+# Detect whether GitHub already accepts an SSH key from the running agent.
+# Returns 0 if `ssh -T git@github.com` finds a configured key, 1 otherwise.
+# BatchMode=yes prevents the password/yes prompts that would otherwise hang.
+_github_ssh_works() {
+  command -v ssh >/dev/null 2>&1 || return 1
+  local out
+  out="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+              -o ConnectTimeout=5 -T git@github.com 2>&1)"
+  printf '%s' "$out" | grep -q "successfully authenticated"
+}
+
+# Step-0 prompt: pick how the user wants SSH to GitHub configured. Skipped
+# entirely when an agent already authenticates (no point in nagging users
+# who arrived with a working setup) or when BAR_SSH_SETUP is already in
+# .env (re-runs respect the prior choice; edit .env to re-decide). The
+# actual setup runs later via run_ssh_setup_choice so the user can answer
+# here and walk away during the long steps.
+prompt_ssh_setup_choice() {
+  local env_file="$DEVTOOLS_DIR/.env"
+  touch "$env_file"
+  if grep -q "^BAR_SSH_SETUP=" "$env_file"; then
+    info "BAR_SSH_SETUP already set in .env -- not re-prompting"
+    return 0
+  fi
+  if _github_ssh_works; then
+    info "ssh -T git@github.com already authenticates -- skipping ssh setup prompt"
+    echo "BAR_SSH_SETUP=existing" >> "$env_file"
+    return 0
+  fi
+
+  echo ""
+  echo -e "${BOLD}SSH to GitHub${NC}"
+  echo "  No working SSH agent reaches github.com from this shell. Cloning"
+  echo "  / pushing over HTTPS works but prompts for a token on every push,"
+  echo "  and several BAR-Devtools recipes assume push-by-default. Pick how"
+  echo "  you'd like to set up an SSH key now (we'll run the actual setup"
+  echo "  after the long steps, you don't have to babysit this prompt):"
+  echo ""
+  echo "    1) op         1Password Desktop + agent bridge"
+  echo "    2) bitwarden  Bitwarden Desktop SSH agent  (stub, not yet implemented)"
+  echo "    3) keepassxc  KeePassXC SSH integration    (stub, not yet implemented)"
+  echo "    4) manual     Generate ~/.ssh/id_ed25519 + walk through GitHub"
+  echo "    5) skip       Don't configure now (clone over HTTPS; re-run later)"
+  echo ""
+  local ans choice=""
+  while [ -z "$choice" ]; do
+    read -r -p "Choice [1-5]: " ans
+    case "${ans:-}" in
+      1|op)         choice="op" ;;
+      2|bitwarden)  choice="bitwarden" ;;
+      3|keepassxc)  choice="keepassxc" ;;
+      4|manual)     choice="manual" ;;
+      5|skip|"")    choice="skip" ;;
+      *)            echo "  Invalid choice: ${ans}" ;;
+    esac
+  done
+  echo "BAR_SSH_SETUP=$choice" >> "$env_file"
+  ok "Recorded BAR_SSH_SETUP=$choice in .env"
+}
+
+# Run the SSH setup the user picked at step 0. Idempotent: re-running
+# setup::init after a successful manual/op flow is a no-op (the setup
+# scripts themselves detect "already configured").
+run_ssh_setup_choice() {
+  local env_file="$DEVTOOLS_DIR/.env"
+  local choice
+  choice="$(grep -E "^BAR_SSH_SETUP=" "$env_file" 2>/dev/null | tail -1 | cut -d= -f2-)"
+  case "${choice:-skip}" in
+    op)         bash "$DEVTOOLS_DIR/scripts/ssh/setup-op-ssh.sh" || warn "ssh::op-setup failed; you can re-run it with 'just ssh::op-setup'." ;;
+    manual)     bash "$DEVTOOLS_DIR/scripts/ssh/setup-manual-ssh.sh" || warn "ssh::manual-setup failed; you can re-run it with 'just ssh::manual-setup'." ;;
+    bitwarden)  bash "$DEVTOOLS_DIR/scripts/ssh/setup-bitwarden-ssh.sh" || true ;;
+    keepassxc)  bash "$DEVTOOLS_DIR/scripts/ssh/setup-keepassxc-ssh.sh" || true ;;
+    existing|skip|*) : ;;
+  esac
+}
+
 # Clone only the repos that map to the selected features.
 clone_for_features() {
   local features="$1"
@@ -1546,6 +1622,7 @@ cmd_init() {
   fi
 
   prompt_springsettings_opt_in
+  prompt_ssh_setup_choice
   echo ""
 
   step "1/7  Checking & installing dependencies"
@@ -1631,6 +1708,12 @@ cmd_init() {
   else
     cmd_setup_bar_launch
   fi
+  echo ""
+
+  # SSH setup runs last because the manual flow needs the user's attention
+  # ("paste this pubkey on github.com"); the unattended steps are done by
+  # this point so we're not re-blocking them on a prompt.
+  run_ssh_setup_choice
   echo ""
 
   echo -e "${BOLD}=== Setup Complete ===${NC}"
