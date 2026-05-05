@@ -12,10 +12,11 @@ cd BAR-Devtools
 bash scripts/bootstrap.sh         # installs `just` >= 1.31 to ~/.local/bin
 exec "$SHELL" -l                  # reload PATH
 
-just setup::init                  # full first-time setup (clones, builds, prompts up front)
+just setup::init                  # full first-time setup (clones, builds, editor wiring — all prompts up front)
 just services::up                 # start Postgres + Teiserver
-just setup::editor                # editor integrations (LSPs, clangd, stylua) — recommended
 ```
+
+`setup::init` front-loads every interactive question (features, SSH choice, springsettings opt-in, editor integration) into one batch at the top, then runs unattended. If you opt in to editor integration during the prompt, the language servers / formatters are wired up at the end of init — you don't run a second command.
 
 `scripts/bootstrap.sh` exists because `apt install just` on Ubuntu LTS produces 1.21 (frozen), which can't parse this repo's module syntax. The script wraps the upstream installer at <https://just.systems> and is idempotent — safe to re-run. If you'd rather not pipe a script, the equivalent is:
 
@@ -65,13 +66,13 @@ just setup::distrobox
 
 ### Editor integration (VS Code / Cursor)
 
-Language servers and formatters live inside the distrobox. One command exports them to your host and generates `compile_commands.json` for engine C++ support:
+`setup::init` wires up your editor automatically if you say yes at the Step 0/N prompt — language servers and formatters get exported from the distrobox to `~/.local/bin`, and `compile_commands.json` is generated against RecoilEngine for clangd. To re-run it standalone (if you skipped during init, or want to refresh after a Containerfile change):
 
 ```bash
 just setup::editor
 ```
 
-This exports `emmylua_ls`, `emmylua_check`, `clangd`, `stylua`, and `busted` as wrapper scripts in `~/.local/bin` (via `distrobox-export`), and runs `cmake` against RecoilEngine to produce `compile_commands.json` for clangd. Your editor finds the wrappers on PATH and everything works as if installed natively.
+Exports `emmylua_ls`, `emmylua_check`, `clangd`, `stylua`, and `lx` as wrapper scripts in `~/.local/bin` (via `distrobox-export`). Your editor finds the wrappers on PATH and everything works as if installed natively.
 
 ### Git hooks
 

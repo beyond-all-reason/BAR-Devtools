@@ -1562,6 +1562,229 @@ run_ssh_setup_choice() {
   esac
 }
 
+# Editor integration: collects state for the front-load prompt and the
+# unattended runner. Sets globals (intentionally global, mirrors how the
+# other prompt_* helpers communicate state):
+#   EDITOR_HAVE_CODE          1 if `code` CLI is on PATH
+#   EDITOR_INSTALLED_EXTS     newline-separated list (from `code --list-extensions`)
+#   EDITOR_MISSING_EXTS       space-separated subset of recommended extensions absent
+#   EDITOR_HAS_SUMNEKO        1 if sumneko.lua is currently installed
+_EDITOR_RECOMMENDED=(
+  "tangzx.emmylua|EmmyLua (Lua language server)"
+  "JohnnyMorganz.stylua|StyLua (Lua formatter)"
+  "llvm-vs-code-extensions.vscode-clangd|clangd (C/C++ for engine work)"
+)
+editor_collect_state() {
+  EDITOR_HAVE_CODE=0
+  EDITOR_INSTALLED_EXTS=""
+  EDITOR_MISSING_EXTS=""
+  EDITOR_HAS_SUMNEKO=0
+  command -v code >/dev/null 2>&1 || return 0
+  EDITOR_HAVE_CODE=1
+  EDITOR_INSTALLED_EXTS="$(code --list-extensions 2>/dev/null || true)"
+  grep -qixF sumneko.lua <<<"$EDITOR_INSTALLED_EXTS" && EDITOR_HAS_SUMNEKO=1
+  local entry ext miss=""
+  for entry in "${_EDITOR_RECOMMENDED[@]}"; do
+    ext="${entry%%|*}"
+    grep -qixF "$ext" <<<"$EDITOR_INSTALLED_EXTS" || miss="${miss} ${ext}"
+  done
+  EDITOR_MISSING_EXTS="${miss# }"
+}
+
+# Render the recommended-extensions list. Caller already ran
+# editor_collect_state and printed any heading it wants. Pulled out so the
+# Step 0/N prompt and the standalone editor recipe stay byte-identical here.
+_editor_render_state() {
+  local entry ext label
+  for entry in "${_EDITOR_RECOMMENDED[@]}"; do
+    ext="${entry%%|*}"; label="${entry#*|}"
+    if [ "${EDITOR_HAVE_CODE:-0}" = "1" ] && grep -qixF "$ext" <<<"$EDITOR_INSTALLED_EXTS"; then
+      printf "  ${CYAN}✓${NC} %-40s %s ${DIM}(installed)${NC}\n" "$ext" "$label"
+    elif [ "${EDITOR_HAVE_CODE:-0}" = "1" ]; then
+      printf "  ${RED}✗${NC} %-40s %s ${DIM}(missing)${NC}\n"   "$ext" "$label"
+    else
+      printf "  ${DIM}?${NC} %-40s %s\n"                        "$ext" "$label"
+    fi
+  done
+  [ "${EDITOR_HAS_SUMNEKO:-0}" = "1" ] && \
+    printf "  ${YELLOW}!${NC} %-40s ${DIM}(installed; conflicts with tangzx.emmylua)${NC}\n" "sumneko.lua"
+}
+
+# Full "what this is and what it'll do" preamble, shared between the Step
+# 0/N prompt (cmd_init) and the standalone editor recipe. Both touch this
+# text — keeping it in one place means the prompt and recipe always agree.
+_editor_show_preamble() {
+  echo ""
+  echo -e "${BOLD}Editor integration${NC}"
+  echo "  Wires up your editor (VS Code, Cursor, VSCodium -- anything that finds"
+  echo "  language servers on PATH) for BAR development:"
+  echo "    - exports emmylua_ls, emmylua_check, clangd, stylua, lx to ~/.local/bin"
+  echo "    - generates RecoilEngine/compile_commands.json for clangd"
+  echo "    - writes Beyond-All-Reason/.vscode/settings.json (gitignored, per-checkout)"
+  echo ""
+  if [ "${EDITOR_HAVE_CODE:-0}" = "1" ]; then
+    echo "  Detected: 'code' on PATH. Recommended VS Code extensions:"
+    _editor_render_state
+  else
+    info "  'code' is not on PATH. Wiring still works for Cursor / non-vscode editors,"
+    info "  but extensions can't be auto-installed -- handle them in your editor's UI."
+  fi
+  echo ""
+}
+
+# Persist the two editor sub-prompts (install-missing, uninstall-sumneko) to
+# .env. Caller is responsible for the top-level "do you want editor at all"
+# decision -- this only asks the questions that follow from a yes.
+_prompt_editor_sub_actions() {
+  local env_file="$DEVTOOLS_DIR/.env"
+  local ans install_exts="no" uninstall_sumneko="no"
+  if [ "${EDITOR_HAVE_CODE:-0}" = "1" ] && [ -n "${EDITOR_MISSING_EXTS:-}" ]; then
+    read -r -p "  Install the missing VS Code extensions? [Y/n] " ans
+    case "${ans:-y}" in y|Y|yes|YES) install_exts="yes" ;; esac
+  fi
+  if [ "${EDITOR_HAS_SUMNEKO:-0}" = "1" ]; then
+    warn "  sumneko.lua and tangzx.emmylua should not coexist -- duplicate diagnostics"
+    warn "  and competing completions on this codebase."
+    read -r -p "  Uninstall sumneko.lua? [Y/n] " ans
+    case "${ans:-y}" in y|Y|yes|YES) uninstall_sumneko="yes" ;; esac
+  fi
+  {
+    echo "BAR_EDITOR_INSTALL_EXTS=${install_exts}"
+    echo "BAR_EDITOR_UNINSTALL_SUMNEKO=${uninstall_sumneko}"
+  } >> "$env_file"
+}
+
+# Top-level editor opt-in. Front-loaded into cmd_init's Step 0/N batch.
+# Persists BAR_EDITOR_SETUP=yes|no plus the sub-action answers; future runs
+# skip re-prompting (matches how prompt_ssh_setup_choice / springsettings
+# opt-in behave).
+prompt_editor_setup_choice() {
+  local env_file="$DEVTOOLS_DIR/.env"
+  touch "$env_file"
+  if grep -q "^BAR_EDITOR_SETUP=" "$env_file"; then
+    info "BAR_EDITOR_SETUP already set in .env -- not re-prompting"
+    return 0
+  fi
+
+  editor_collect_state
+  _editor_show_preamble
+
+  local ans
+  read -r -p "Wire up editor integration after the build? [Y/n] " ans
+  case "${ans:-y}" in
+    y|Y|yes|YES) ;;
+    *) echo "BAR_EDITOR_SETUP=no" >> "$env_file"; return 0 ;;
+  esac
+
+  echo "BAR_EDITOR_SETUP=yes" >> "$env_file"
+  _prompt_editor_sub_actions
+}
+
+# Read the persisted editor decisions from .env and run cmd_setup_editor if
+# opted in. cmd_init's last unattended step before SSH setup.
+run_editor_setup_choice() {
+  local env_file="$DEVTOOLS_DIR/.env"
+  local choice
+  choice="$(grep -E "^BAR_EDITOR_SETUP=" "$env_file" 2>/dev/null | tail -1 | cut -d= -f2-)"
+  case "${choice:-no}" in
+    yes) cmd_setup_editor ;;
+    *)   info "Editor integration skipped (declined at configuration step)." ;;
+  esac
+}
+
+# Unattended editor wiring. Reads BAR_EDITOR_INSTALL_EXTS /
+# BAR_EDITOR_UNINSTALL_SUMNEKO from .env (set by prompt_editor_setup_choice)
+# so this function never prompts -- both `just setup::init` and
+# `just setup::editor` populate the env file before calling here.
+cmd_setup_editor() {
+  if [ -z "${DEVTOOLS_DISTROBOX:-}" ]; then
+    err "DEVTOOLS_DISTROBOX not set. Run: just setup::distrobox"
+    return 1
+  fi
+  local env_file="$DEVTOOLS_DIR/.env"
+  local install_exts uninstall_sumneko
+  install_exts="$(grep -E '^BAR_EDITOR_INSTALL_EXTS='     "$env_file" 2>/dev/null | tail -1 | cut -d= -f2-)"
+  uninstall_sumneko="$(grep -E '^BAR_EDITOR_UNINSTALL_SUMNEKO=' "$env_file" 2>/dev/null | tail -1 | cut -d= -f2-)"
+
+  local local_bin="$HOME/.local/bin" bin
+  mkdir -p "$local_bin"
+  for bin in /usr/local/bin/emmylua_ls /usr/local/bin/emmylua_check /usr/bin/clangd /usr/local/bin/stylua /usr/bin/lx; do
+    info "Exporting $(basename "$bin")..."
+    distrobox enter "$DEVTOOLS_DISTROBOX" -- distrobox-export --bin "$bin" --export-path "$local_bin"
+  done
+  echo ""
+
+  if [ -f "$DEVTOOLS_DIR/RecoilEngine/CMakeLists.txt" ]; then
+    step "Generating compile_commands.json for clangd..."
+    distrobox enter "$DEVTOOLS_DISTROBOX" -- bash -c "
+      cd '$DEVTOOLS_DIR/RecoilEngine' \
+      && mkdir -p build \
+      && cd build \
+      && cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON .. 2>&1 | tail -3
+    "
+    ln -sf build/compile_commands.json "$DEVTOOLS_DIR/RecoilEngine/compile_commands.json"
+    ok "compile_commands.json ready"
+  else
+    info "RecoilEngine not cloned -- skipping compile_commands.json"
+  fi
+  echo ""
+
+  if [ "${install_exts:-no}" = "yes" ]; then
+    editor_collect_state
+    if [ "$EDITOR_HAVE_CODE" = "1" ] && [ -n "$EDITOR_MISSING_EXTS" ]; then
+      local ext
+      for ext in $EDITOR_MISSING_EXTS; do
+        code --install-extension "$ext" --force >/dev/null
+        info "Installed $ext"
+      done
+      echo ""
+    fi
+  fi
+
+  if [ "${uninstall_sumneko:-no}" = "yes" ]; then
+    if command -v code >/dev/null 2>&1 \
+       && code --list-extensions 2>/dev/null | grep -qixF sumneko.lua; then
+      code --uninstall-extension sumneko.lua >/dev/null
+      ok "sumneko.lua uninstalled"
+      echo ""
+    fi
+  fi
+
+  info "Binaries exported to ~/.local/bin:"
+  for bin in emmylua_ls emmylua_check clangd stylua lx; do
+    if [ -x "$HOME/.local/bin/$bin" ]; then
+      printf "  ${CYAN}✓ %s${NC}\n" "$bin"
+    else
+      printf "  ${RED}✗ %s${NC}  ${DIM}(missing -- rerun setup::editor)${NC}\n" "$bin"
+    fi
+  done
+  echo ""
+
+  # BAR's .vscode/ is gitignored, so workspace settings have to be created
+  # per-checkout. Write defaults if absent; otherwise diff and leave alone.
+  local bar_vscode="$DEVTOOLS_DIR/Beyond-All-Reason/.vscode/settings.json"
+  local bar_vscode_template="$DEVTOOLS_DIR/templates/bar-vscode-settings.json"
+  if [ -d "$DEVTOOLS_DIR/Beyond-All-Reason" ]; then
+    if [ ! -f "$bar_vscode" ]; then
+      mkdir -p "$(dirname "$bar_vscode")"
+      cp "$bar_vscode_template" "$bar_vscode"
+      ok "Wrote $bar_vscode"
+    elif ! diff -q "$bar_vscode_template" "$bar_vscode" >/dev/null 2>&1; then
+      warn "$bar_vscode differs from recommended defaults:"
+      diff -u "$bar_vscode" "$bar_vscode_template" | sed 's/^/  /' || true
+      info "Merge the '[lua]' block (and any missing files.exclude entries) manually."
+    else
+      info "$bar_vscode matches recommended defaults"
+    fi
+  fi
+  echo ""
+  ok "Editor integration ready."
+  echo ""
+  info "If your editor was already open, reload the window (or run"
+  info "'EmmyLua: Restart Server' and 'clangd: Restart language server')"
+  info "so both extensions pick up the new binaries."
+}
+
 # Clone only the repos that map to the selected features.
 clone_for_features() {
   local features="$1"
@@ -1626,7 +1849,7 @@ cmd_init() {
     exit 1
   fi
 
-  step "0/7  Configuration"
+  step "0/8  Configuration"
   echo ""
   if is_wsl; then
     ensure_bar_devsync_dir || warn "Skipping BAR sync dir setup (set BAR_DEVSYNC_DIR in .env to retry)."
@@ -1653,9 +1876,10 @@ cmd_init() {
 
   prompt_springsettings_opt_in
   prompt_ssh_setup_choice
+  prompt_editor_setup_choice
   echo ""
 
-  step "1/7  Checking & installing dependencies"
+  step "1/8  Checking & installing dependencies"
   echo ""
   if check_git &>/dev/null && check_docker &>/dev/null; then
     ok "Core dependencies (git, docker) already installed."
@@ -1665,17 +1889,17 @@ cmd_init() {
   ensure_windows_python
   echo ""
 
-  step "2/7  Dev environment (distrobox -- required)"
+  step "2/8  Dev environment (distrobox -- required)"
   echo ""
   cmd_setup_distrobox
   echo ""
 
-  step "3/7  Cloning repositories"
+  step "3/8  Cloning repositories"
   echo ""
   clone_for_features "$features"
   echo ""
 
-  step "4/7  Building Docker images"
+  step "4/8  Building Docker images"
   echo ""
   if features_include "$features" teiserver; then
     install_dockerignore
@@ -1688,7 +1912,7 @@ cmd_init() {
   fi
   echo ""
 
-  step "5/7  Engine build"
+  step "5/8  Engine build"
   echo ""
   if features_include "$features" recoil; then
     if [ -d "$DEVTOOLS_DIR/RecoilEngine/docker-build-v2" ]; then
@@ -1709,7 +1933,7 @@ cmd_init() {
   fi
   echo ""
 
-  step "6/7  Symlinks to game directory"
+  step "6/8  Symlinks to game directory"
   echo ""
   if [ -z "$game_dir" ]; then
     info "No game directory detected. Set BAR_GAME_DIR to enable linking."
@@ -1727,7 +1951,7 @@ cmd_init() {
   fi
   echo ""
 
-  step "7/7  bar-launch venv (just bar::launch)"
+  step "7/8  bar-launch venv (just bar::launch)"
   echo ""
   if is_wsl; then
     # On WSL2 the launcher runs as a Windows-side Python process so it
@@ -1738,6 +1962,11 @@ cmd_init() {
   else
     cmd_setup_bar_launch
   fi
+  echo ""
+
+  step "8/8  Editor integration"
+  echo ""
+  run_editor_setup_choice
   echo ""
 
   # SSH setup runs last because the manual flow needs the user's attention
@@ -1764,7 +1993,7 @@ cmd_init() {
     echo -e "    ${BOLD}just services::up lobby${NC}       Launch bar-lobby and connect"
     echo -e "    ${BOLD}just bar::units${NC}               Run busted Lua unit tests"
     echo -e "    ${BOLD}just bar::test-shell${NC}          Drop into an interactive busted shell"
-    echo -e "    ${BOLD}just bar::check${NC}               LuaLS type-check across the repo"
+    echo -e "    ${BOLD}just bar::check${NC}               EmmyLua type-check across the repo"
     echo -e "    ${BOLD}just bar::lint${NC}                luacheck (via lux)"
     echo -e "    ${BOLD}just bar::fmt${NC}                 stylua format"
     echo -e "    ${BOLD}just bar::integrations${NC}        Headless integration tests (x86-64 only)"

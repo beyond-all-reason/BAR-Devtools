@@ -31,164 +31,23 @@ distrobox:
     source "$DEVTOOLS_DIR/scripts/setup.sh"
     cmd_setup_distrobox
 
-# Export distrobox binaries for editor integration (emmylua_ls, emmylua_check, clangd, stylua, lx)
+# Wire your editor up for BAR development. Idempotent — re-runnable any time.
+# `setup::init` calls this at the end too (gated on the Step 0/N opt-in), so
+# the standalone recipe exists for "I changed my mind / something drifted."
+# Direct invocation = explicit yes; wipe any prior answers so the sub-prompts
+# fire fresh, then delegate to the shared shell helpers in scripts/setup.sh.
 editor:
     #!/usr/bin/env bash
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
-    if [ -z "${DEVTOOLS_DISTROBOX:-}" ]; then
-        err "DEVTOOLS_DISTROBOX not set. Run: just setup::distrobox"
-        exit 1
-    fi
-    local_bin="$HOME/.local/bin"
-    mkdir -p "$local_bin"
+    source "$DEVTOOLS_DIR/scripts/setup.sh"
 
-    recommended=(
-        "tangzx.emmylua|EmmyLua (Lua language server)"
-        "JohnnyMorganz.stylua|StyLua (Lua formatter)"
-        "llvm-vs-code-extensions.vscode-clangd|clangd (C/C++ for engine work)"
-    )
-    have_code=0
-    installed=""
-    command -v code >/dev/null 2>&1 && have_code=1 && installed="$(code --list-extensions 2>/dev/null || true)"
-
-    state_for() {
-        local ext="$1"
-        if [ "$have_code" -eq 0 ]; then echo unknown; return; fi
-        grep -qixF "$ext" <<<"$installed" && echo installed || echo missing
-    }
-    render() {
-        local ext="$1" label="$2" state="$3"
-        case "$state" in
-            installed)     printf "  ${CYAN}✓ %-40s${NC} %s  ${DIM}(installed)${NC}\n"        "$ext" "$label" ;;
-            just_installed)printf "  ${GREEN}+ %-40s${NC} %s  ${DIM}(just installed)${NC}\n"  "$ext" "$label" ;;
-            missing)       printf "  ${RED}✗ %-40s${NC} %s  ${DIM}(missing)${NC}\n"           "$ext" "$label" ;;
-            unknown)       printf "  ${DIM}? %-40s${NC} %s\n"                                  "$ext" "$label" ;;
-        esac
-    }
-
-    declare -A state
-    info "Recommended VS Code / Cursor extensions:"
-    for entry in "${recommended[@]}"; do
-        ext="${entry%%|*}"; label="${entry#*|}"
-        state["$ext"]="$(state_for "$ext")"
-        render "$ext" "$label" "${state[$ext]}"
-    done
-    echo ""
-
-    # Front-load both interactive prompts (extension install + sumneko
-    # uninstall) before the slow work (binary exports + cmake). Stash answers
-    # in flags and apply them after the unattended phase. Non-interactive
-    # stdin -> default to "no" silently.
-    install_missing=0
-    uninstall_sumneko=0
-    missing=()
-    if [ "$have_code" -eq 1 ]; then
-        for entry in "${recommended[@]}"; do
-            ext="${entry%%|*}"
-            [ "${state[$ext]}" = missing ] && missing+=("$ext")
-        done
-        if [ ${#missing[@]} -gt 0 ] && [ -t 0 ]; then
-            read -r -p "Install the missing extensions into VS Code? [y/N] " reply
-            [[ "$reply" =~ ^[Yy]$ ]] && install_missing=1
-        fi
-
-        if grep -qixF sumneko.lua <<<"$installed"; then
-            warn 'The "LuaLS" (sumneko.lua) extension should go. Reasons:'
-            info '  - We officially recommend tangzx.emmylua. This is The Will Of The Project.'
-            info '  - Running both LSPs at once means duplicate diagnostics, fighting completions,'
-            info '    and your hover popups developing trust issues.'
-            info '  - sumneko on this codebase is slower than caramelized molasses uphill in January.'
-            info '  - You will not miss it. Promise.'
-            if [ -t 0 ]; then
-                read -r -p "Uninstall sumneko.lua? [y/N] " reply
-                [[ "$reply" =~ ^[Yy]$ ]] && uninstall_sumneko=1
-            fi
-            echo ""
-        fi
-    else
-        info "Install 'code' CLI (Command Palette → 'Shell Command: Install code command in PATH') to manage these automatically."
-        info "Cursor users: install tangzx.emmylua from VSIX — marketplace version is outdated."
-        echo ""
-    fi
-
-    # ---- end prompts; everything below runs unattended ----
-
-    for bin in /usr/local/bin/emmylua_ls /usr/local/bin/emmylua_check /usr/bin/clangd /usr/local/bin/stylua /usr/bin/lx; do
-        name="$(basename "$bin")"
-        info "Exporting $name..."
-        distrobox enter "$DEVTOOLS_DISTROBOX" -- distrobox-export --bin "$bin" --export-path "$local_bin"
-    done
-    echo ""
-    if [ -f "$DEVTOOLS_DIR/RecoilEngine/CMakeLists.txt" ]; then
-        step "Generating compile_commands.json for clangd..."
-        distrobox enter "$DEVTOOLS_DISTROBOX" -- bash -c "
-            cd '$DEVTOOLS_DIR/RecoilEngine' \
-            && mkdir -p build \
-            && cd build \
-            && cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON .. 2>&1 | tail -3
-        "
-        ln -sf build/compile_commands.json "$DEVTOOLS_DIR/RecoilEngine/compile_commands.json"
-        ok "compile_commands.json ready"
-    else
-        info "RecoilEngine not cloned — skipping compile_commands.json"
-    fi
-    echo ""
-
-    if [ "$install_missing" = "1" ]; then
-        for ext in "${missing[@]}"; do
-            code --install-extension "$ext" --force >/dev/null
-            state["$ext"]=just_installed
-            info "Installed $ext"
-        done
-        echo ""
-        info "Updated extension state:"
-        for entry in "${recommended[@]}"; do
-            ext="${entry%%|*}"; label="${entry#*|}"
-            render "$ext" "$label" "${state[$ext]}"
-        done
-        echo ""
-    fi
-
-    if [ "$uninstall_sumneko" = "1" ]; then
-        code --uninstall-extension sumneko.lua >/dev/null
-        ok "sumneko.lua uninstalled"
-        echo ""
-    fi
-
-    info "Binaries exported to ~/.local/bin:"
-    for bin in emmylua_ls emmylua_check clangd stylua lx; do
-        if [ -x "$HOME/.local/bin/$bin" ]; then
-            printf "  ${CYAN}✓ %s${NC}\n" "$bin"
-        else
-            printf "  ${RED}✗ %s${NC}  ${DIM}(missing — rerun setup::editor)${NC}\n" "$bin"
-        fi
-    done
-    echo ""
-
-    # BAR's .vscode/ is gitignored, so workspace settings have to be created
-    # per-checkout. Write defaults if absent; otherwise diff and leave alone.
-    bar_vscode="$DEVTOOLS_DIR/Beyond-All-Reason/.vscode/settings.json"
-    bar_vscode_template="$DEVTOOLS_DIR/templates/bar-vscode-settings.json"
-    if [ -d "$DEVTOOLS_DIR/Beyond-All-Reason" ]; then
-        if [ ! -f "$bar_vscode" ]; then
-            mkdir -p "$(dirname "$bar_vscode")"
-            cp "$bar_vscode_template" "$bar_vscode"
-            ok "Wrote $bar_vscode"
-        elif ! diff -q "$bar_vscode_template" "$bar_vscode" >/dev/null 2>&1; then
-            warn "$bar_vscode differs from recommended defaults:"
-            diff -u "$bar_vscode" "$bar_vscode_template" | sed 's/^/  /' || true
-            info "Merge the '[lua]' block (and any missing files.exclude entries) manually."
-        else
-            info "$bar_vscode matches recommended defaults"
-        fi
-    fi
-    echo ""
-    ok "Editor integration ready."
-    echo ""
-    info "If your editor was already open, reload the window (or run"
-    info "'EmmyLua: Restart Server' and 'clangd: Restart language server')"
-    info "so both extensions pick up the new binaries."
+    sed -i '/^BAR_EDITOR_/d' "$DEVTOOLS_DIR/.env" 2>/dev/null || true
+    editor_collect_state
+    _editor_show_preamble
+    _prompt_editor_sub_actions
+    echo "BAR_EDITOR_SETUP=yes" >> "$DEVTOOLS_DIR/.env"
+    cmd_setup_editor
 
 # Install git pre-commit hooks (stylua + luacheck) in BAR repo
 hooks:
