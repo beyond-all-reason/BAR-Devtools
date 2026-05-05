@@ -6,29 +6,23 @@ Everything server-side runs in Docker. The game client runs natively.
 
 ## Quick Start
 
-Install **[just](https://github.com/casey/just)** ≥ 1.31 (this repo uses just modules, stabilized in 1.31):
-
 ```bash
-pacman -S just                 # Arch
-dnf install just               # Fedora
-# Debian/Ubuntu: apt ships 1.21 (frozen at LTS release), use the upstream installer:
-curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
-  | bash -s -- --to ~/.local/bin
-
-# Add ~/.local/bin to PATH if it isn't already (idempotent), then reload:
-grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' ~/.bashrc \
-  || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-source ~/.bashrc
-```
-
-```bash
-# Run setup
 git clone https://github.com/beyond-all-reason/BAR-Devtools.git
 cd BAR-Devtools
-just setup::init
-just services::up
-# recommended
-just setup::editor    # export clangd + generate compile_commands.json
+bash scripts/bootstrap.sh         # installs `just` >= 1.31 to ~/.local/bin
+exec "$SHELL" -l                  # reload PATH
+
+just setup::init                  # full first-time setup (clones, builds, prompts up front)
+just services::up                 # start Postgres + Teiserver
+just setup::editor                # editor integrations (LSPs, clangd, stylua) — recommended
+```
+
+`scripts/bootstrap.sh` exists because `apt install just` on Ubuntu LTS produces 1.21 (frozen), which can't parse this repo's module syntax. The script wraps the upstream installer at <https://just.systems> and is idempotent — safe to re-run. If you'd rather not pipe a script, the equivalent is:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
+  | bash -s -- --to ~/.local/bin
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
 ```
 
 `setup::init` walks you through installing dependencies, cloning repositories, and building Docker images. You only need to run it once.

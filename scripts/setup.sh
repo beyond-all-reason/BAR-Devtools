@@ -19,6 +19,37 @@ is_wsl() {
   [ -n "${WSL_DISTRO_NAME:-}" ] || [ -f /proc/sys/fs/binfmt_misc/WSLInterop ]
 }
 
+# Pure-bash semver compare: returns 0 iff $1 >= $2. Mirrors scripts/bootstrap.sh
+# so cmd_init can reject stale `just` (e.g. apt's 1.21) with a clear pointer.
+_version_ge() {
+  local IFS=.
+  local -a A=($1) B=($2)
+  local i av bv
+  for i in 0 1 2; do
+    av="${A[i]:-0}"; bv="${B[i]:-0}"
+    (( av > bv )) && return 0
+    (( av < bv )) && return 1
+  done
+  return 0
+}
+
+_check_just_min_version() {
+  local need="$1"
+  local current
+  if ! current="$(just --version 2>/dev/null | awk '{print $2}')" || [ -z "$current" ]; then
+    err "Could not read 'just --version'. Did 'just' move off PATH?"
+    exit 1
+  fi
+  if ! _version_ge "$current" "$need"; then
+    err "Found just $current, need >= $need."
+    err "Likely cause: 'apt install just' (Ubuntu LTS ships 1.21, frozen)."
+    err "Fix:"
+    err "  bash $DEVTOOLS_DIR/scripts/bootstrap.sh"
+    err "  # then open a new shell and re-run 'just setup::init'"
+    exit 1
+  fi
+}
+
 pkg_install_cmd() {
   case "$(detect_distro)" in
     arch)   echo "sudo pacman -S --needed" ;;
@@ -1578,6 +1609,11 @@ cmd_init() {
   echo -e "${BOLD}  BAR Dev Environment - First Time Setup${NC}"
   echo -e "${BOLD}==========================================${NC}"
   echo ""
+
+  # If they got this far they obviously have *some* `just`, but apt-shipped
+  # 1.21 silently mis-parses our module syntax. Surface the version mismatch
+  # before the long-running steps start.
+  _check_just_min_version "1.31.0"
 
   ensure_wsl_setup
   _setup_consent_splash
