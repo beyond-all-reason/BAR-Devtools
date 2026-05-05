@@ -37,15 +37,27 @@ pause() {
     read -rp "       Press Enter when done... " _
 }
 
-# bashrc_apply <marker> <content>
+# Echo the path to the user's interactive shell rc file. Mirrors the $SHELL
+# check in scripts/bootstrap.sh so both wizards target the same file.
+shellrc_path() {
+    case "${SHELL:-}" in
+        *zsh) echo "$HOME/.zshrc" ;;
+        *)    echo "$HOME/.bashrc" ;;
+    esac
+}
+
+# shellrc_apply <marker> <content>
 # Idempotently install <content> between
 #   # >>> <marker> >>>
 #   # <<< <marker> <<<
-# markers in ~/.bashrc. Replaces the block in place if it already exists.
-bashrc_apply() {
+# markers in the user's shell rc file (bash or zsh). Replaces the block in
+# place if it already exists. Sets SHELLRC_TARGET to the path touched so
+# callers can print accurate "Updated <path>" messages.
+shellrc_apply() {
     local marker="$1"; shift
     local content="$*"
-    local rc="$HOME/.bashrc"
+    local rc; rc="$(shellrc_path)"
+    SHELLRC_TARGET="$rc"
     local begin="# >>> ${marker} >>>"
     local end="# <<< ${marker} <<<"
     local tmp; tmp="$(mktemp)"

@@ -94,9 +94,10 @@ fi
 mkdir -p "$HOME/.local/bin"
 ln -sf "$NPR_EXE" "$HOME/.local/bin/npiperelay.exe"
 
-# --- Step 6: bashrc snippet ---
-step "6/7 Append bridge snippet to ~/.bashrc"
-read -r -d '' BASHRC_BODY <<'BLOCK' || true
+# --- Step 6: shell rc snippet ---
+SHELL_RC="$(shellrc_path)"
+step "6/7 Append bridge snippet to ${SHELL_RC/#$HOME/~}"
+read -r -d '' SHELLRC_BODY <<'BLOCK' || true
 export SSH_AUTH_SOCK="$HOME/.ssh/agent.sock"
 if ! ss -xl 2>/dev/null | grep -q "$SSH_AUTH_SOCK"; then
     rm -f "$SSH_AUTH_SOCK"
@@ -105,8 +106,8 @@ if ! ss -xl 2>/dev/null | grep -q "$SSH_AUTH_SOCK"; then
         >/dev/null 2>&1 &)
 fi
 BLOCK
-bashrc_apply "1password-ssh-agent" "$BASHRC_BODY"
-ok "Updated ~/.bashrc (block: 1password-ssh-agent)"
+shellrc_apply "1password-ssh-agent" "$SHELLRC_BODY"
+ok "Updated ${SHELLRC_TARGET/#$HOME/~} (block: 1password-ssh-agent)"
 
 # --- Step 7: live test ---
 step "7/7 Test the bridge"

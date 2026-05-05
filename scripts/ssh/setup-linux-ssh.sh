@@ -127,15 +127,16 @@ cat <<EOF
 EOF
 pause "Toggle both checkboxes in 1Password's Developer settings"
 
-# --- Step 4: bashrc snippet ---
-step "4/5 Append SSH_AUTH_SOCK to ~/.bashrc"
-read -r -d '' BASHRC_BODY <<'BLOCK' || true
+# --- Step 4: shell rc snippet ---
+SHELL_RC="$(shellrc_path)"
+step "4/5 Append SSH_AUTH_SOCK to ${SHELL_RC/#$HOME/~}"
+read -r -d '' SHELLRC_BODY <<'BLOCK' || true
 if [ -S "$HOME/.1password/agent.sock" ]; then
     export SSH_AUTH_SOCK="$HOME/.1password/agent.sock"
 fi
 BLOCK
-bashrc_apply "1password-ssh-agent" "$BASHRC_BODY"
-ok "Updated ~/.bashrc (block: 1password-ssh-agent)"
+shellrc_apply "1password-ssh-agent" "$SHELLRC_BODY"
+ok "Updated ${SHELLRC_TARGET/#$HOME/~} (block: 1password-ssh-agent)"
 
 # --- Step 5: test ---
 step "5/5 Test the agent"
@@ -147,4 +148,4 @@ if [ ! -S "$SOCK" ]; then
 fi
 SSH_AUTH_SOCK="$SOCK" op_ssh_verify
 echo ""
-info "Open a new shell to pick up the bashrc snippet automatically."
+info "Open a new shell to pick up the ${SHELLRC_TARGET/#$HOME/~} snippet automatically."

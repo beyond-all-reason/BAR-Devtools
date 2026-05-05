@@ -22,10 +22,11 @@ This wizard will:
      in 1Password's settings — those toggles are GUI-only.
   3. On WSL: install socat + npiperelay.exe and bridge the Windows agent.
      On native Linux: point SSH_AUTH_SOCK at ~/.1password/agent.sock.
-  4. Append an idempotent block to ~/.bashrc so the agent is wired on every shell.
+  4. Append an idempotent block to your shell rc (~/.zshrc if $SHELL is zsh,
+     otherwise ~/.bashrc) so the agent is wired on every shell.
   5. Test with ssh-add -l.
 
-Re-running is safe: every step checks before acting, and the bashrc block is
+Re-running is safe: every step checks before acting, and the rc block is
 replaced in place rather than duplicated.
 
 EOF

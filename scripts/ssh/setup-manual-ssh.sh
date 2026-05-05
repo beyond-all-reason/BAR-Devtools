@@ -44,7 +44,7 @@ if ! ssh-add -L 2>/dev/null | grep -qF "$(ssh-keygen -y -f "$KEY_PATH")"; then
     ssh-add "$KEY_PATH"
 fi
 
-bashrc_apply "manual-ssh-agent" "$(cat <<BLOCK
+shellrc_apply "manual-ssh-agent" "$(cat <<BLOCK
 # Start a user ssh-agent on first interactive shell and reuse it across shells.
 SSH_ENV="\$HOME/.ssh/agent-env"
 if [ ! -S "\${SSH_AUTH_SOCK:-}" ]; then
@@ -63,7 +63,7 @@ fi
 export SSH_AUTH_SOCK SSH_AGENT_PID
 BLOCK
 )"
-ok "Updated ~/.bashrc (block: manual-ssh-agent)."
+ok "Updated ${SHELLRC_TARGET/#$HOME/~} (block: manual-ssh-agent)."
 
 # --- Step 3: walk through registering the public key on GitHub ---
 step "3/4 Register the public key on GitHub"
@@ -85,4 +85,4 @@ read -rp "    Press Enter once you've added the key... " _
 step "4/4 Verify"
 op_ssh_verify
 echo ""
-info "Open a new shell to pick up the bashrc snippet automatically."
+info "Open a new shell to pick up the ${SHELLRC_TARGET/#$HOME/~} snippet automatically."
