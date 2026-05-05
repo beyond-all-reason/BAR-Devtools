@@ -22,6 +22,18 @@ RUN dnf install -y --setopt=install_weak_deps=False \
     && dnf clean all \
     && ln -s /usr/bin/lua-5.1 /usr/local/bin/lua
 
+# Enable starship for `distrobox enter bar-dev` interactive sessions without
+# touching the user's host ~/.bashrc. Login shells source /etc/profile.d/*
+# BEFORE the user's home rc files, so any custom PS1 they have wins. Recipes
+# that auto-enter via enter_distrobox run `bash -s` (non-interactive,
+# non-login) and skip profile.d entirely -- zero overhead for `just bar::*`.
+RUN printf '%s\n' \
+        '# /etc/profile.d/starship.sh -- baked by dev.Containerfile' \
+        '# User PS1 in ~/.bashrc still wins (loaded after this).' \
+        'command -v starship >/dev/null 2>&1 && eval "$(starship init bash)"' \
+    > /etc/profile.d/starship.sh \
+    && chmod 0644 /etc/profile.d/starship.sh
+
 ARG LUX_VERSION=latest
 RUN ARCH=$(uname -m) \
     && case "$ARCH" in x86_64) DEB_ARCH=amd64;; aarch64) DEB_ARCH=arm64;; *) echo "unsupported: $ARCH" >&2; exit 1;; esac \

@@ -132,14 +132,14 @@ Everything -- services, testing, formatting, engine IDE integration -- works unc
 
 #### Optional: prompt that doesn't make you sad
 
-The default bash prompt in a fresh WSL distro is `user@host:~$` with no git info, no exit-status hint, no color discipline. If you're going to spend hours in this terminal, install **[starship](https://starship.rs/)** on the host:
+The default bash prompt in a fresh WSL distro is `user@host:~$` — no git info, no exit-status hint, no color discipline. If you're going to spend hours in this terminal, install **[starship](https://starship.rs/)** on the host:
 
 ```bash
 curl -sS https://starship.rs/install.sh | sh
 echo 'eval "$(starship init bash)"' >> ~/.bashrc   # or zsh, fish, etc.
 ```
 
-`starship` is also baked into the dev distrobox image (`docker/dev.Containerfile`), so `distrobox enter bar-dev` won't trip on `eval "$(starship init bash)"` in your `~/.bashrc`.
+The dev distrobox image (`docker/dev.Containerfile`) **ships starship pre-enabled** via `/etc/profile.d/starship.sh`. `distrobox enter bar-dev` gives you a starship prompt with zero host setup. If you have your own `PS1` in `~/.bashrc` it still wins (the user rc files load after `/etc/profile.d/*`).
 
 Starship's default config uses Nerd Font glyphs (git branch, language icons), which render as `?` boxes without one installed. Two ways to fix:
 
