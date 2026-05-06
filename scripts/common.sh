@@ -2,6 +2,13 @@
 # Shared helpers for BAR-Devtools scripts.
 # Source this file; it only defines functions and variables.
 
+# bar-dev is the canonical name; .env (loaded by Justfile's dotenv-load) wins
+# if the user has set their own. Defaulting here -- not just in
+# cmd_setup_distrobox -- is what lets cmd_init reference $DEVTOOLS_DISTROBOX
+# under `set -u` on a fresh install before any seed-write to .env has run.
+: "${DEVTOOLS_DISTROBOX:=bar-dev}"
+export DEVTOOLS_DISTROBOX
+
 # $'...' ANSI-C quoting embeds real ESC (0x1b) bytes so the variables work
 # in `cat <<EOF`, `printf "%s"`, and `echo` without -e. Keeping `echo -e`
 # in the helpers below is still fine — there's nothing left for -e to

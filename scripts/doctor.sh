@@ -57,16 +57,11 @@ check_doctor_env() {
     echo "       Not required, but recipes needing distrobox won't auto-enter without it."
   fi
 
-  if [ -n "${DEVTOOLS_DISTROBOX:-}" ]; then
-    if command -v distrobox &>/dev/null && distrobox list 2>/dev/null | grep -q "$DEVTOOLS_DISTROBOX"; then
-      _pass "DEVTOOLS_DISTROBOX=$DEVTOOLS_DISTROBOX (exists)"
-    else
-      _fail "DEVTOOLS_DISTROBOX=$DEVTOOLS_DISTROBOX (container not found)"
-      echo "       Rebuild: just setup::distrobox"
-    fi
-  elif command -v distrobox &>/dev/null; then
-    _warn "DEVTOOLS_DISTROBOX not set — distrobox recipes will fail"
-    echo "       Run: just setup::distrobox"
+  if command -v distrobox &>/dev/null && distrobox list 2>/dev/null | grep -q "$DEVTOOLS_DISTROBOX"; then
+    _pass "DEVTOOLS_DISTROBOX=$DEVTOOLS_DISTROBOX (exists)"
+  else
+    _fail "DEVTOOLS_DISTROBOX=$DEVTOOLS_DISTROBOX (container not found)"
+    echo "       Rebuild: just setup::distrobox"
   fi
 
   echo ""

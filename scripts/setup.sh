@@ -1111,7 +1111,7 @@ _setup_consent_splash() {
 
   if ! command -v distrobox &>/dev/null; then
     need_distrobox_install=1
-  elif [ -z "${DEVTOOLS_DISTROBOX:-}" ]; then
+  elif ! distrobox list 2>/dev/null | grep -q "| $DEVTOOLS_DISTROBOX "; then
     need_distrobox_setup=1
   fi
 
@@ -1163,10 +1163,9 @@ _setup_consent_splash() {
 #   1. python3-watchdog (apt) -- the Observer's inotify backend.
 #   2. fs.inotify.max_user_watches large enough for the BAR tree (~100k+
 #      files including .git/, .lux/, vendored Lua). Distro default is 8192.
-#   3. watchman (Meta's tree-state tracker) -- used by sync.py for fast
-#      incremental cold-copy. Without it, every daemon start re-rsyncs
-#      the whole tree (~80s on /mnt/c). With it, only files changed since
-#      the last sync are touched (~1s typical).
+# Watchman (also a sync.py dep) lives inside the bar-dev container and is
+# wired to host PATH by ensure_watchman_wsl, called from cmd_setup_distrobox
+# after the container exists.
 # Each of these requires sudo, so we don't install silently -- we report
 # what's missing and surface the exact commands. Idempotent and safe to
 # re-run; quiet when everything's already in place.
@@ -1222,8 +1221,6 @@ ensure_sync_daemon_deps_wsl() {
     fi
   fi
 
-  ensure_watchman_wsl || missing=1
-
   if [ "$missing" = "1" ]; then
     warn "Some sync deps are still missing; sync daemon may not start cleanly."
     return 1
@@ -1266,18 +1263,14 @@ cmd_setup_distrobox() {
 
   ensure_wsl_setup
 
-  # Seed DEVTOOLS_DISTROBOX in .env on first run; subsequent runs respect
-  # whatever the user has set there. Also export into this process so the
-  # rest of cmd_init (ensure_watchman_wsl etc.) sees it without re-sourcing
-  # .env -- the Justfile's `set dotenv-load` only fires at recipe entry,
-  # before the seed write happens on a fresh install.
+  # Persist the chosen container name to .env so the user can see/edit it.
+  # The default itself lives in common.sh; this just makes it discoverable.
   local env_file="$DEVTOOLS_DIR/.env"
   touch "$env_file"
   if ! grep -q "^DEVTOOLS_DISTROBOX=" "$env_file" 2>/dev/null; then
-    echo "DEVTOOLS_DISTROBOX=bar-dev" >> "$env_file"
-    ok "Added DEVTOOLS_DISTROBOX=bar-dev to .env (edit to rename your box)"
+    echo "DEVTOOLS_DISTROBOX=$DEVTOOLS_DISTROBOX" >> "$env_file"
+    ok "Added DEVTOOLS_DISTROBOX=$DEVTOOLS_DISTROBOX to .env (edit to rename your box)"
   fi
-  export DEVTOOLS_DISTROBOX="${DEVTOOLS_DISTROBOX:-bar-dev}"
 
   local runtime="podman"
   command -v podman &>/dev/null || runtime="docker"
@@ -1311,6 +1304,12 @@ cmd_setup_distrobox() {
   '
   ok "Lux lua tree configured"
   echo ""
+
+  if is_wsl; then
+    ensure_watchman_wsl || warn "watchman host wrapper not installed; sync daemon will fall back to full rsync."
+    echo ""
+  fi
+
   ok "Distrobox dev environment ready."
   echo ""
   echo "  Recipes that need lux/node/cargo will now run inside '$DEVTOOLS_DISTROBOX' automatically."
