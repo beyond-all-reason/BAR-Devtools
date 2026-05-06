@@ -1254,7 +1254,6 @@ ensure_watchman_wsl() {
 }
 
 DEV_IMAGE="bar-dev"
-DEV_BOX="bar-dev"
 
 cmd_setup_distrobox() {
   echo -e "${BOLD}=== Distrobox Dev Environment ===${NC}"
@@ -1267,6 +1266,19 @@ cmd_setup_distrobox() {
 
   ensure_wsl_setup
 
+  # Seed DEVTOOLS_DISTROBOX in .env on first run; subsequent runs respect
+  # whatever the user has set there. Also export into this process so the
+  # rest of cmd_init (ensure_watchman_wsl etc.) sees it without re-sourcing
+  # .env -- the Justfile's `set dotenv-load` only fires at recipe entry,
+  # before the seed write happens on a fresh install.
+  local env_file="$DEVTOOLS_DIR/.env"
+  touch "$env_file"
+  if ! grep -q "^DEVTOOLS_DISTROBOX=" "$env_file" 2>/dev/null; then
+    echo "DEVTOOLS_DISTROBOX=bar-dev" >> "$env_file"
+    ok "Added DEVTOOLS_DISTROBOX=bar-dev to .env (edit to rename your box)"
+  fi
+  export DEVTOOLS_DISTROBOX="${DEVTOOLS_DISTROBOX:-bar-dev}"
+
   local runtime="podman"
   command -v podman &>/dev/null || runtime="docker"
 
@@ -1275,20 +1287,20 @@ cmd_setup_distrobox() {
   ok "Image built: $DEV_IMAGE"
   echo ""
 
-  distrobox stop --yes "$DEV_BOX" >/dev/null 2>&1 || true
-  distrobox rm -f --yes "$DEV_BOX" >/dev/null 2>&1 \
-    || $runtime rm -f "$DEV_BOX" >/dev/null 2>&1 \
+  distrobox stop --yes "$DEVTOOLS_DISTROBOX" >/dev/null 2>&1 || true
+  distrobox rm -f --yes "$DEVTOOLS_DISTROBOX" >/dev/null 2>&1 \
+    || $runtime rm -f "$DEVTOOLS_DISTROBOX" >/dev/null 2>&1 \
     || true
 
-  step "Creating distrobox '$DEV_BOX'..."
+  step "Creating distrobox '$DEVTOOLS_DISTROBOX'..."
   local image_ref="$DEV_IMAGE"
   [ "$runtime" = "podman" ] && image_ref="localhost/$DEV_IMAGE"
-  distrobox create --name "$DEV_BOX" --image "$image_ref" --yes
-  ok "Distrobox created: $DEV_BOX"
+  distrobox create --name "$DEVTOOLS_DISTROBOX" --image "$image_ref" --yes
+  ok "Distrobox created: $DEVTOOLS_DISTROBOX"
   echo ""
 
   step "Running first-entry setup (lux lua tree)..."
-  distrobox enter "$DEV_BOX" -- bash -c '
+  distrobox enter "$DEVTOOLS_DISTROBOX" -- bash -c '
     lx install-lua 2>/dev/null
     LUA_BIN=$(command -v lua-5.1 2>/dev/null || command -v lua5.1 2>/dev/null)
     if [ -n "$LUA_BIN" ]; then
@@ -1299,20 +1311,10 @@ cmd_setup_distrobox() {
   '
   ok "Lux lua tree configured"
   echo ""
-
-  local env_file="$DEVTOOLS_DIR/.env"
-  if grep -q "^DEVTOOLS_DISTROBOX=" "$env_file" 2>/dev/null; then
-    info "DEVTOOLS_DISTROBOX already set in .env"
-  else
-    echo "DEVTOOLS_DISTROBOX=$DEV_BOX" >> "$env_file"
-    ok "Added DEVTOOLS_DISTROBOX=$DEV_BOX to .env"
-  fi
-
-  echo ""
   ok "Distrobox dev environment ready."
   echo ""
-  echo "  Recipes that need lux/node/cargo will now run inside '$DEV_BOX' automatically."
-  echo "  To enter the box manually:  distrobox enter $DEV_BOX"
+  echo "  Recipes that need lux/node/cargo will now run inside '$DEVTOOLS_DISTROBOX' automatically."
+  echo "  To enter the box manually:  distrobox enter $DEVTOOLS_DISTROBOX"
   echo "  To rebuild after changes:   just setup::distrobox"
 }
 
