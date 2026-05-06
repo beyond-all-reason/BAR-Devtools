@@ -1652,32 +1652,14 @@ _editor_show_preamble() {
   echo ""
 }
 
-# Persist the two editor sub-prompts (install-missing, uninstall-sumneko) to
-# .env. Caller is responsible for the top-level "do you want editor at all"
-# decision -- this only asks the questions that follow from a yes.
-_prompt_editor_sub_actions() {
-  local env_file="$DEVTOOLS_DIR/.env"
-  local ans install_exts="no" uninstall_sumneko="no"
-  if [ "${EDITOR_HAVE_CODE:-0}" = "1" ] && [ -n "${EDITOR_MISSING_EXTS:-}" ]; then
-    read -r -p "  Install the missing VS Code extensions? [Y/n] " ans
-    case "${ans:-y}" in y|Y|yes|YES) install_exts="yes" ;; esac
-  fi
-  if [ "${EDITOR_HAS_SUMNEKO:-0}" = "1" ]; then
-    warn "  sumneko.lua and tangzx.emmylua should not coexist -- duplicate diagnostics"
-    warn "  and competing completions on this codebase."
-    read -r -p "  Uninstall sumneko.lua? [Y/n] " ans
-    case "${ans:-y}" in y|Y|yes|YES) uninstall_sumneko="yes" ;; esac
-  fi
-  {
-    echo "BAR_EDITOR_INSTALL_EXTS=${install_exts}"
-    echo "BAR_EDITOR_UNINSTALL_SUMNEKO=${uninstall_sumneko}"
-  } >> "$env_file"
-}
-
 # Top-level editor opt-in. Front-loaded into cmd_init's Step 0/N batch.
-# Persists BAR_EDITOR_SETUP=yes|no plus the sub-action answers; future runs
-# skip re-prompting (matches how prompt_ssh_setup_choice / springsettings
-# opt-in behave).
+# Persists BAR_EDITOR_SETUP=yes|no; future runs skip re-prompting (matches
+# how prompt_ssh_setup_choice / springsettings opt-in behave).
+#
+# One prompt, not three: the preamble's ✓/✗ list already previews exactly
+# what `yes` will do (install the ✗ items, remove a flagged sumneko.lua),
+# so a separate "install missing exts?" / "uninstall sumneko?" pair would
+# just be the user re-stating what they already saw on screen.
 prompt_editor_setup_choice() {
   local env_file="$DEVTOOLS_DIR/.env"
   touch "$env_file"
@@ -1692,12 +1674,9 @@ prompt_editor_setup_choice() {
   local ans
   read -r -p "Wire up editor integration after the build? [Y/n] " ans
   case "${ans:-y}" in
-    y|Y|yes|YES) ;;
-    *) echo "BAR_EDITOR_SETUP=no" >> "$env_file"; return 0 ;;
+    y|Y|yes|YES) echo "BAR_EDITOR_SETUP=yes" >> "$env_file" ;;
+    *)           echo "BAR_EDITOR_SETUP=no"  >> "$env_file" ;;
   esac
-
-  echo "BAR_EDITOR_SETUP=yes" >> "$env_file"
-  _prompt_editor_sub_actions
 }
 
 # Read the persisted editor decisions from .env and run cmd_setup_editor if
@@ -1712,19 +1691,15 @@ run_editor_setup_choice() {
   esac
 }
 
-# Unattended editor wiring. Reads BAR_EDITOR_INSTALL_EXTS /
-# BAR_EDITOR_UNINSTALL_SUMNEKO from .env (set by prompt_editor_setup_choice)
-# so this function never prompts -- both `just setup::init` and
-# `just setup::editor` populate the env file before calling here.
+# Unattended editor wiring. Always installs the recommended extensions and
+# removes a conflicting sumneko.lua if present -- the Step 0/N preamble
+# previewed exactly this, so an explicit yes covers both. Both paths short-
+# circuit when there's nothing to do (no missing exts / no sumneko).
 cmd_setup_editor() {
   if [ -z "${DEVTOOLS_DISTROBOX:-}" ]; then
     err "DEVTOOLS_DISTROBOX not set. Run: just setup::distrobox"
     return 1
   fi
-  local env_file="$DEVTOOLS_DIR/.env"
-  local install_exts uninstall_sumneko
-  install_exts="$(grep -E '^BAR_EDITOR_INSTALL_EXTS='     "$env_file" 2>/dev/null | tail -1 | cut -d= -f2-)"
-  uninstall_sumneko="$(grep -E '^BAR_EDITOR_UNINSTALL_SUMNEKO=' "$env_file" 2>/dev/null | tail -1 | cut -d= -f2-)"
 
   local local_bin="$HOME/.local/bin" bin
   mkdir -p "$local_bin"
@@ -1749,25 +1724,20 @@ cmd_setup_editor() {
   fi
   echo ""
 
-  if [ "${install_exts:-no}" = "yes" ]; then
-    editor_collect_state
-    if [ "$EDITOR_HAVE_CODE" = "1" ] && [ -n "$EDITOR_MISSING_EXTS" ]; then
-      local ext
-      for ext in $EDITOR_MISSING_EXTS; do
-        code --install-extension "$ext" --force >/dev/null
-        info "Installed $ext"
-      done
-      echo ""
-    fi
+  editor_collect_state
+  if [ "$EDITOR_HAVE_CODE" = "1" ] && [ -n "$EDITOR_MISSING_EXTS" ]; then
+    local ext
+    for ext in $EDITOR_MISSING_EXTS; do
+      code --install-extension "$ext" --force >/dev/null
+      info "Installed $ext"
+    done
+    echo ""
   fi
 
-  if [ "${uninstall_sumneko:-no}" = "yes" ]; then
-    if command -v code >/dev/null 2>&1 \
-       && code --list-extensions 2>/dev/null | grep -qixF sumneko.lua; then
-      code --uninstall-extension sumneko.lua >/dev/null
-      ok "sumneko.lua uninstalled"
-      echo ""
-    fi
+  if [ "$EDITOR_HAS_SUMNEKO" = "1" ]; then
+    code --uninstall-extension sumneko.lua >/dev/null
+    ok "sumneko.lua uninstalled (conflicts with tangzx.emmylua)"
+    echo ""
   fi
 
   info "Binaries exported to ~/.local/bin:"
@@ -1900,6 +1870,15 @@ cmd_init() {
   prompt_editor_setup_choice
   echo ""
 
+  # Run the SSH setup right after collecting the choice so the rest of init
+  # is fully unattended -- including the manual flow's "paste this pubkey on
+  # github.com" pause. Front-loading all interactive work matches the Step 0/N
+  # pattern; splitting op vs manual to different steps was the leftover. After
+  # this returns, clones can use git@ URLs from repos.local.conf and the user
+  # can walk away.
+  run_ssh_setup_choice
+  echo ""
+
   step "1/8  Checking & installing dependencies"
   echo ""
   if check_git &>/dev/null && check_docker &>/dev/null; then
@@ -1919,18 +1898,6 @@ cmd_init() {
   echo ""
   cmd_setup_distrobox
   echo ""
-
-  # Run SSH setup before clones when the mode is non-interactive, so the
-  # clones use the git@ URLs from repos.local.conf directly instead of
-  # failing or falling back. `manual` stays at the end of cmd_init because
-  # it blocks on the user pasting a pubkey into github.com. `skip` and
-  # `existing` are already no-ops here. run_ssh_setup_choice is idempotent,
-  # so the late call below is a no-op for the early-run modes.
-  local _ssh_choice
-  _ssh_choice="$(grep -E "^BAR_SSH_SETUP=" "$DEVTOOLS_DIR/.env" 2>/dev/null | tail -1 | cut -d= -f2-)"
-  case "${_ssh_choice:-skip}" in
-    op|existing) run_ssh_setup_choice ;;
-  esac
 
   step "3/8  Cloning repositories"
   echo ""
@@ -1962,7 +1929,12 @@ cmd_init() {
       esac
       is_wsl && engine_os="windows"
       info "Building Recoil engine (${engine_arch}-${engine_os}, this may take a while)..."
-      bash "$DEVTOOLS_DIR/RecoilEngine/docker-build-v2/build.sh" --arch "$engine_arch" "$engine_os"
+      # Go through `just engine::build` -- not build.sh directly -- so the
+      # WSL post-success hook (`sync.sh mirror-engine`) runs and seeds
+      # $BAR_DEVSYNC_DIR/engine/local-build. Without that mirror, the first
+      # `just bar::launch` after init can't find local-build and the
+      # bar-debug-launcher dropdown shows no [LOCAL] engine entry.
+      ( cd "$DEVTOOLS_DIR" && just engine::build --arch "$engine_arch" "$engine_os" )
     else
       warn "Recoil selected but RecoilEngine/docker-build-v2 missing -- clone may have failed."
     fi
@@ -2004,12 +1976,6 @@ cmd_init() {
   step "8/8  Editor integration"
   echo ""
   run_editor_setup_choice
-  echo ""
-
-  # SSH setup runs last because the manual flow needs the user's attention
-  # ("paste this pubkey on github.com"); the unattended steps are done by
-  # this point so we're not re-blocking them on a prompt.
-  run_ssh_setup_choice
   echo ""
 
   echo -e "${BOLD}=== Setup Complete ===${NC}"

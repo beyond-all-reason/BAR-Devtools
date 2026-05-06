@@ -88,11 +88,16 @@ log *TAIL_FLAGS:
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
     source "$DEVTOOLS_DIR/scripts/setup.sh"
-    # WSL2: the engine writes infolog into C:\Program Files\Beyond-All-Reason\data
-    # regardless of which install actually launched it (BAR launcher quirk).
+    # WSL2: bar_debug_launcher invokes spring.exe with --write-dir "$BAR_DEVSYNC_DIR/data"
+    # (see regenerate_bar_launch_cmd_shim's --data-dir flag + engine_cmd.write_dir),
+    # so the infolog lands there -- not under "C:\Program Files\Beyond-All-Reason\data".
     # Linux: detect_game_dir gives the spring data dir we sync to.
     if is_wsl; then
-      logfile="/mnt/c/Program Files/Beyond-All-Reason/data/infolog.txt"
+      if [ -z "${BAR_DEVSYNC_DIR:-}" ]; then
+        err "BAR_DEVSYNC_DIR not set. Run 'just setup::init' on WSL2 first."
+        exit 1
+      fi
+      logfile="$BAR_DEVSYNC_DIR/data/infolog.txt"
     else
       game_dir="$(detect_game_dir 2>/dev/null)" || {
         err "Game directory not detected. Set BAR_GAME_DIR or run 'just setup::init'."

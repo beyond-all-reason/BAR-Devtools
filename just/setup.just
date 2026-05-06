@@ -45,7 +45,6 @@ editor:
     sed -i '/^BAR_EDITOR_/d' "$DEVTOOLS_DIR/.env" 2>/dev/null || true
     editor_collect_state
     _editor_show_preamble
-    _prompt_editor_sub_actions
     echo "BAR_EDITOR_SETUP=yes" >> "$DEVTOOLS_DIR/.env"
     cmd_setup_editor
 
