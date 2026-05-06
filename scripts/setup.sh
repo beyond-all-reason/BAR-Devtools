@@ -1829,14 +1829,15 @@ clone_for_features() {
     [[ " $wanted " == *" $dir "* ]] || continue
 
     local local_path="${REPO_LOCAL_PATHS[$i]}"
+    local upstream_url="${REPO_UPSTREAM_URLS[$i]}"
     if [ -n "$local_path" ]; then
-      clone_or_update_repo "$dir" "${REPO_URLS[$i]}" "${REPO_BRANCHES[$i]}" "$local_path"
+      clone_or_update_repo "$dir" "${REPO_URLS[$i]}" "${REPO_BRANCHES[$i]}" "$upstream_url" "$local_path"
       linked=$((linked + 1))
     elif [ -d "$DEVTOOLS_DIR/$dir/.git" ]; then
-      clone_or_update_repo "$dir" "${REPO_URLS[$i]}" "${REPO_BRANCHES[$i]}"
+      clone_or_update_repo "$dir" "${REPO_URLS[$i]}" "${REPO_BRANCHES[$i]}" "$upstream_url"
       updated=$((updated + 1))
     else
-      clone_or_update_repo "$dir" "${REPO_URLS[$i]}" "${REPO_BRANCHES[$i]}"
+      clone_or_update_repo "$dir" "${REPO_URLS[$i]}" "${REPO_BRANCHES[$i]}" "$upstream_url"
       cloned=$((cloned + 1))
     fi
   done
