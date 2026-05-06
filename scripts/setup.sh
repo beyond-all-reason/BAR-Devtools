@@ -1906,6 +1906,11 @@ cmd_init() {
     cmd_install_deps || { err "Dependency installation failed. Fix and retry."; exit 1; }
   fi
   ensure_windows_python
+  # Install python3-watchdog / inotify-tools / rsync up front: the engine build
+  # in step 5 triggers `sync.sh mirror-engine` on success, which imports
+  # watchdog. Leaving this for step 7 means a transient engine-build failure
+  # aborts init before the deps the splash promised get installed.
+  ensure_sync_daemon_deps_wsl
   echo ""
 
   step "2/8  Dev environment (distrobox -- required)"
@@ -1989,7 +1994,6 @@ cmd_init() {
     # talks to the Windows engine binary directly. The Linux pipx venv
     # would force WSL→Windows IPC for every engine spawn.
     ensure_bar_launch_venv_windows && regenerate_bar_launch_cmd_shim
-    ensure_sync_daemon_deps_wsl
   else
     cmd_setup_bar_launch
   fi

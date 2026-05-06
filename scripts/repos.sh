@@ -3,15 +3,27 @@
 # Expects: DEVTOOLS_DIR, REPOS_CONF, REPOS_LOCAL (exported by Justfile)
 # Source scripts/common.sh before this file.
 
-declare -a REPO_DIRS=() REPO_URLS=() REPO_BRANCHES=() REPO_FEATURES=() REPO_LOCAL_PATHS=()
+declare -a REPO_DIRS=() REPO_URLS=() REPO_UPSTREAM_URLS=() REPO_BRANCHES=() REPO_FEATURES=() REPO_LOCAL_PATHS=()
+
+# Apply @protocol rewrite to a github.com URL.
+_apply_protocol() {
+  local url="$1" protocol="$2"
+  if [ "$protocol" = "ssh" ] && [[ "$url" =~ ^https://github\.com/(.+)$ ]]; then
+    echo "git@github.com:${BASH_REMATCH[1]}"
+  elif [ "$protocol" = "https" ] && [[ "$url" =~ ^git@github\.com:(.+)$ ]]; then
+    echo "https://github.com/${BASH_REMATCH[1]}"
+  else
+    echo "$url"
+  fi
+}
 
 load_repos_conf() {
-  REPO_DIRS=(); REPO_URLS=(); REPO_BRANCHES=(); REPO_FEATURES=(); REPO_LOCAL_PATHS=()
-  local -A seen=()
+  REPO_DIRS=(); REPO_URLS=(); REPO_UPSTREAM_URLS=(); REPO_BRANCHES=(); REPO_FEATURES=(); REPO_LOCAL_PATHS=()
+  local -A seen=() base_urls=()
   local local_root="" protocol=""
 
   _parse_conf() {
-    local file="$1"
+    local file="$1" is_base="$2"
     [ -f "$file" ] || return 0
     while IFS= read -r line || [ -n "$line" ]; do
       line="${line%$'\r'}"
@@ -35,12 +47,17 @@ load_repos_conf() {
       [ -z "$dir" ] && continue
       local_path="${local_path/#\~/$HOME}"
 
-      # repos.local.conf is a per-field override: any column the user
-      # leaves blank falls back to whatever repos.conf set. Only `dir`
-      # is required (it's the join key); url/branch/feature/local_path
-      # all merge. This means a local override only needs to list the
-      # columns it actually wants to change -- typically just `url` for
+      # repos.conf supplies the canonical URL (used for the `upstream` remote
+      # so tags reach the local clone even when origin is a fork). repos.local.conf
+      # is a per-field override: any column the user leaves blank falls back to
+      # whatever repos.conf set. Only `dir` is required (the join key); url /
+      # branch / feature / local_path all merge. A local override only needs to
+      # list the columns it actually wants to change -- typically just `url` for
       # a fork or `local_path` for a sibling checkout.
+      if [ "$is_base" = "1" ] && [ -n "$url" ]; then
+        base_urls[$dir]="$url"
+      fi
+
       local prev_url="" prev_branch="" prev_feature="" prev_local_path=""
       if [ -n "${seen[$dir]:-}" ]; then
         IFS='|' read -r prev_url prev_branch prev_feature prev_local_path <<< "${seen[$dir]}"
@@ -57,19 +74,23 @@ load_repos_conf() {
     done < "$file"
   }
 
-  _parse_conf "$REPOS_CONF"
-  _parse_conf "$REPOS_LOCAL"
+  _parse_conf "$REPOS_CONF" 1
+  _parse_conf "$REPOS_LOCAL" 0
 
   local dir
   for dir in "${!seen[@]}"; do
-    local url branch feature local_path
+    local url branch feature local_path upstream_url=""
     IFS='|' read -r url branch feature local_path <<< "${seen[$dir]}"
 
-    # @protocol: rewrite github.com URLs between https and ssh forms.
-    if [ "$protocol" = "ssh" ] && [[ "$url" =~ ^https://github\.com/(.+)$ ]]; then
-      url="git@github.com:${BASH_REMATCH[1]}"
-    elif [ "$protocol" = "https" ] && [[ "$url" =~ ^git@github\.com:(.+)$ ]]; then
-      url="https://github.com/${BASH_REMATCH[1]}"
+    url="$(_apply_protocol "$url" "$protocol")"
+    if [ -n "${base_urls[$dir]:-}" ]; then
+      local base_url
+      base_url="$(_apply_protocol "${base_urls[$dir]}" "$protocol")"
+      # Only treat the canonical as a separate `upstream` when it differs
+      # from origin -- otherwise a single remote already covers it.
+      if [ "$base_url" != "$url" ]; then
+        upstream_url="$base_url"
+      fi
     fi
 
     # @local_root: any repo without an explicit local_path gets $local_root/$dir.
@@ -79,10 +100,143 @@ load_repos_conf() {
 
     REPO_DIRS+=("$dir")
     REPO_URLS+=("$url")
+    REPO_UPSTREAM_URLS+=("$upstream_url")
     REPO_BRANCHES+=("$branch")
     REPO_FEATURES+=("$feature")
     REPO_LOCAL_PATHS+=("$local_path")
   done
+}
+
+# Remote model:
+#   * Canonical URL (repos.conf) is always `upstream`.
+#   * Fork URL (repos.local.conf override) is `origin`. Without an override,
+#     `origin` doesn't exist -- the only remote is `upstream`.
+# We never mutate remotes on existing clones implicitly; verify_remotes only
+# warns and points users at `just repos::fixup`. Fresh clones from this script
+# are created in the right shape from the start.
+
+# Warn (don't touch) when an existing repo's remotes don't match config.
+verify_remotes() {
+  local dir="$1" target="$2" url="$3" upstream_url="$4"
+  [ -d "$target/.git" ] || return 0
+
+  local origin_url upstream_remote_url
+  origin_url="$(git -C "$target" remote get-url origin 2>/dev/null || true)"
+  upstream_remote_url="$(git -C "$target" remote get-url upstream 2>/dev/null || true)"
+
+  local complaint=""
+  if [ -n "$upstream_url" ]; then
+    # Fork in play: expect origin=$url, upstream=$upstream_url.
+    if [ "$origin_url" != "$url" ] || [ "$upstream_remote_url" != "$upstream_url" ]; then
+      complaint="expected origin=${url}, upstream=${upstream_url}"
+    fi
+  else
+    # No fork: expect a single remote `upstream` = canonical. Tolerate the
+    # legacy layout where origin (and only origin) points at canonical.
+    if [ -n "$upstream_remote_url" ] && [ "$upstream_remote_url" != "$url" ]; then
+      complaint="expected upstream=${url}"
+    elif [ -z "$upstream_remote_url" ] && [ -n "$origin_url" ] && [ "$origin_url" != "$url" ]; then
+      complaint="expected upstream=${url}"
+    fi
+  fi
+
+  if [ -n "$complaint" ]; then
+    warn "  ${dir}: remotes don't match config (${complaint})"
+    [ -n "$origin_url" ]          && warn "    origin   = ${origin_url}"
+    [ -n "$upstream_remote_url" ] && warn "    upstream = ${upstream_remote_url}"
+    warn "    run \`just repos::fixup\` to normalize"
+  fi
+}
+
+# Fetch every existing remote so tags from both origin and upstream stay current.
+fetch_all_remotes() {
+  local dir="$1" target="$2"
+  local remote
+  while read -r remote; do
+    [ -z "$remote" ] && continue
+    git -C "$target" fetch "$remote" --tags --quiet 2>/dev/null \
+      || warn "  ${dir}: fetch ${remote} failed (offline or auth?)"
+  done < <(git -C "$target" remote)
+}
+
+# Clone $url into $target with the correct origin name and (if forked) wire
+# upstream + fetch tags. Used for fresh checkouts only.
+do_clone() {
+  local dir="$1" url="$2" branch="$3" upstream_url="$4" target="$5"
+  local origin_name="origin"
+  # No fork override -> the canonical IS our only remote, name it `upstream`.
+  [ -z "$upstream_url" ] && origin_name="upstream"
+
+  info "  ${dir}: cloning ${url} as ${origin_name} (branch: ${branch})..."
+  mkdir -p "$(dirname "$target")"
+  if ! git clone --origin "$origin_name" --recurse-submodules --branch "$branch" "$url" "$target" 2>&1 | sed 's/^/    /'; then
+    err "  ${dir}: clone failed (check URL / SSH access)"
+    return 1
+  fi
+  if [ -n "$upstream_url" ]; then
+    info "  ${dir}: adding upstream -> ${upstream_url}"
+    git -C "$target" remote add upstream "$upstream_url"
+    git -C "$target" fetch upstream --tags --quiet 2>/dev/null \
+      || warn "  ${dir}: upstream fetch failed (offline or auth?)"
+  fi
+}
+
+# Normalize an existing repo to the (origin=fork, upstream=canonical) model.
+# Only acts on layouts we recognize; warns and skips otherwise so we never
+# blow away custom remote setups.
+fixup_remotes() {
+  local dir="$1" target="$2" url="$3" upstream_url="$4"
+  [ -d "$target/.git" ] || return 0
+
+  local origin_url upstream_remote_url
+  origin_url="$(git -C "$target" remote get-url origin 2>/dev/null || true)"
+  upstream_remote_url="$(git -C "$target" remote get-url upstream 2>/dev/null || true)"
+
+  if [ -n "$upstream_url" ]; then
+    # Target: origin=$url (fork), upstream=$upstream_url (canonical).
+    if [ "$origin_url" = "$url" ] && [ "$upstream_remote_url" = "$upstream_url" ]; then
+      ok "  ${dir}: already normalized"
+      return 0
+    fi
+    if [ "$origin_url" = "$url" ] && [ -z "$upstream_remote_url" ]; then
+      info "  ${dir}: adding upstream=${upstream_url}"
+      git -C "$target" remote add upstream "$upstream_url"
+    elif [ "$origin_url" = "$upstream_url" ] && [ -z "$upstream_remote_url" ]; then
+      info "  ${dir}: renaming origin -> upstream and adding origin=${url}"
+      git -C "$target" remote rename origin upstream
+      git -C "$target" remote add origin "$url"
+    elif [ "$origin_url" = "$upstream_url" ] && [ "$upstream_remote_url" = "$url" ]; then
+      info "  ${dir}: swapping inverted origin/upstream URLs"
+      git -C "$target" remote set-url origin "$url"
+      git -C "$target" remote set-url upstream "$upstream_url"
+    else
+      warn "  ${dir}: unrecognized remote layout, skipping"
+      [ -n "$origin_url" ]          && warn "    origin   = ${origin_url}"
+      [ -n "$upstream_remote_url" ] && warn "    upstream = ${upstream_remote_url}"
+      warn "    expected origin=${url}, upstream=${upstream_url}"
+      return 0
+    fi
+    git -C "$target" fetch upstream --tags --quiet 2>/dev/null \
+      || warn "  ${dir}: upstream fetch failed (offline or auth?)"
+  else
+    # Target: single remote `upstream` = canonical ($url).
+    if [ "$upstream_remote_url" = "$url" ]; then
+      ok "  ${dir}: already normalized"
+      return 0
+    fi
+    if [ -z "$upstream_remote_url" ] && [ "$origin_url" = "$url" ]; then
+      info "  ${dir}: renaming origin -> upstream"
+      git -C "$target" remote rename origin upstream
+    else
+      warn "  ${dir}: unrecognized remote layout, skipping"
+      [ -n "$origin_url" ]          && warn "    origin   = ${origin_url}"
+      [ -n "$upstream_remote_url" ] && warn "    upstream = ${upstream_remote_url}"
+      warn "    expected upstream=${url}"
+      return 0
+    fi
+    git -C "$target" fetch upstream --tags --quiet 2>/dev/null \
+      || warn "  ${dir}: upstream fetch failed (offline or auth?)"
+  fi
 }
 
 # True if comma-separated feature list $1 contains tag $2.
@@ -97,16 +251,13 @@ repo_has_feature() {
 }
 
 clone_or_update_repo() {
-  local dir="$1" url="$2" branch="$3" local_path="${4:-}" target="$DEVTOOLS_DIR/$dir"
+  local dir="$1" url="$2" branch="$3" upstream_url="$4" local_path="${5:-}" target="$DEVTOOLS_DIR/$dir"
 
   if [ -n "$local_path" ]; then
     if [ ! -d "$local_path" ]; then
-      info "  ${dir}: local path absent; cloning ${url} into ${local_path}..."
-      mkdir -p "$(dirname "$local_path")"
-      if ! git clone --recurse-submodules --branch "$branch" "$url" "$local_path" 2>&1 | sed 's/^/    /'; then
-        err "  ${dir}: clone into ${local_path} failed (check URL / SSH access)"
-        return 1
-      fi
+      do_clone "$dir" "$url" "$branch" "$upstream_url" "$local_path" || return 1
+    else
+      verify_remotes "$dir" "$local_path" "$url" "$upstream_url"
     fi
     if [ -L "$target" ]; then
       local current_link
@@ -131,15 +282,9 @@ clone_or_update_repo() {
   fi
 
   if [ -d "$target/.git" ]; then
-    local current_url
-    current_url="$(git -C "$target" remote get-url origin 2>/dev/null || true)"
-    if [ "$current_url" != "$url" ] && [ -n "$current_url" ]; then
-      warn "  ${dir}: origin is ${current_url}"
-      warn "  ${dir}: config says ${url}"
-      warn "  ${dir}: add to repos.local.conf to set your preferred remote"
-    fi
+    verify_remotes "$dir" "$target" "$url" "$upstream_url"
     info "  ${dir}: fetching latest..."
-    git -C "$target" fetch origin --quiet 2>/dev/null || warn "  ${dir}: fetch failed (offline?)"
+    fetch_all_remotes "$dir" "$target"
     git -C "$target" submodule update --init --recursive --quiet 2>/dev/null \
       || warn "  ${dir}: submodule sync failed (offline or auth?)"
     local current_branch
@@ -148,8 +293,7 @@ clone_or_update_repo() {
       info "  ${dir}: on branch '${current_branch}' (config says '${branch}')"
     fi
   else
-    info "  ${dir}: cloning ${url} (branch: ${branch})..."
-    git clone --recurse-submodules --branch "$branch" "$url" "$target" 2>&1 | sed 's/^/    /'
+    do_clone "$dir" "$url" "$branch" "$upstream_url" "$target"
   fi
 }
 
@@ -174,6 +318,7 @@ cmd_clone() {
   for i in "${!REPO_DIRS[@]}"; do
     local dir="${REPO_DIRS[$i]}"
     local url="${REPO_URLS[$i]}"
+    local upstream_url="${REPO_UPSTREAM_URLS[$i]}"
     local branch="${REPO_BRANCHES[$i]}"
     local feature="${REPO_FEATURES[$i]}"
     local local_path="${REPO_LOCAL_PATHS[$i]}"
@@ -184,13 +329,13 @@ cmd_clone() {
     fi
 
     if [ -n "$local_path" ]; then
-      clone_or_update_repo "$dir" "$url" "$branch" "$local_path"
+      clone_or_update_repo "$dir" "$url" "$branch" "$upstream_url" "$local_path"
       linked=$((linked + 1))
     elif [ -d "$DEVTOOLS_DIR/$dir/.git" ]; then
-      clone_or_update_repo "$dir" "$url" "$branch"
+      clone_or_update_repo "$dir" "$url" "$branch" "$upstream_url"
       updated=$((updated + 1))
     else
-      clone_or_update_repo "$dir" "$url" "$branch"
+      clone_or_update_repo "$dir" "$url" "$branch" "$upstream_url"
       cloned=$((cloned + 1))
     fi
   done
@@ -266,8 +411,34 @@ cmd_update() {
       branch="$(git -C "$target" branch --show-current 2>/dev/null)"
       info "${dir}: pulling ${branch}..."
       git -C "$target" pull --ff-only 2>&1 | sed 's/^/    /' || warn "  ${dir}: pull failed (conflicts?)"
+      # Keep tags from every configured remote current (upstream releases, etc.)
+      fetch_all_remotes "$dir" "$target"
     fi
   done
   echo ""
   ok "Update complete."
+}
+
+cmd_fixup() {
+  load_repos_conf
+
+  echo -e "${BOLD}=== Normalizing Repository Remotes ===${NC}"
+  echo ""
+  info "Target: origin = fork (repos.local.conf), upstream = canonical (repos.conf)."
+  info "Repos with no fork: single remote \`upstream\` = canonical."
+  echo ""
+
+  local i
+  for i in "${!REPO_DIRS[@]}"; do
+    local dir="${REPO_DIRS[$i]}"
+    local url="${REPO_URLS[$i]}"
+    local upstream_url="${REPO_UPSTREAM_URLS[$i]}"
+    local local_path="${REPO_LOCAL_PATHS[$i]}"
+    local repo_path="$DEVTOOLS_DIR/$dir"
+    [ -n "$local_path" ] && repo_path="$local_path"
+    [ -d "$repo_path/.git" ] || continue
+    fixup_remotes "$dir" "$repo_path" "$url" "$upstream_url"
+  done
+  echo ""
+  ok "Fixup complete."
 }

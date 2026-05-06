@@ -27,3 +27,11 @@ update:
     source "$DEVTOOLS_DIR/scripts/common.sh"
     source "$DEVTOOLS_DIR/scripts/repos.sh"
     cmd_update
+
+# Normalize remotes to (origin = fork, upstream = canonical). Skips unrecognized layouts.
+fixup:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    source "$DEVTOOLS_DIR/scripts/repos.sh"
+    cmd_fixup
