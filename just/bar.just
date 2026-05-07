@@ -76,17 +76,24 @@ sync-logs *TAIL_FLAGS:
 
 # Tail the engine's infolog from the most recent BAR run.
 # Use `just bar::log -- -n 200` to forward extra tail flags.
+#
+# WSL2 note: passes `---disable-inotify -s 0.5` so tail stat-polls instead of
+# relying on inotify. Plan 9 doesn't forward inotify events from Windows
+# writers on /mnt/c, so the default inotify backend would be silent during
+# engine writes. Polling at 2Hz is rounding-error vs. engine log volume.
 log *TAIL_FLAGS:
     #!/usr/bin/env bash
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
     source "$DEVTOOLS_DIR/scripts/setup.sh"
+    tail_extra=()
     if is_wsl; then
       if [ -z "${BAR_DATA_DIR:-}" ]; then
         err "BAR_DATA_DIR not set. Run 'just setup::init' on WSL2 first."
         exit 1
       fi
       logfile="$BAR_DATA_DIR/infolog.txt"
+      tail_extra=(---disable-inotify -s 0.5)
     else
       game_dir="$(detect_game_dir 2>/dev/null)" || {
         err "Game directory not detected. Set BAR_DATA_DIR or run 'just setup::init'."
@@ -101,7 +108,7 @@ log *TAIL_FLAGS:
     info "Tailing $logfile (Ctrl-C to stop)"
     set -- {{TAIL_FLAGS}}
     [ "${1:-}" = "--" ] && shift
-    exec tail -F "$@" "$logfile"
+    exec tail -F "${tail_extra[@]}" "$@" "$logfile"
 
 # Alias: `bar::logs` (plural). just's `alias` directive doesn't work
 # inside modules, so we delegate explicitly.
