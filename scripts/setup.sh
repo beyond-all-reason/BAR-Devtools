@@ -15,10 +15,6 @@ detect_distro() {
   fi
 }
 
-is_wsl() {
-  [ -n "${WSL_DISTRO_NAME:-}" ] || [ -f /proc/sys/fs/binfmt_misc/WSLInterop ]
-}
-
 # Pure-bash semver compare: returns 0 iff $1 >= $2. Mirrors scripts/bootstrap.sh
 # so cmd_init can reject stale `just` (e.g. apt's 1.21) with a clear pointer.
 _version_ge() {

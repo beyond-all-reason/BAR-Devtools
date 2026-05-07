@@ -28,6 +28,67 @@ warn()  { echo -e "${YELLOW}[warn]${NC}  $*"; }
 err()   { echo -e "${RED}[error]${NC} $*"; }
 step()  { echo -e "${CYAN}[step]${NC}  $*"; }
 
+is_wsl() {
+    [ -n "${WSL_DISTRO_NAME:-}" ] || [ -f /proc/sys/fs/binfmt_misc/WSLInterop ]
+}
+
+# Echo running engine processes that have the *local-build* binaries open --
+# i.e. processes that `engine::build` is about to overwrite. A live local
+# engine has those files mmap'd (Linux) / share-locked (Windows), so the
+# install step would corrupt it or fail with EACCES via drvfs.
+#
+# Path-scoped on purpose: the user may be playtesting with `--engine alpha`
+# or any non-local version, and rebuilding the local engine in that case is
+# perfectly safe. We only refuse when the running spring is actually using
+# our build target.
+#
+# Game dir comes from $1, falling back to $BAR_DATA_DIR. Returns 1 (with
+# names on stdout) iff any local-build engine is alive.
+_engine_holders() {
+    local game_dir="${1:-${BAR_DATA_DIR:-}}"
+    [ -n "$game_dir" ] || return 0
+    local local_build="$game_dir/engine/local-build"
+    [ -e "$local_build" ] || return 0
+
+    local holders=()
+    if is_wsl; then
+        command -v powershell.exe &>/dev/null || return 0
+        local win_local
+        win_local="$(wslpath -w "$local_build" 2>/dev/null)" || return 0
+        # Win32_Process.ExecutablePath is the canonical "where did this
+        # process boot from" field; case-insensitive prefix match because
+        # NTFS paths are case-insensitive.
+        local matches
+        matches="$(powershell.exe -NoProfile -NonInteractive -Command "
+            Get-CimInstance Win32_Process -Filter \"Name='spring.exe' OR Name='Beyond-All-Reason.exe'\" 2>\$null |
+              Where-Object { \$_.ExecutablePath -and \$_.ExecutablePath.StartsWith('$win_local', [StringComparison]::OrdinalIgnoreCase) } |
+              Select-Object -ExpandProperty Name
+        " 2>/dev/null | tr -d '\r' | sort -u | grep -v '^$' || true)"
+        [ -n "$matches" ] && mapfile -t holders <<<"$matches"
+    else
+        # /proc/PID/exe is a magic symlink whose readlink gives the fully
+        # resolved executable path, so we compare against the resolved
+        # local-build path too (link::create symlinks it into the source
+        # tree).
+        local local_real proc pid exe
+        local_real="$(readlink -f "$local_build" 2>/dev/null || echo "$local_build")"
+        for proc in spring spring-headless; do
+            for pid in $(pgrep -x "$proc" 2>/dev/null || true); do
+                exe="$(readlink "/proc/$pid/exe" 2>/dev/null)" || continue
+                case "$exe" in
+                    "$local_real"/*|"$local_build"/*) holders+=("$proc (pid $pid)") ;;
+                esac
+            done
+        done
+    fi
+
+    if [ "${#holders[@]}" -gt 0 ]; then
+        printf '%s\n' "${holders[@]}"
+        return 1
+    fi
+    return 0
+}
+
 # Remove a directory that may contain files owned by a container runtime.
 clean_dir() {
     local dir="$1"

@@ -267,28 +267,6 @@ cmd_stop() {
   ok "sync daemon stopped"
 }
 
-# Echoes Windows process names holding engine DLLs (returns 1 if any).
-# Uses tasklist via cmd.exe -- the locks are Windows OS locks; pgrep/ps
-# in WSL won't see them.
-_engine_lock_holders() {
-  if ! command -v tasklist.exe &>/dev/null && ! command -v cmd.exe &>/dev/null; then
-    return 0
-  fi
-  local holders=()
-  local proc
-  for proc in spring.exe Beyond-All-Reason.exe; do
-    if cmd.exe /c "tasklist /nh /fi \"IMAGENAME eq $proc\"" 2>/dev/null \
-       | grep -qi "^$proc"; then
-      holders+=("$proc")
-    fi
-  done
-  if [ "${#holders[@]}" -gt 0 ]; then
-    printf '%s\n' "${holders[@]}"
-    return 1
-  fi
-  return 0
-}
-
 cmd_mirror_engine() {
   local engine_pair
   if ! engine_pair="$(_compute_engine_pair)"; then
@@ -296,16 +274,16 @@ cmd_mirror_engine() {
     return 0
   fi
 
-  # Preflight: live spring.exe / launcher holds open handles on the
-  # engine DLLs; rsync through drvfs would EACCES per file and leave
-  # a half-mirrored install. Refuse rather than half-do it.
+  # Defensive preflight: engine.just runs the same check earlier, but
+  # `sync.sh mirror-engine` is also reachable directly. A live spring.exe
+  # share-locks the engine DLLs; rsync through drvfs would EACCES per file
+  # and leave a half-mirrored install.
   local holders
-  if ! holders="$(_engine_lock_holders)"; then
-    err "Cannot mirror engine -- the following Windows process(es) are running and hold the engine DLLs:"
+  if ! holders="$(_engine_holders)"; then
+    err "Cannot mirror engine -- the following process(es) are running and hold the engine binaries:"
     while IFS= read -r h; do err "  - $h"; done <<<"$holders"
     err "Stop them first, then re-run 'just engine::build windows' (or just 'sync.sh mirror-engine'):"
-    err "  just bar::stop                # stops launcher + spring + python"
-    err "  taskkill /F /IM spring.exe /T  # manual fallback"
+    err "  just bar::stop"
     return 1
   fi
 
