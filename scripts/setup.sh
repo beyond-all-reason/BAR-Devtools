@@ -1770,16 +1770,12 @@ cmd_init() {
     return 0
   fi
 
-  # Capture the symlink decision now; the actual symlinking happens later
-  # once the repos exist on disk.
-  local game_dir do_link=""
+  # Symlink decision is captured now; actual linking happens in step 6,
+  # once the repos exist on disk. Persisted as BAR_LINK_ON_BUILD.
+  ensure_module_by_name link_on_build
+  local game_dir do_link
   game_dir="$(detect_game_dir 2>/dev/null)" || true
-  if [ -n "$game_dir" ]; then
-    echo ""
-    info "Game directory detected: $game_dir"
-    warn "Symlinking will replace any existing engine/chobby/bar dirs there."
-    read -rp "Symlink all selected components into the game dir after build? [y/N] " do_link
-  fi
+  do_link="$(read_env_key BAR_LINK_ON_BUILD)"
 
   prompt_springsettings_opt_in
   prompt_ssh_setup_choice
@@ -1860,7 +1856,7 @@ cmd_init() {
   echo ""
   if [ -z "$game_dir" ]; then
     info "No game directory detected. Set BAR_DATA_DIR to enable linking."
-  elif [[ "$do_link" =~ ^[Yy]$ ]]; then
+  elif [ "$do_link" = "yes" ]; then
     local available=() name
     features_include "$features" recoil && [ -d "$DEVTOOLS_DIR/RecoilEngine" ] && available+=("engine")
     features_include "$features" chobby && [ -d "$DEVTOOLS_DIR/BYAR-Chobby" ]    && available+=("chobby")
