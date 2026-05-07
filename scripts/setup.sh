@@ -1904,6 +1904,19 @@ cmd_init() {
     for name in "${available[@]}"; do
       cmd_link "$name"
     done
+
+    # WSL2: pre-warm the Watchman cold-copy seed during init's AFK time.
+    # The first `bar::launch` then hits the incremental-delta path
+    # (seconds) instead of timing out on a full rsync of the source trees
+    # through /mnt/c. _wait_for_ready in sync.sh has a 300s bound and a
+    # fresh BAR + chobby seed has been observed to exceed it. Fail-soft:
+    # the first bar::launch falls back to a full seed if this trips.
+    if is_wsl; then
+      echo ""
+      info "Pre-warming sync state (cold-copy of source pairs to $BAR_DATA_DIR)"
+      bash "$DEVTOOLS_DIR/scripts/sync.sh" cold-copy \
+        || warn "Pre-warm failed; first 'just bar::launch' will fall back to a full rsync seed."
+    fi
   else
     info "Skipping symlinks (declined at configuration step)."
   fi
@@ -2150,10 +2163,10 @@ cmd_link() {
   # (scripts/sync.sh + scripts/sync.py) is the analogue of the symlink: it
   # mirrors source_path on WSL ext4 to link_path on Windows NTFS. We just
   # need the target subdir present so the engine doesn't choke on an empty
-  # games/ dir; the cold-copy + watchman clock seed happens exactly once on
-  # the next `just bar::launch`. Doing an rsync here would just be a slow
-  # duplicate of that seed -- it doesn't record the clock sync.py needs,
-  # so the daemon would re-rsync everything anyway.
+  # games/ dir; the cold-copy + watchman clock seed runs either at
+  # setup::init's pre-warm step or on the next `bash scripts/sync.sh
+  # cold-copy` / `just bar::launch`. Doing a raw rsync here would be a
+  # slow duplicate -- it doesn't record the watchman clock sync.py needs.
   if is_wsl; then
     if [ ! -d "$source_path" ]; then
       err "Source not present at $source_path -- can't register sync target."
@@ -2161,7 +2174,7 @@ cmd_link() {
     fi
     mkdir -p "$link_path"
     info "WSL2: $target tracks $source_path -> $link_path (via sync daemon)"
-    info "  Initial cold copy will run on first 'just bar::launch'."
+    info "  Mirror updates run via the sync daemon (seeded by setup::init or bar::launch)."
     ok "Tracked $target: $link_path (mirrors $source_path)"
     return 0
   fi

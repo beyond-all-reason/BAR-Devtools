@@ -7,6 +7,8 @@
 #   start [--wait-ready]   start daemon (cold-copies, then watches; idempotent)
 #   stop                   SIGTERM, wait, SIGKILL
 #   status                 PID + alive/dead
+#   cold-copy              one-shot seed of source pairs (no watcher); used by
+#                          setup::init to pre-warm Watchman state in AFK time
 #   mirror-engine          one-shot cold copy of the engine pair
 #   logs [-f|...]          tail the daemon log
 
@@ -267,6 +269,61 @@ cmd_stop() {
   ok "sync daemon stopped"
 }
 
+# One-shot cold-copy of the source pairs (no watcher). Pre-warms the
+# Watchman clock + per-pair state file so the next `cmd_start` skips the
+# rsync stat-walk and goes straight to the incremental-delta path.
+# Without this, a fresh BAR + chobby seed on slow drvfs has been observed
+# to exceed _wait_for_ready's 300s bound on the first `bar::launch`.
+# Engine pair stays excluded -- mirrored separately by cmd_mirror_engine.
+cmd_cold_copy() {
+  local pair_lines
+  if ! pair_lines="$(_compute_source_pairs)"; then
+    return 1
+  fi
+
+  if ! command -v python3 &>/dev/null; then
+    err "python3 not found on PATH."
+    return 1
+  fi
+  if ! python3 -c 'import watchdog' &>/dev/null; then
+    err "python3 watchdog module not available."
+    info "On Ubuntu/WSL2: sudo apt-get install -y python3-watchdog"
+    return 1
+  fi
+
+  local pair_args=()
+  local p
+  while IFS= read -r p; do
+    [ -n "$p" ] && pair_args+=(--pair "$p")
+  done <<<"$pair_lines"
+
+  step "Cold-copy seed (one-shot, no watcher)"
+  info "log: $LOG_FILE  (live: just bar::sync-logs -- -F)"
+  : >"$LOG_FILE"
+
+  # Stream log to stderr so the user sees rsync/watchman progress instead
+  # of a frozen screen during the seed; mirrors _wait_for_ready's pattern.
+  tail -F -n 0 "$LOG_FILE" >&2 &
+  local tail_pid=$!
+  disown "$tail_pid" 2>/dev/null || true
+
+  local rc=0
+  python3 "$DEVTOOLS_DIR/scripts/sync.py" \
+      --log "$LOG_FILE" \
+      --cold-copy \
+      "${pair_args[@]}" \
+      </dev/null >>"$LOG_FILE" 2>&1 || rc=$?
+
+  kill "$tail_pid" 2>/dev/null || true
+  if [ $rc -eq 0 ]; then
+    ok "Cold-copy seed complete -- next bar::launch will be incremental."
+  else
+    err "Cold-copy seed failed (rc=$rc). See $LOG_FILE."
+    err "First 'just bar::launch' will fall back to a full rsync seed."
+  fi
+  return $rc
+}
+
 cmd_mirror_engine() {
   local engine_pair
   if ! engine_pair="$(_compute_engine_pair)"; then
@@ -304,11 +361,12 @@ case "${1:-status}" in
   start)         shift; cmd_start "$@" ;;
   stop)          shift; cmd_stop  "$@" ;;
   status)        shift; cmd_status "$@" ;;
+  cold-copy)     shift; cmd_cold_copy "$@" ;;
   mirror-engine) shift; cmd_mirror_engine "$@" ;;
   logs)          shift; cmd_logs "$@" ;;
   *)
     err "Unknown subcommand: $1"
-    echo "Usage: scripts/sync.sh {start [--wait-ready]|stop|status|mirror-engine|logs}" >&2
+    echo "Usage: scripts/sync.sh {start [--wait-ready]|stop|status|cold-copy|mirror-engine|logs}" >&2
     exit 2
     ;;
 esac
