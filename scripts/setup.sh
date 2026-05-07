@@ -727,31 +727,25 @@ ensure_bar_appimage_path_set() {
   fi
 }
 
-# ---------------------------------------------------------------------------
-# WSL2 sync target (Phase 3): BAR_DEVSYNC_DIR -- Windows-side data dir that
-# the engine reads from, with three Devtools subpaths kept in sync from WSL.
-# See bar-design-docs/bar_launch/plan.md (Phase 3).
-# ---------------------------------------------------------------------------
+# BAR_DATA_DIR: the engine's data dir -- where spring reads cache/, games/,
+# engine/, and writes infolog.txt. On WSL2 this is a Windows-side path the
+# sync daemon mirrors our WSL Devtools sources into (sync.sh + sync.py); on
+# Linux, a real dir we symlink into. Persisted in .env on WSL2.
 
-# Read BAR_DEVSYNC_DIR from .env (preferred) or the current env. Echoes the
-# WSL path form (/mnt/c/...) -- the canonical form we persist. Empty if unset.
-bar_devsync_dir_get() {
+bar_data_dir_get() {
   local env_file="$DEVTOOLS_DIR/.env"
   if [ -f "$env_file" ]; then
     local val
-    val="$(grep -E '^BAR_DEVSYNC_DIR=' "$env_file" 2>/dev/null | tail -n1 | cut -d= -f2-)"
+    val="$(grep -E '^BAR_DATA_DIR=' "$env_file" 2>/dev/null | tail -n1 | cut -d= -f2-)"
     if [ -n "$val" ]; then
-      # Strip optional surrounding quotes.
       val="${val%\"}"; val="${val#\"}"
       echo "$val"
       return 0
     fi
   fi
-  echo "${BAR_DEVSYNC_DIR:-}"
+  echo "${BAR_DATA_DIR:-}"
 }
 
-# Convert a WSL /mnt/c/... path to a Windows C:\... path. Falls back to the
-# input if wslpath isn't available (non-WSL hosts shouldn't call this).
 _to_windows_path() {
   local p="$1"
   if command -v wslpath &>/dev/null; then
@@ -761,7 +755,6 @@ _to_windows_path() {
   fi
 }
 
-# Convert a Windows C:\... path to a WSL /mnt/c/... path. Same fallback.
 _to_wsl_path() {
   local p="$1"
   if command -v wslpath &>/dev/null; then
@@ -771,15 +764,10 @@ _to_wsl_path() {
   fi
 }
 
-# Echo the WSL form of the BAR launcher's own data dir, or empty if we
-# can't reach Windows. We default BAR_DEVSYNC_DIR to the launcher's data
-# directory (where Beyond-All-Reason.exe puts cache/, demos/, infolog.txt,
-# etc.) so the engine reads our synced bar/chobby/engine from a single
-# canonical location -- no junctions, no second data dir. The launcher's
-# install path follows BAR's installer's `%LOCALAPPDATA%\Programs\
-# Beyond-All-Reason\` convention; if a contributor installed somewhere
-# else they can override via the prompt.
-_default_devsync_dir() {
+# Default: the BAR launcher's own data dir. We deliberately co-locate with
+# it instead of using a separate scratch + junction -- spring's archive
+# scanner doesn't traverse reparse points into game subdirs.
+_default_bar_data_dir() {
   is_wsl || return 0
   command -v cmd.exe &>/dev/null || return 0
   command -v wslpath &>/dev/null || return 0
@@ -791,17 +779,10 @@ _default_devsync_dir() {
   esac
   local wsl_path
   wsl_path="$(wslpath -u "$localappdata" 2>/dev/null)" || return 0
-  # The launcher's data dir (where its cache/, demos/, infolog.txt live).
-  # Spring's archive scanner registers our games/ entries here cleanly --
-  # earlier attempts that put sync in a separate dir + junctioned into
-  # this one failed because spring's scanner doesn't traverse reparse
-  # points into game subdirs.
   local launcher_data="$wsl_path/Programs/Beyond-All-Reason/data"
   if [ -d "$launcher_data" ]; then
     echo "$launcher_data"
   else
-    # Fallback: a fresh dir under LOCALAPPDATA. The contributor will need
-    # to either install BAR or junction <launcher>/data themselves.
     echo "$wsl_path/BAR-DevSync"
   fi
 }
@@ -855,23 +836,18 @@ ensure_devmode_marker() {
   fi
 }
 
-# WSL2-only: prompt for BAR_DEVSYNC_DIR, persist to .env, create the three
-# subpaths the sync daemon mirrors into plus bin/ for the cmd shim. Idempotent;
-# safe to re-run after an upgrade.
-#
-# We persist the WSL path form so the rest of the bash plumbing reads it
-# directly without wslpath conversion. The Windows-side shim is generated
-# with the literal Windows path baked in (see regenerate_bar_launch_cmd_shim).
-ensure_bar_devsync_dir() {
+# Persist the WSL path form -- the rest of the bash plumbing reads it
+# directly. The Windows-side shim bakes in the converted Windows path.
+ensure_bar_data_dir() {
   is_wsl || return 0
 
   local env_file="$DEVTOOLS_DIR/.env"
   touch "$env_file"
 
   local current
-  current="$(bar_devsync_dir_get)"
+  current="$(bar_data_dir_get)"
   if [ -n "$current" ]; then
-    info "BAR_DEVSYNC_DIR already set: $current"
+    info "BAR_DATA_DIR already set: $current"
   else
     echo ""
     info "WSL2 detected. Linux↔Windows symlinks aren't fast enough for runtime"
@@ -888,14 +864,14 @@ ensure_bar_devsync_dir() {
     echo "                \\\\wsl\$\\<distro>\\...        (defeats the whole point)"
     echo ""
     local default_path
-    default_path="$(_default_devsync_dir)"
+    default_path="$(_default_bar_data_dir)"
 
     local response
     if [ -t 0 ]; then
       if [ -n "$default_path" ]; then
-        read -rp "BAR sync dir [$(_to_windows_path "$default_path")]: " response
+        read -rp "BAR data dir [$(_to_windows_path "$default_path")]: " response
       else
-        read -rp "BAR sync dir (WSL path or Windows path): " response
+        read -rp "BAR data dir (WSL path or Windows path): " response
       fi
     else
       response=""
@@ -903,14 +879,12 @@ ensure_bar_devsync_dir() {
 
     if [ -z "$response" ]; then
       if [ -z "$default_path" ]; then
-        err "No BAR_DEVSYNC_DIR provided and couldn't compute a default (cmd.exe / wslpath unavailable)."
-        info "Edit BAR-Devtools/.env directly:  BAR_DEVSYNC_DIR=/mnt/c/Users/<you>/AppData/Local/BAR-DevSync"
+        err "No BAR_DATA_DIR provided and couldn't compute a default (cmd.exe / wslpath unavailable)."
+        info "Edit BAR-Devtools/.env directly:  BAR_DATA_DIR=/mnt/c/Users/<you>/AppData/Local/BAR-DevSync"
         return 1
       fi
       current="$default_path"
     else
-      # Accept either form. wslpath -u on a /mnt/... path is a no-op; on a
-      # Windows path it converts. Tolerate both via wslpath probing.
       case "$response" in
         /mnt/*|/home/*|/root/*) current="${response/#\~/$HOME}" ;;
         *)
@@ -926,13 +900,10 @@ ensure_bar_devsync_dir() {
       esac
     fi
 
-    echo "BAR_DEVSYNC_DIR=$current" >> "$env_file"
-    ok "Added BAR_DEVSYNC_DIR=$current to .env"
+    echo "BAR_DATA_DIR=$current" >> "$env_file"
+    ok "Added BAR_DATA_DIR=$current to .env"
   fi
 
-  # Create the directory tree. The sync daemon writes into the three rsync
-  # targets; the engine creates everything else (cache/, demos/, infolog.txt,
-  # settings) on first run. bin/ holds the cmd shim.
   local sub
   for sub in engine/local-build games/Beyond-All-Reason.sdd games/BYAR-Chobby.sdd bin; do
     mkdir -p "$current/$sub" 2>/dev/null || {
@@ -945,7 +916,7 @@ ensure_bar_devsync_dir() {
 
   ok "BAR data dir ready: $current"
 
-  export BAR_DEVSYNC_DIR="$current"
+  export BAR_DATA_DIR="$current"
 }
 
 # Persist BAR_LAUNCH_PYTHON=<py.exe path> to .env. Called after
@@ -969,37 +940,23 @@ ensure_bar_launch_python_persisted() {
     return 0
   fi
 
-  # Resolve through wslpath -w so the persisted value is the Windows path
-  # (the shim references it via cmd.exe; the venv bootstrap calls it from
-  # WSL but `command -v` re-finds it either way).
   local win_py
   win_py="$(_to_windows_path "$py_path")"
-  # Single-quote: backslashes in the Windows path (e.g. C:\Users\...) would
-  # otherwise be interpreted as escape sequences by just's dotenv parser.
+  # Single-quote: backslashes in C:\... would otherwise be interpreted as
+  # escape sequences by just's dotenv parser.
   echo "BAR_LAUNCH_PYTHON='$win_py'" >> "$env_file"
   ok "Added BAR_LAUNCH_PYTHON=$win_py to .env"
 }
 
-# Bootstrap a Windows venv at <BAR_DEVSYNC_DIR>/.venv and install
-# bar_debug_launcher (editable) into it. Idempotent: skips if the venv's
-# bar-launch entry point already exists and the marker is newer than the
-# launcher's pyproject.toml.
-#
-# (watchdog used to be installed here too, back when the sync daemon ran
-# on the Windows side. It now runs on the WSL side via python3-watchdog
-# from apt; see ensure_sync_daemon_deps_wsl below.)
-#
-# Why a Windows venv specifically: the Recoil engine must run as a native
-# Windows process, and the bar-launch CLI invokes it via subprocess. Running
-# bar-launch from WSL → cmd.exe spring.exe works, but we'd then have two
-# Pythons in the picture (WSL + Windows) for no benefit. Single Windows venv
-# keeps the launch path uniform.
+# A Windows venv (not a WSL one): Recoil runs as a native Windows process
+# and the launcher spawns it via subprocess. Keeping the launcher itself
+# Windows-side avoids a WSL→Windows hop on every engine spawn.
 ensure_bar_launch_venv_windows() {
   is_wsl || return 0
 
-  local devsync_wsl="${BAR_DEVSYNC_DIR:-$(bar_devsync_dir_get)}"
-  if [ -z "$devsync_wsl" ]; then
-    warn "BAR_DEVSYNC_DIR not set -- skipping Windows venv bootstrap."
+  local data_dir_wsl="${BAR_DATA_DIR:-$(bar_data_dir_get)}"
+  if [ -z "$data_dir_wsl" ]; then
+    warn "BAR_DATA_DIR not set -- skipping Windows venv bootstrap."
     return 0
   fi
 
@@ -1014,7 +971,7 @@ ensure_bar_launch_venv_windows() {
     return 0
   fi
 
-  local venv_wsl="$devsync_wsl/.venv"
+  local venv_wsl="$data_dir_wsl/.venv"
   local venv_python_wsl="$venv_wsl/Scripts/python.exe"
 
   if [ ! -x "$venv_python_wsl" ] && [ ! -f "$venv_python_wsl" ]; then
@@ -1036,10 +993,8 @@ ensure_bar_launch_venv_windows() {
   fi
 
   step "Installing bar_debug_launcher into Windows venv"
-  # pip install on the Windows side. UNC path to the WSL repo works for an
-  # editable install -- pip writes a .pth file, and import-time resolution
-  # crosses Plan9 once on launcher startup. A minor cost for a tool that
-  # runs once per dev session.
+  # Editable install via UNC path: pip writes a .pth into the venv, import
+  # crosses Plan9 once on launcher startup -- fine for a once-per-session tool.
   local repo_unc
   repo_unc="$(_to_windows_path "$repo_path")"
   "$venv_python_wsl" -m pip install --upgrade pip --quiet \
@@ -1051,43 +1006,36 @@ ensure_bar_launch_venv_windows() {
   export BAR_LAUNCH_VENV="$venv_wsl"
 }
 
-# Generate <BAR_DEVSYNC_DIR>/bin/bar-launch.cmd with absolute Windows paths
-# baked in. The shim is a dumb forwarder -- the Python in the venv does all
-# the real work. Regenerated by `just bar::regen-shim` if .env values change.
-#
-# Requirements: BAR_DEVSYNC_DIR set, the venv's python.exe present.
+# Generate <BAR_DATA_DIR>/bin/bar-launch.cmd with absolute Windows paths
+# baked in. Regenerate via `just bar::regen-shim` if .env values change.
 regenerate_bar_launch_cmd_shim() {
   is_wsl || return 0
 
-  local devsync_wsl="${BAR_DEVSYNC_DIR:-$(bar_devsync_dir_get)}"
-  if [ -z "$devsync_wsl" ]; then
-    err "BAR_DEVSYNC_DIR not set -- run 'just setup::init' on WSL first."
+  local data_dir_wsl="${BAR_DATA_DIR:-$(bar_data_dir_get)}"
+  if [ -z "$data_dir_wsl" ]; then
+    err "BAR_DATA_DIR not set -- run 'just setup::init' on WSL first."
     return 1
   fi
 
-  local venv_python_wsl="$devsync_wsl/.venv/Scripts/python.exe"
+  local venv_python_wsl="$data_dir_wsl/.venv/Scripts/python.exe"
   if [ ! -f "$venv_python_wsl" ]; then
     err "Windows venv python not found at $venv_python_wsl"
     info "Run 'just setup::init' to create it."
     return 1
   fi
 
-  local shim_wsl="$devsync_wsl/bin/bar-launch.cmd"
+  local shim_wsl="$data_dir_wsl/bin/bar-launch.cmd"
   mkdir -p "$(dirname "$shim_wsl")"
 
-  local venv_python_win devsync_win
+  local venv_python_win data_dir_win
   venv_python_win="$(_to_windows_path "$venv_python_wsl")"
-  devsync_win="$(_to_windows_path "$devsync_wsl")"
+  data_dir_win="$(_to_windows_path "$data_dir_wsl")"
 
-  # CRLF line endings: it's a .cmd file consumed by cmd.exe. Mostly cosmetic
-  # but stays consistent with how Windows shells render it in an editor.
   cat > "$shim_wsl" <<EOF
 @echo off
 REM Generated by BAR-Devtools setup. Edit via: just bar::regen-shim
-"$venv_python_win" -m bar_launch --data-dir "$devsync_win" %*
+"$venv_python_win" -m bar_launch --data-dir "$data_dir_win" %*
 EOF
-  # Convert LF -> CRLF in place. unix2dos is the conventional tool but isn't
-  # always installed; sed handles it portably.
   sed -i 's/$/\r/' "$shim_wsl"
 
   ok "Generated $shim_wsl"
@@ -1843,7 +1791,7 @@ cmd_init() {
   step "0/8  Configuration"
   echo ""
   if is_wsl; then
-    ensure_bar_devsync_dir || warn "Skipping BAR sync dir setup (set BAR_DEVSYNC_DIR in .env to retry)."
+    ensure_bar_data_dir || warn "Skipping BAR data dir setup (set BAR_DATA_DIR in .env to retry)."
   fi
 
   pick_features
@@ -1929,11 +1877,8 @@ cmd_init() {
       esac
       is_wsl && engine_os="windows"
       info "Building Recoil engine (${engine_arch}-${engine_os}, this may take a while)..."
-      # Go through `just engine::build` -- not build.sh directly -- so the
-      # WSL post-success hook (`sync.sh mirror-engine`) runs and seeds
-      # $BAR_DEVSYNC_DIR/engine/local-build. Without that mirror, the first
-      # `just bar::launch` after init can't find local-build and the
-      # bar-debug-launcher dropdown shows no [LOCAL] engine entry.
+      # Via `just engine::build` (not build.sh) so the post-success
+      # `sync.sh mirror-engine` hook seeds $BAR_DATA_DIR/engine/local-build.
       ( cd "$DEVTOOLS_DIR" && just engine::build --arch "$engine_arch" "$engine_os" )
     else
       warn "Recoil selected but RecoilEngine/docker-build-v2 missing -- clone may have failed."
@@ -1946,13 +1891,13 @@ cmd_init() {
   step "6/8  Symlinks to game directory"
   echo ""
   if [ -z "$game_dir" ]; then
-    info "No game directory detected. Set BAR_GAME_DIR to enable linking."
+    info "No game directory detected. Set BAR_DATA_DIR to enable linking."
   elif [[ "$do_link" =~ ^[Yy]$ ]]; then
     local available=() name
     features_include "$features" recoil && [ -d "$DEVTOOLS_DIR/RecoilEngine" ] && available+=("engine")
     features_include "$features" chobby && [ -d "$DEVTOOLS_DIR/BYAR-Chobby" ]    && available+=("chobby")
     features_include "$features" bar    && [ -d "$DEVTOOLS_DIR/Beyond-All-Reason" ] && available+=("bar")
-    BAR_GAME_DIR="$game_dir"
+    BAR_DATA_DIR="$game_dir"
     for name in "${available[@]}"; do
       cmd_link "$name"
     done
@@ -2071,8 +2016,8 @@ cmd_setup() {
 }
 
 detect_game_dir() {
-  if [ -n "${BAR_GAME_DIR:-}" ]; then
-    echo "$BAR_GAME_DIR"
+  if [ -n "${BAR_DATA_DIR:-}" ]; then
+    echo "$BAR_DATA_DIR"
     return 0
   fi
 
@@ -2081,10 +2026,10 @@ detect_game_dir() {
   # build from. Prefer it over the upstream Windows installer's data dir,
   # which has no Devtools content in it.
   if is_wsl; then
-    local devsync
-    devsync="$(bar_devsync_dir_get)"
-    if [ -n "$devsync" ] && [ -d "$devsync" ]; then
-      echo "$devsync"
+    local data_dir
+    data_dir="$(bar_data_dir_get)"
+    if [ -n "$data_dir" ] && [ -d "$data_dir" ]; then
+      echo "$data_dir"
       return 0
     fi
   fi
@@ -2118,7 +2063,7 @@ cmd_link() {
     echo -e "${BOLD}=== Symlink Status ===${NC}"
     echo ""
     if [ -z "$game_dir" ]; then
-      warn "Game directory not found. Set BAR_GAME_DIR env var or install BAR to the default location."
+      warn "Game directory not found. Set BAR_DATA_DIR env var or install BAR to the default location."
       echo ""
       return 0
     fi
@@ -2150,7 +2095,7 @@ cmd_link() {
   fi
 
   if [ -z "$game_dir" ]; then
-    err "Game directory not found. Set BAR_GAME_DIR env var or install BAR to the default location."
+    err "Game directory not found. Set BAR_DATA_DIR env var or install BAR to the default location."
     exit 1
   fi
 

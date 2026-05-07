@@ -218,16 +218,16 @@ just bar::launch --no-gui --play chobby --source latest --boot launcher
 
 On WSL2 the engine has to run as a native Windows process for usable performance (WSLg / Plan9 game-load measured ~7m30s vs ~24s native), so `just bar::launch` looks different:
 
-1. `just setup::init` (on WSL) prompts for a `BAR_DEVSYNC_DIR` -- a Windows-side data directory the engine reads from (default `%LOCALAPPDATA%\BAR-DevSync`). Persisted to `.env`.
-2. Setup also installs Python on Windows via winget (if missing), creates a venv at `%BAR_DEVSYNC_DIR%\.venv`, installs `bar_debug_launcher` into it, and writes a `bin\bar-launch.cmd` shim with absolute paths baked in.
-3. `just bar::launch` then: cold-copies `Beyond-All-Reason/` and `BYAR-Chobby/` (and the engine if built) from WSL ext4 onto NTFS (`%BAR_DEVSYNC_DIR%\games\...`, `engine\local-build\`); shells out to `cmd.exe /c bar-launch.cmd <flags>`. `just engine::build windows` cold-copies the rebuilt engine artifacts the same way.
+1. `just setup::init` (on WSL) prompts for a `BAR_DATA_DIR` -- the spring data directory the engine reads from (default: the BAR launcher's own data dir, `%LOCALAPPDATA%\Programs\Beyond-All-Reason\data`). Persisted to `.env`.
+2. Setup also installs Python on Windows via winget (if missing), creates a venv at `%BAR_DATA_DIR%\.venv`, installs `bar_debug_launcher` into it, and writes a `bin\bar-launch.cmd` shim with absolute paths baked in.
+3. `just bar::launch` then: cold-copies `Beyond-All-Reason/` and `BYAR-Chobby/` (and the engine if built) from WSL ext4 onto NTFS (`%BAR_DATA_DIR%\games\...`, `engine\local-build\`); shells out to `cmd.exe /c bar-launch.cmd <flags>`. `just engine::build windows` cold-copies the rebuilt engine artifacts the same way.
 
 The cold copy uses inplace writes (no inode rotation) so engine mmaps stay valid if you re-launch quickly. We previously ran a `\\wsl.localhost\` watchdog watcher for live edit propagation, but `ReadDirectoryChangesW` over Plan 9 doesn't receive Linux-side inotify events; the watcher logged zero mirrored events in practice. Cold-copy at known sync points (launch, build) replaced it.
 
 ```bash
 just bar::sync                 # cold-copy sources without launching
 just bar::sync-logs -- -f      # tail the cold-copy log
-just bar::regen-shim           # rewrite bar-launch.cmd if BAR_DEVSYNC_DIR changes
+just bar::regen-shim           # rewrite bar-launch.cmd if BAR_DATA_DIR changes
 ```
 
 If `cmd.exe`, `wslpath`, or `winget.exe` aren't reachable from WSL, the relevant setup steps no-op with a warning -- you can edit `BAR-Devtools/.env` directly and re-run `just setup::init` once the prereqs are in place.

@@ -16,7 +16,7 @@ cmd_init() {
 
   # Front-load all decisions ----
   step "0/N  Configuration"
-  ensure_bar_devsync_dir      # WSL: pick sync target (writes .env)
+  ensure_bar_data_dir         # WSL: pick spring data dir (writes .env)
   pick_features               # component selection -> $features
   local game_dir do_link=""
   game_dir="$(detect_game_dir 2>/dev/null)" || true
@@ -45,7 +45,7 @@ The old shape had `read -rp "Symlink all? [y/N]"` *inside* step 6 ("Symlinks"), 
 
 ## Don't re-prompt for state already in `.env`
 
-`prompt_springsettings_opt_in` checks `grep -q "^ALLOW_SPRINGSETTINGS_MOD=" "$env_file"` and skips the prompt if it's set. Same for `BAR_DEVSYNC_DIR`. Re-runs of `setup::init` should noop on questions the user already answered. If they want to re-decide, they edit `.env`.
+`prompt_springsettings_opt_in` checks `grep -q "^ALLOW_SPRINGSETTINGS_MOD=" "$env_file"` and skips the prompt if it's set. Same for `BAR_DATA_DIR`. Re-runs of `setup::init` should noop on questions the user already answered. If they want to re-decide, they edit `.env`.
 
 ## Audit checklist when adding a step
 

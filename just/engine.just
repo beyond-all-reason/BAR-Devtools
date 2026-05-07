@@ -3,11 +3,8 @@ set export
 DEVTOOLS_DIR := justfile_directory()
 
 # Build Recoil engine via docker-build-v2.
-# On WSL2, mirror the built artifacts into BAR_DEVSYNC_DIR/engine/local-build/
-# immediately after a successful build. There's no live source watcher (Plan 9
-# doesn't forward Linux-side fsevents to ReadDirectoryChangesW), so cold-copy
-# at known sync points -- here for the engine, and in `just bar::launch` for
-# the game/chobby trees -- is how WSL contributors' edits reach the engine.
+# On WSL2 the post-build hook mirrors install/ into $BAR_DATA_DIR/engine/
+# local-build/ -- the engine pair is mirrored on demand, not watched.
 build *args:
     #!/usr/bin/env bash
     set -euo pipefail

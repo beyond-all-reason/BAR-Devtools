@@ -1,24 +1,14 @@
 #!/usr/bin/env bash
-# scripts/sync.sh -- WSL-side native-inotify mirror for the dev data dir.
-#
-# Mirrors WSL Devtools subtrees (Beyond-All-Reason, BYAR-Chobby, the
-# RecoilEngine build output) into the Windows-NTFS sync target
-# ($BAR_DEVSYNC_DIR) the engine reads from. The watcher runs on the WSL
-# side (native inotify on ext4) and writes through /mnt/c, so source
-# edits propagate at ~100 ms median to the engine's read path. See
-# scripts/sync.py and bar-design-docs/.../dev_setup_restructured.md for
-# the architecture rationale (Phase 1 Tests 4-5, arm iv).
+# WSL-side mirror daemon: watches WSL Devtools subtrees (Beyond-All-Reason,
+# BYAR-Chobby, RecoilEngine install/) on native inotify and writes through
+# /mnt/c into $BAR_DATA_DIR -- the spring data dir.
 #
 # Subcommands:
-#   start [--wait-ready]   start the daemon (idempotent; cold-copies first)
-#   stop                   SIGTERM the daemon, wait, SIGKILL if needed
-#   status                 print PID + alive/dead
-#   mirror-engine          one-shot cold copy of just the engine pair
-#   logs [-f|...]          tail the sync log
-#
-# The `start --wait-ready` flow blocks until the daemon's initial cold copy
-# has finished and the watcher is up; `bar::launch` uses this to gate
-# spring.exe on a quiesced data dir.
+#   start [--wait-ready]   start daemon (cold-copies, then watches; idempotent)
+#   stop                   SIGTERM, wait, SIGKILL
+#   status                 PID + alive/dead
+#   mirror-engine          one-shot cold copy of the engine pair
+#   logs [-f|...]          tail the daemon log
 
 set -euo pipefail
 
@@ -30,8 +20,8 @@ source "$DEVTOOLS_DIR/scripts/common.sh"
 # dir is unreadable.
 require_host
 
-if [ -z "${BAR_DEVSYNC_DIR:-}" ]; then
-  err "BAR_DEVSYNC_DIR not set. Run 'just setup::init' on WSL2 first."
+if [ -z "${BAR_DATA_DIR:-}" ]; then
+  err "BAR_DATA_DIR not set. Run 'just setup::init' on WSL2 first."
   exit 1
 fi
 
@@ -40,37 +30,24 @@ if ! grep -qi microsoft /proc/version 2>/dev/null; then
   exit 1
 fi
 
-STATE_DIR="$BAR_DEVSYNC_DIR/.bar-launch"
+STATE_DIR="$BAR_DATA_DIR/.bar-launch"
 LOG_FILE="$STATE_DIR/sync.log"
 PID_FILE="$STATE_DIR/sync.pid"
 READY_FILE="$STATE_DIR/sync.ready"
 mkdir -p "$STATE_DIR"
 
-# Source pairs. The watcher's reason for being is the game-content trees
-# (Beyond-All-Reason, BYAR-Chobby) that change at edit-loop pace.
-#
-# Spring's archive scanner registers unpacked-directory archives only when
-# the dir has a .sdd suffix (sd7/sdz are compressed forms; sdd is the
-# "spring data directory" marker). Without it, scan() walks the dir but
-# never adds it to the archive cache.
+# `.sdd` suffix on the destinations is required: spring's archive scanner
+# only registers unpacked-dir archives when the dir name ends in .sdd.
 _compute_source_pairs() {
   local pairs=()
   local missing=()
   local bar_src="$DEVTOOLS_DIR/Beyond-All-Reason"
   local chobby_src="$DEVTOOLS_DIR/BYAR-Chobby"
-  local bar_dst="$BAR_DEVSYNC_DIR/games/Beyond-All-Reason.sdd"
-  local chobby_dst="$BAR_DEVSYNC_DIR/games/BYAR-Chobby.sdd"
+  local bar_dst="$BAR_DATA_DIR/games/Beyond-All-Reason.sdd"
+  local chobby_dst="$BAR_DATA_DIR/games/BYAR-Chobby.sdd"
 
-  # `[ -d ]` on a broken symlink returns false; `[ -L ]` is true on the
-  # symlink itself regardless of target. We want to distinguish "user
-  # never linked it" (silent skip is fine) from "linked but target
-  # vanished" (must shout, otherwise edits go to a path the daemon never
-  # registered and contributors waste hours wondering why nothing syncs).
-  #
-  # Inlined per-pair (rather than looping over a joined-string list) on
-  # purpose: `IFS=::` is the same as `IFS=:` in bash, so packing
-  # name/src/dst into a single string broke the parser silently. Two
-  # explicit invocations beat one clever loop.
+  # Distinguish "never linked" (silent skip) from "linked but target
+  # vanished" (must shout: edits would go to a path the daemon doesn't watch).
   _classify_pair() {
     local name="$1" src="$2" dst="$3"
     if [ -L "$src" ] && [ ! -e "$src" ]; then
@@ -104,12 +81,11 @@ _compute_source_pairs() {
   printf '%s\n' "${pairs[@]}"
 }
 
-# The engine pair: docker-build-v2 install dir → engine slot. Kept separate
-# from the watcher pairs because engine artifacts change at build pace, not
-# edit pace; mirrored on demand by `just engine::build`'s post-success hook.
+# Engine pair stays out of the watcher: engine artifacts change at build
+# pace, not edit pace. Mirrored on demand from `just engine::build`'s hook.
 _compute_engine_pair() {
   local engine_src="$DEVTOOLS_DIR/RecoilEngine/build-amd64-windows/install"
-  local engine_dst="$BAR_DEVSYNC_DIR/engine/local-build"
+  local engine_dst="$BAR_DATA_DIR/engine/local-build"
   if [ ! -d "$engine_src" ]; then
     return 1
   fi
@@ -149,12 +125,8 @@ cmd_start() {
     shift
   fi
 
-  # Validate the configured pair list FIRST -- before the "already
-  # running" early-return below. Otherwise a stale daemon from a previous
-  # session masks broken-symlink errors: the user fixes nothing, runs
-  # bar::launch, sees no error, and assumes everything is fine -- but the
-  # live daemon doesn't even watch the path they're editing. We want
-  # broken config to fail loud every invocation.
+  # Validate pairs BEFORE the already-running check: a stale daemon would
+  # otherwise mask broken-symlink errors and silently not sync the user's edits.
   local pair_lines
   if ! pair_lines="$(_compute_source_pairs)"; then
     return 1
@@ -162,17 +134,11 @@ cmd_start() {
 
   local existing_pid
   if existing_pid="$(_running_pid)"; then
-    # Already-running path: verify pair-list drift before declaring victory.
-    # If the live daemon was started with different --pair args than what
-    # _compute_source_pairs would produce now (e.g. the user fixed a
-    # symlink since the daemon started, or repos.local.conf changed), the
-    # daemon is watching a stale tree and edits will silently not sync.
-    # Force a restart in that case rather than letting the "all good" log
-    # message lie to the user.
+    # Detect pair-list drift: if a running daemon was started with different
+    # --pair args than the current config produces, restart so it picks up
+    # the new pairs instead of silently watching stale paths.
     local cmdline live_pairs expected_pairs
     cmdline="$(tr '\0' ' ' < /proc/"$existing_pid"/cmdline 2>/dev/null)"
-    # Extract --pair args. tr the cmdline so each arg is space-separated
-    # then awk out --pair tokens. Sort both sides for set-equality compare.
     live_pairs="$(echo "$cmdline" | awk 'BEGIN{RS=" "} /::/{print}' | sort -u)"
     expected_pairs="$(echo "$pair_lines" | sort -u)"
 
@@ -210,34 +176,19 @@ cmd_start() {
     return 1
   fi
 
-  # The watcher's pair list is source trees ONLY. The engine pair is
-  # intentionally excluded: engine artifacts change at build pace, not edit
-  # pace, and a live watcher on the docker-build-v2 install dir races
-  # `just engine::build`'s mirror-engine hook -- both paths end up writing
-  # the same DLLs, and Windows holds handles to the live install which
-  # turns the daemon's on_deleted handlers into Errno 5 storms in the log.
-  # Engine sync goes through `cmd_mirror_engine` exclusively.
-  # (pair_lines was populated by the upfront validation above, before the
-  # "already running" early-return.)
+  # Engine pair is mirrored on demand from cmd_mirror_engine; never watched
+  # (it would race the build hook).
   local pair_args=()
   local p
   while IFS= read -r p; do
     [ -n "$p" ] && pair_args+=(--pair "$p")
   done <<<"$pair_lines"
 
-  # Clear the stale ready flag so --wait-ready can't race against the
-  # previous run's marker.
   rm -f "$READY_FILE"
 
   step "Starting sync daemon (cold-copy + watcher)"
   info "log: $LOG_FILE  (live: just bar::sync-logs -- -F)"
-  # Truncate the log on a fresh start so its `tail -f` during --wait-ready
-  # below shows only this run's output. Append-mode would surface stale
-  # lines from a prior crashed run before any new content lands.
   : >"$LOG_FILE"
-  # nohup + & + disown: detach from this shell's job table so we don't
-  # SIGHUP the daemon when the caller's terminal closes. Stdout/stderr go
-  # to the log file -- sync.py's --log uses an additional stream.
   nohup python3 "$DEVTOOLS_DIR/scripts/sync.py" \
       --log "$LOG_FILE" \
       --ready-file "$READY_FILE" \
@@ -264,11 +215,8 @@ _wait_for_ready() {
   local pid="${1:-}"
   if [ -z "$pid" ]; then pid="$(cat "$PID_FILE" 2>/dev/null || true)"; fi
 
-  # Stream the daemon log to stderr while we wait. `tail -F` follows even
-  # if the file is rotated/recreated mid-wait, and survives the truncate
-  # that cmd_start does just before launch. We track its PID so we can
-  # kill it the moment the daemon signals ready (or dies).
   info "waiting for cold copy to finish (this can be 30-180s on first run)..."
+  # tail -F (capital) follows recreates/truncates that cmd_start did just before us.
   tail -F -n 0 "$LOG_FILE" >&2 &
   local tail_pid=$!
   disown "$tail_pid" 2>/dev/null || true
@@ -302,8 +250,7 @@ cmd_stop() {
   fi
   step "Stopping sync daemon (PID $pid)"
   kill -TERM "$pid" 2>/dev/null || true
-  # Wait up to 5s for graceful shutdown; sync.py's signal handler unwinds
-  # the Observer and final-drains pending events.
+  # Up to 5s for sync.py's signal handler to drain pending events.
   local i=0
   while [ $i -lt 50 ]; do
     if ! _pid_alive "$pid"; then
@@ -320,22 +267,16 @@ cmd_stop() {
   ok "sync daemon stopped"
 }
 
-# Return 0 (success) if no game/launcher process is holding engine DLLs.
-# Echoes the offending process names on stderr if any are found, returns 1.
-# We invoke Windows-side `tasklist` because the locks are Windows OS locks
-# on `\\wsl$\...\local-build\*.dll`; pgrep/ps in WSL won't see them.
+# Echoes Windows process names holding engine DLLs (returns 1 if any).
+# Uses tasklist via cmd.exe -- the locks are Windows OS locks; pgrep/ps
+# in WSL won't see them.
 _engine_lock_holders() {
   if ! command -v tasklist.exe &>/dev/null && ! command -v cmd.exe &>/dev/null; then
-    # No interop available -- can't check. Caller decides whether to proceed.
     return 0
   fi
   local holders=()
   local proc
   for proc in spring.exe Beyond-All-Reason.exe; do
-    # tasklist /nh: no header. /fi imagename: filter exact match. Output
-    # lists matching processes one per line; "INFO: No tasks..." means
-    # nothing matched. Suppress the "No tasks" stdout line by checking for
-    # the proc name in the output.
     if cmd.exe /c "tasklist /nh /fi \"IMAGENAME eq $proc\"" 2>/dev/null \
        | grep -qi "^$proc"; then
       holders+=("$proc")
@@ -355,12 +296,9 @@ cmd_mirror_engine() {
     return 0
   fi
 
-  # Preflight: any live spring.exe / BAR launcher will hold open handles
-  # on the engine DLLs we're about to overwrite. From Linux through drvfs
-  # rsync surfaces this as EACCES per file and exits 23, leaving the
-  # install with a mixed-version set of DLLs -- exactly the footgun we
-  # want to avoid post-build. Refuse the mirror with clear instructions
-  # rather than half-do it.
+  # Preflight: live spring.exe / launcher holds open handles on the
+  # engine DLLs; rsync through drvfs would EACCES per file and leave
+  # a half-mirrored install. Refuse rather than half-do it.
   local holders
   if ! holders="$(_engine_lock_holders)"; then
     err "Cannot mirror engine -- the following Windows process(es) are running and hold the engine DLLs:"
@@ -371,7 +309,7 @@ cmd_mirror_engine() {
     return 1
   fi
 
-  step "Mirroring engine artifacts to $BAR_DEVSYNC_DIR/engine/local-build"
+  step "Mirroring engine artifacts to $BAR_DATA_DIR/engine/local-build"
   python3 "$DEVTOOLS_DIR/scripts/sync.py" --cold-copy --log "$LOG_FILE" --pair "$engine_pair"
   ok "engine mirrored"
 }

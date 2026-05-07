@@ -28,7 +28,7 @@ When proposing or evaluating a sync change, name it this way. We picked (iv) `ws
 - Watchman lives **inside the bar-dev distrobox** (installed by `dev.Containerfile`), exported to host PATH via `distrobox-export`. The host wrapper at `~/.local/bin/watchman` runs `distrobox enter -- watchman`.
 - `sync.py:_cold_copy` calls `_cold_copy_via_watchman` directly. There is no `_have_watchman()` guard. If watchman isn't on PATH, `subprocess.run(["watchman", ...])` raises `FileNotFoundError` — that's the loud failure we want, not a silent ~80s rsync stat-walk that contributors mistake for normal.
 - First call for a `(src, dst)` pair: `watch-project` + initial `clock` + full rsync seed. Subsequent calls: `since <clock>` query + rsync `--files-from` for changed files only + unlink for deletions.
-- Pair state is persisted to `${XDG_STATE_HOME:-~/.local/state}/bar-devtools/sync-state-<sha1>.json` via atomic rename + fsync. (Lives on Linux ext4 — NOT under `$BAR_DEVSYNC_DIR` on /mnt/c — so watchman clock tokens survive daemon restarts without paying drvfs costs every read.)
+- Pair state is persisted to `${XDG_STATE_HOME:-~/.local/state}/bar-devtools/sync-state-<sha1>.json` via atomic rename + fsync. (Lives on Linux ext4 — NOT under `$BAR_DATA_DIR` on /mnt/c — so watchman clock tokens survive daemon restarts without paying drvfs costs every read.)
 
 ## Watchman / Fedora / RPM ABI
 

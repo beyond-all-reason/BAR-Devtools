@@ -28,7 +28,7 @@ When you see two ways to do something, ask:
 
 - WSL and Linux paths legitimately differ (engine binary lives in different places, sync only matters on WSL). Real platform branches stay.
 - Probe scripts in `scripts/probe_*.py` *should* have multiple arms — that's their purpose. The rule is about production code, not measurement code.
-- Configurability via `.env` (`BAR_DEVSYNC_DIR`, `ALLOW_SPRINGSETTINGS_MOD`) is fine. One mechanism (the env var), one read site, one decision point.
+- Configurability via `.env` (`BAR_DATA_DIR`, `ALLOW_SPRINGSETTINGS_MOD`) is fine. One mechanism (the env var), one read site, one decision point.
 
 ## When tempted to add a second path
 
