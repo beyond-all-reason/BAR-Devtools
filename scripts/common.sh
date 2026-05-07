@@ -32,6 +32,36 @@ is_wsl() {
     [ -n "${WSL_DISTRO_NAME:-}" ] || [ -f /proc/sys/fs/binfmt_misc/WSLInterop ]
 }
 
+# Read $1's "game" field from a chobby_config.json. Empty if file missing
+# or the field is absent. The JSON Chobby ships is flat enough that we
+# don't need a full parser here -- the field always lives at the top level.
+_chobby_game_field() {
+    local cfg="$1"
+    [ -f "$cfg" ] || return 0
+    grep -oE '"game"[[:space:]]*:[[:space:]]*"[^"]+"' "$cfg" 2>/dev/null \
+        | sed -E 's/.*"([^"]+)"$/\1/' | tr -d '\r' | head -n1
+}
+
+# Write/patch chobby_config.json so its "game" field equals $2. Preserves
+# other fields (server, etc.) by round-tripping through python's json.
+_write_chobby_game() {
+    local cfg="$1" game="$2"
+    python3 - "$cfg" "$game" <<'PY'
+import json, pathlib, sys
+p = pathlib.Path(sys.argv[1])
+game = sys.argv[2]
+data = {}
+if p.exists():
+    try:
+        data = json.loads(p.read_text())
+    except Exception:
+        data = {}
+data["game"] = game
+p.parent.mkdir(parents=True, exist_ok=True)
+p.write_text(json.dumps(data, indent=2) + "\n")
+PY
+}
+
 # Echo running engine processes that have the *local-build* binaries open --
 # i.e. processes that `engine::build` is about to overwrite. A live local
 # engine has those files mmap'd (Linux) / share-locked (Windows), so the

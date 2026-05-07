@@ -41,6 +41,52 @@ preflight_symlinks() {
   info "(continuing; bar-launch will still work for non-local sources like 'rapid://...:test')"
 }
 
+# Offer to switch Chobby to its byar-dev gameConfig, which is what makes
+# Chobby default to the local-checkout `.sdd` (Beyond All Reason $VERSION)
+# in skirmish setup. As a side effect, BAR's gadgets.lua flips isDevMode on
+# whenever Game.gameVersion contains the literal "$VERSION" placeholder --
+# so byar-dev also turns on dev-only widgets and warnings.
+#
+# We ask once; the marker records "we asked, don't re-prompt." Subsequent
+# launches with the wrong channel get a single-line warn banner. Users can
+# always re-flip with `just bar::dev-mode`.
+_ensure_chobby_dev_mode() {
+  local data_dir="$1"
+  [ -n "$data_dir" ] && [ -d "$data_dir" ] || return 0
+  local cfg="$data_dir/chobby_config.json"
+  local marker="${XDG_STATE_HOME:-$HOME/.local/state}/bar-devtools/chobby-mode-asked"
+
+  local current
+  current="$(_chobby_game_field "$cfg")"
+  [ "$current" = "byar-dev" ] && return 0
+
+  if [ -f "$marker" ]; then
+    warn "Chobby is in '${current:-default}' channel; local checkout won't load by default."
+    warn "  Switch in Chobby (Settings > Developer) or run: just bar::dev-mode"
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$marker")"
+  if [ ! -t 0 ]; then
+    touch "$marker"
+    warn "Chobby is in '${current:-default}' channel. Run 'just bar::dev-mode' to switch."
+    return 0
+  fi
+
+  info "Chobby's gameConfig channel decides whether your local checkout loads:"
+  info "  byar-dev  -> games/Beyond-All-Reason.sdd (your edits, dev mode on)"
+  info "  byar      -> latest rapid test build (read-only, dev mode off)"
+  local ans
+  read -rp "Switch to byar-dev now? [Y/n] " ans
+  touch "$marker"
+  if [ -z "$ans" ] || [[ "$ans" =~ ^[Yy] ]]; then
+    _write_chobby_game "$cfg" "byar-dev"
+    ok "Chobby set to byar-dev ($cfg)"
+  else
+    warn "Keeping current channel. Run 'just bar::dev-mode' to switch later."
+  fi
+}
+
 run_linux() {
   if ! command -v bar-launch &>/dev/null; then
     err "bar-launch not on PATH"
@@ -73,6 +119,7 @@ run_linux() {
   local user_args=("$@")
   local game_dir
   game_dir="$(detect_game_dir 2>/dev/null)" || true
+  _ensure_chobby_dev_mode "$game_dir"
   if [ -n "$game_dir" ]; then
     ensure_devmode_marker "$game_dir"
     _apply_managed_springsettings "$game_dir/springsettings.cfg" "${user_args[@]}"
@@ -213,6 +260,7 @@ run_wsl() {
   fi
 
   ensure_devmode_marker "$BAR_DATA_DIR"
+  _ensure_chobby_dev_mode "$BAR_DATA_DIR"
   _apply_managed_springsettings "$BAR_DATA_DIR/springsettings.cfg" "$@"
 
   # Strip --debug-gl from forwarded args so the Windows-side launcher /
