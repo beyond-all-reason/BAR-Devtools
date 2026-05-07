@@ -47,29 +47,23 @@ preflight_symlinks() {
 # whenever Game.gameVersion contains the literal "$VERSION" placeholder --
 # so byar-dev also turns on dev-only widgets and warnings.
 #
-# We ask once; the marker records "we asked, don't re-prompt." Subsequent
-# launches with the wrong channel get a single-line warn banner. Users can
-# always re-flip with `just bar::dev-mode`.
+# Prompt every launch the channel isn't byar-dev. The cost is one keystroke;
+# the cost of skipping is "you spent the dev session on the wrong game
+# version and didn't notice." Anyone who consistently runs `byar` for their
+# own reasons can answer N each time, or `just bar::dev-mode` once to
+# silence the prompt by switching.
 _ensure_chobby_dev_mode() {
   local data_dir="$1"
   [ -n "$data_dir" ] && [ -d "$data_dir" ] || return 0
   local cfg="$data_dir/chobby_config.json"
-  local marker="${XDG_STATE_HOME:-$HOME/.local/state}/bar-devtools/chobby-mode-asked"
 
   local current
   current="$(_chobby_game_field "$cfg")"
   [ "$current" = "byar-dev" ] && return 0
 
-  if [ -f "$marker" ]; then
-    warn "Chobby is in '${current:-default}' channel; local checkout won't load by default."
-    warn "  Switch in Chobby (Settings > Developer) or run: just bar::dev-mode"
-    return 0
-  fi
-
-  mkdir -p "$(dirname "$marker")"
   if [ ! -t 0 ]; then
-    touch "$marker"
-    warn "Chobby is in '${current:-default}' channel. Run 'just bar::dev-mode' to switch."
+    warn "Chobby is in '${current:-default}' channel; local checkout won't load by default."
+    warn "  Run 'just bar::dev-mode' to switch."
     return 0
   fi
 
@@ -78,12 +72,11 @@ _ensure_chobby_dev_mode() {
   info "  byar      -> latest rapid test build (read-only, dev mode off)"
   local ans
   read -rp "Switch to byar-dev now? [Y/n] " ans
-  touch "$marker"
   if [ -z "$ans" ] || [[ "$ans" =~ ^[Yy] ]]; then
     _write_chobby_game "$cfg" "byar-dev"
     ok "Chobby set to byar-dev ($cfg)"
   else
-    warn "Keeping current channel. Run 'just bar::dev-mode' to switch later."
+    warn "Keeping '${current:-default}' channel for this run."
   fi
 }
 
