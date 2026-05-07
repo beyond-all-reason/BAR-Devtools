@@ -1361,44 +1361,9 @@ checkbox_list() {
   return 0
 }
 
-# Single-list checkbox picker for components. Sets BAR_FEATURES_SELECTED.
-pick_features() {
-  CHECKBOX_RESULT=""
-  if ! checkbox_list "Which BAR components will you work on?" \
-    "bar|BAR game content + bar-lobby client|1" \
-    "recoil|Recoil engine (build from source)|1" \
-    "teiserver|Teiserver (lobby/matchmaking server)|1" \
-    "chobby|Chobby (in-game lobby)|1" \
-    "spads-source|SPADS source (autohost dev, optional)|0"
-  then
-    BAR_FEATURES_SELECTED=""
-    warn "Selection cancelled."
-    return
-  fi
-
-  if [ -z "$CHECKBOX_RESULT" ]; then
-    BAR_FEATURES_SELECTED=""
-    warn "No features selected. Nothing to clone or build."
-    return
-  fi
-
-  BAR_FEATURES_SELECTED="$CHECKBOX_RESULT"
-  ok "Selected: ${BAR_FEATURES_SELECTED}"
-}
-
-# Persist BAR_FEATURES=... to .env (overwrite if already set).
-write_features_env() {
-  local features="$1"
-  local env_file="$DEVTOOLS_DIR/.env"
-  touch "$env_file"
-  if grep -q "^BAR_FEATURES=" "$env_file"; then
-    sed -i "s|^BAR_FEATURES=.*|BAR_FEATURES=${features}|" "$env_file"
-    info "Updated BAR_FEATURES in .env: ${features}"
-  else
-    echo "BAR_FEATURES=${features}" >> "$env_file"
-    ok "Added BAR_FEATURES=${features} to .env"
-  fi
-}
+# Note: features lives in scripts/setup/20-features.sh now. The module
+# registers prompt_features / apply_features at source-load time, and
+# cmd_init drives it through `ensure_module_by_name features`.
 
 # Persist ALLOW_SPRINGSETTINGS_MOD=<0|1> to .env.
 write_springsettings_optin_env() {
@@ -1797,13 +1762,13 @@ cmd_init() {
     ensure_bar_data_dir || warn "Skipping BAR data dir setup (set BAR_DATA_DIR in .env to retry)."
   fi
 
-  pick_features
-  local features="${BAR_FEATURES_SELECTED:-}"
+  ensure_module_by_name features || true
+  local features
+  features="$(read_env_key BAR_FEATURES)"
   if [ -z "$features" ]; then
     info "Skipping clone/build steps. Re-run 'just setup::init' to pick components."
     return 0
   fi
-  write_features_env "$features"
 
   # Capture the symlink decision now; the actual symlinking happens later
   # once the repos exist on disk.
@@ -2192,3 +2157,15 @@ cmd_link() {
   ln -s "$source_path" "$link_path"
   ok "Linked $target: $link_path -> $source_path"
 }
+
+# ---------------------------------------------------------------------------
+# Module registry: source the engine + load every scripts/setup/NN-*.sh
+# module file. Each module registers itself via register_module so cmd_init
+# can drive them uniformly through ensure_all_modules / ensure_module_by_name.
+#
+# This MUST run after every setup.sh helper is defined (modules call into
+# checkbox_list, info/warn/ok, repo helpers, etc.).
+# ---------------------------------------------------------------------------
+# shellcheck source=scripts/setup/_lib.sh
+source "$DEVTOOLS_DIR/scripts/setup/_lib.sh"
+_load_setup_modules
