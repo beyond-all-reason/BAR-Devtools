@@ -1698,23 +1698,30 @@ cmd_setup_editor() {
   done
   echo ""
 
-  # BAR's .vscode/ is gitignored, so workspace settings have to be created
-  # per-checkout. Write defaults if absent; otherwise diff and leave alone.
-  local bar_vscode="$DEVTOOLS_DIR/Beyond-All-Reason/.vscode/settings.json"
-  local bar_vscode_template="$DEVTOOLS_DIR/templates/bar-vscode-settings.json"
-  if [ -d "$DEVTOOLS_DIR/Beyond-All-Reason" ]; then
-    if [ ! -f "$bar_vscode" ]; then
-      mkdir -p "$(dirname "$bar_vscode")"
-      cp "$bar_vscode_template" "$bar_vscode"
-      ok "Wrote $bar_vscode"
-    elif ! diff -q "$bar_vscode_template" "$bar_vscode" >/dev/null 2>&1; then
-      warn "$bar_vscode differs from recommended defaults:"
-      diff -u "$bar_vscode" "$bar_vscode_template" | sed 's/^/  /' || true
-      info "Merge the '[lua]' block (and any missing files.exclude entries) manually."
+  # Per-checkout .vscode/settings.json (gitignored in both repos). The
+  # engine template bakes in $HOME so clangd.path doesn't depend on
+  # VS Code Server's PATH inheriting ~/.local/bin (it doesn't, reliably).
+  _write_vscode_settings() {
+    local repo="$1" template="$2"
+    local dest="$DEVTOOLS_DIR/$repo/.vscode/settings.json"
+    [ -d "$DEVTOOLS_DIR/$repo" ] || return 0
+    local rendered
+    rendered="$(sed "s|__HOME__|$HOME|g" "$template")"
+    if [ ! -f "$dest" ]; then
+      mkdir -p "$(dirname "$dest")"
+      printf '%s\n' "$rendered" > "$dest"
+      ok "Wrote $dest"
+    elif ! diff -q <(printf '%s\n' "$rendered") "$dest" >/dev/null 2>&1; then
+      warn "$dest differs from recommended defaults:"
+      diff -u "$dest" <(printf '%s\n' "$rendered") | sed 's/^/  /' || true
+      info "Merge by hand (or delete the file and re-run 'just setup::editor')."
     else
-      info "$bar_vscode matches recommended defaults"
+      info "$dest matches recommended defaults"
     fi
-  fi
+  }
+  _write_vscode_settings "Beyond-All-Reason" "$DEVTOOLS_DIR/templates/bar-vscode-settings.json"
+  _write_vscode_settings "RecoilEngine"      "$DEVTOOLS_DIR/templates/recoil-vscode-settings.json"
+  unset -f _write_vscode_settings
   echo ""
   ok "Editor integration ready."
   echo ""
