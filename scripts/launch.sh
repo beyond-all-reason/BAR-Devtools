@@ -41,44 +41,10 @@ preflight_symlinks() {
   info "(continuing; bar-launch will still work for non-local sources like 'rapid://...:test')"
 }
 
-# Offer to switch Chobby to its byar-dev gameConfig, which is what makes
-# Chobby default to the local-checkout `.sdd` (Beyond All Reason $VERSION)
-# in skirmish setup. As a side effect, BAR's gadgets.lua flips isDevMode on
-# whenever Game.gameVersion contains the literal "$VERSION" placeholder --
-# so byar-dev also turns on dev-only widgets and warnings.
-#
-# Prompt every launch the channel isn't byar-dev. The cost is one keystroke;
-# the cost of skipping is "you spent the dev session on the wrong game
-# version and didn't notice." Anyone who consistently runs `byar` for their
-# own reasons can answer N each time, or `just bar::dev-mode` once to
-# silence the prompt by switching.
-_ensure_chobby_dev_mode() {
-  local data_dir="$1"
-  [ -n "$data_dir" ] && [ -d "$data_dir" ] || return 0
-  local cfg="$data_dir/chobby_config.json"
-
-  local current
-  current="$(_chobby_game_field "$cfg")"
-  [ "$current" = "byar-dev" ] && return 0
-
-  if [ ! -t 0 ]; then
-    warn "Chobby is in '${current:-default}' channel; local checkout won't load by default."
-    warn "  Run 'just bar::dev-mode' to switch."
-    return 0
-  fi
-
-  info "Chobby's gameConfig channel decides whether your local checkout loads:"
-  info "  byar-dev  -> games/Beyond-All-Reason.sdd (your edits, dev mode on)"
-  info "  byar      -> latest rapid test build (read-only, dev mode off)"
-  local ans
-  read -rp "Switch to byar-dev now? [Y/n] " ans
-  if [ -z "$ans" ] || [[ "$ans" =~ ^[Yy] ]]; then
-    _write_chobby_game "$cfg" "byar-dev"
-    ok "Chobby set to byar-dev ($cfg)"
-  else
-    warn "Keeping '${current:-default}' channel for this run."
-  fi
-}
+# NOTE: chobby-channel selection lives in setup::init's module registry
+# now (scripts/setup/30-chobby-channel.sh). bar::launch trusts that the
+# user made the choice at setup time; if they want to revisit it, that's
+# `just bar::dev-mode` (which calls apply_chobby_channel directly).
 
 run_linux() {
   if ! command -v bar-launch &>/dev/null; then
@@ -112,7 +78,6 @@ run_linux() {
   local user_args=("$@")
   local game_dir
   game_dir="$(detect_game_dir 2>/dev/null)" || true
-  _ensure_chobby_dev_mode "$game_dir"
   if [ -n "$game_dir" ]; then
     ensure_devmode_marker "$game_dir"
     _apply_managed_springsettings "$game_dir/springsettings.cfg" "${user_args[@]}"
@@ -253,7 +218,6 @@ run_wsl() {
   fi
 
   ensure_devmode_marker "$BAR_DATA_DIR"
-  _ensure_chobby_dev_mode "$BAR_DATA_DIR"
   _apply_managed_springsettings "$BAR_DATA_DIR/springsettings.cfg" "$@"
 
   # Strip --debug-gl from forwarded args so the Windows-side launcher /

@@ -49,20 +49,13 @@ dev-mode:
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
     source "$DEVTOOLS_DIR/scripts/setup.sh"
-    game_dir="${BAR_DATA_DIR:-$(detect_game_dir 2>/dev/null || true)}"
-    if [ -z "$game_dir" ]; then
+    if [ -z "${BAR_DATA_DIR:-$(detect_game_dir 2>/dev/null || true)}" ]; then
       err "Could not resolve BAR data dir. Set BAR_DATA_DIR or run 'just setup::init' first."
       exit 1
     fi
-    cfg="$game_dir/chobby_config.json"
-    current="$(_chobby_game_field "$cfg")"
-    if [ "$current" = "byar-dev" ]; then
-      ok "Chobby already on byar-dev ($cfg)"
-      exit 0
-    fi
-    _write_chobby_game "$cfg" "byar-dev"
-    ok "Chobby switched ${current:+from $current }to byar-dev ($cfg)"
-    info "Restart bar::launch (or relaunch Chobby) to pick up the change."
+    write_env_key BAR_CHOBBY_CHANNEL "byar-dev"
+    apply_chobby_channel
+    info "Relaunch Chobby (or run 'just bar::launch') to pick up the change."
 
 # Regenerate the Windows-side launcher shim from current .env values.
 # WSL2-only.

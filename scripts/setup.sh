@@ -1777,6 +1777,8 @@ cmd_init() {
   game_dir="$(detect_game_dir 2>/dev/null)" || true
   do_link="$(read_env_key BAR_LINK_ON_BUILD)"
 
+  ensure_module_by_name chobby_channel || true
+
   prompt_springsettings_opt_in
   prompt_ssh_setup_choice
   prompt_editor_setup_choice
