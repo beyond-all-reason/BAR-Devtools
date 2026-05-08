@@ -30,11 +30,6 @@ Re-running is safe: every step checks before acting, and the rc block is
 replaced in place rather than duplicated.
 
 EOF
-read -rp "Continue? [Y/n] " ans
-case "${ans:-y}" in
-    y|Y|yes|YES) ;;
-    *) info "Aborted."; exit 0 ;;
-esac
 
 case "$OP_SSH_ENV" in
     wsl)
