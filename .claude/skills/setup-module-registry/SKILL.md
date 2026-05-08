@@ -55,6 +55,37 @@ Modules fall into two shapes:
 
 For selection modules, `apply_<name>() { :; }` (true no-op). The downstream code in `cmd_init` uses `read_env_key BAR_<KEY>` to drive its decision. **Do not duplicate the apply logic between the module and `cmd_init`** — pick one home; selection modules put the home in `cmd_init`'s ordered phases, action modules put the home in `apply_<name>`.
 
+## Deferred apply: `register_module ... deferred`
+
+Some modules' apply touches state that `cmd_init` only creates *later* (clones, builds, the bar-dev distrobox). Running their apply during the front-loaded config phase explodes because that state isn't there yet.
+
+The fifth argument to `register_module` is `when`, defaulting to `config`. Pass `deferred` for modules that need to wait:
+
+```bash
+# editor's apply runs distrobox-export, which needs the bar-dev container
+# created at cmd_init step 2/N. Tagging deferred so prompt fires at config
+# time (front-loaded) but apply waits until apply_deferred_modules is called
+# at the end of cmd_init.
+register_module editor BAR_EDITOR_SETUP prompt_editor apply_editor deferred
+```
+
+`ensure_module` for a deferred module runs only the prompt; `apply_deferred_modules` (called near the end of `cmd_init`, after distrobox/clones/builds) iterates and runs the deferred applies. The user still sees one prompt batch at the top — the apply just shifts in time.
+
+This is bash's stand-in for the `depends-on` graph a real config-management tool would express. Keep deferred to the genuinely-needs-later-state cases; don't tag everything deferred to "be safe".
+
+## Fail loudly inside apply_
+
+`set -e` propagates non-zero through bare commands but **not** through pipes (without `pipefail`), through `2>/dev/null` swallowed errors, or through unchecked loop iterations. Several silent-failure shapes used to hide here:
+
+- **Loops over commands without per-iteration check.** The original `for bin in ...; do distrobox-export "$bin" ...; done` swallowed each export's exit code. Fix: capture exit, accumulate failures, `err`+`return 1` at the end of the loop. Whoever runs `setup::init` finds out *which* binary failed.
+- **`cmd | tail -3` style pipes.** `tail` always succeeds; cmd's exit goes nowhere. Fix: `set -eo pipefail` inside the `bash -c`, or `${PIPESTATUS[0]}` checks.
+- **`bash -c '<multi-line>'` without `set -e` inside.** The inner script keeps going past failures by default. Fix: first line of the inner script is `set -e`.
+- **Bare `echo "$cmd" 2>/dev/null`** that masks all errors. Only acceptable for genuinely-expected failures (probe-and-fall-back); not for installs/exports/configures.
+
+Pattern: every apply_ should either succeed cleanly OR `err`+`return 1`. The user-visible message tells them what failed and how to recover (`Re-run 'just setup::editor'`, `Run 'just setup::distrobox' first`).
+
+`cmd_init` keeps its `ensure_module_by_name <name> || true` wrappers so a single module's apply failure doesn't abort the whole flow — but the module's loud err is what tells the user which module failed and what to do.
+
 ## File layout and order
 
 ```

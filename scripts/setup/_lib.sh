@@ -26,12 +26,18 @@
 # Registry
 # ---------------------------------------------------------------------------
 
-# Each entry: "name|env_key|prompt_fn|apply_fn"
+# Each entry: "name|env_key|prompt_fn|apply_fn|when"
+# `when` is "config" (default; apply runs immediately after prompt during
+# cmd_init's front-loaded configuration phase) or "deferred" (apply runs
+# at the END of cmd_init after distrobox / clones / builds are in place).
+# Use deferred for modules whose apply touches state created by later
+# cmd_init steps -- the canonical example is editor, whose
+# distrobox-export needs the bar-dev container up first.
 declare -ag SETUP_MODULES=()
 declare -Ag SETUP_MODULE_INDEX=()  # name -> index in SETUP_MODULES
 
 register_module() {
-    local name="$1" key="$2" prompt_fn="$3" apply_fn="$4"
+    local name="$1" key="$2" prompt_fn="$3" apply_fn="$4" when="${5:-config}"
     local f
     for f in "$prompt_fn" "$apply_fn"; do
         if ! declare -F "$f" >/dev/null; then
@@ -39,15 +45,20 @@ register_module() {
             return 1
         fi
     done
+    case "$when" in
+        config|deferred) ;;
+        *) echo "[register_module] $name: unknown when='$when' (config|deferred)" >&2; return 1 ;;
+    esac
     SETUP_MODULE_INDEX["$name"]=${#SETUP_MODULES[@]}
-    SETUP_MODULES+=("$name|$key|$prompt_fn|$apply_fn")
+    SETUP_MODULES+=("$name|$key|$prompt_fn|$apply_fn|$when")
 }
 
 # Read a module entry by index. Sets SETUP_M_NAME / SETUP_M_KEY /
-# SETUP_M_PROMPT / SETUP_M_APPLY in the caller's scope.
+# SETUP_M_PROMPT / SETUP_M_APPLY / SETUP_M_WHEN in the caller's scope.
 _load_module_entry() {
     local entry="$1"
-    IFS='|' read -r SETUP_M_NAME SETUP_M_KEY SETUP_M_PROMPT SETUP_M_APPLY <<<"$entry"
+    IFS='|' read -r SETUP_M_NAME SETUP_M_KEY SETUP_M_PROMPT SETUP_M_APPLY SETUP_M_WHEN <<<"$entry"
+    : "${SETUP_M_WHEN:=config}"
 }
 
 # ---------------------------------------------------------------------------
@@ -87,6 +98,11 @@ write_env_key() {
 # The prompt function is responsible for calling write_env_key on its own --
 # different modules write different shapes (single value, comma list, etc.)
 # and we don't want to assume.
+#
+# Apply only fires here when when=config. Deferred modules have their
+# prompt run at the front-loaded config phase (so the user is asked once
+# alongside everything else) but their apply runs later via
+# apply_deferred_modules, after cmd_init's system-setup steps complete.
 ensure_module() {
     _load_module_entry "$1"
     local current
@@ -96,7 +112,22 @@ ensure_module() {
     else
         info "$SETUP_M_NAME: using $SETUP_M_KEY=$current from .env"
     fi
-    "$SETUP_M_APPLY"
+    if [ "$SETUP_M_WHEN" = "config" ]; then
+        "$SETUP_M_APPLY"
+    fi
+}
+
+# Run apply for every module registered with when=deferred. cmd_init calls
+# this once near the end, after distrobox / clones / builds are in place.
+apply_deferred_modules() {
+    local entry
+    for entry in "${SETUP_MODULES[@]}"; do
+        _load_module_entry "$entry"
+        if [ "$SETUP_M_WHEN" = "deferred" ]; then
+            step "deferred apply: $SETUP_M_NAME"
+            "$SETUP_M_APPLY"
+        fi
+    done
 }
 
 # Run a single module by name. Used by `just <module>::setup` recipes so

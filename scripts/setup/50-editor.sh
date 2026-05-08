@@ -14,4 +14,9 @@
 prompt_editor() { prompt_editor_setup_choice; }
 apply_editor()  { run_editor_setup_choice; }
 
-register_module editor BAR_EDITOR_SETUP prompt_editor apply_editor
+# when=deferred: editor's apply runs distrobox-export, which requires the
+# bar-dev container to exist. cmd_init creates the container at step 2/N,
+# AFTER the front-loaded config phase. Tagging deferred so prompt_editor
+# fires at config time (front-loaded with the other prompts) but
+# apply_editor runs at the end of cmd_init via apply_deferred_modules.
+register_module editor BAR_EDITOR_SETUP prompt_editor apply_editor deferred

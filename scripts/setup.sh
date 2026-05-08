@@ -1237,15 +1237,24 @@ cmd_setup_distrobox() {
   echo ""
 
   step "Running first-entry setup (lux lua tree)..."
-  distrobox enter "$DEVTOOLS_DISTROBOX" -- bash -c '
-    lx install-lua 2>/dev/null
+  # Inner script must `set -e` so a failure in `lx install-lua` or the
+  # symlink isn't swallowed by bash -c continuing past it. We leak the
+  # exit through `distrobox enter` -> outer caller, which gets reported.
+  if ! distrobox enter "$DEVTOOLS_DISTROBOX" -- bash -c '
+    set -e
+    lx install-lua
     LUA_BIN=$(command -v lua-5.1 2>/dev/null || command -v lua5.1 2>/dev/null)
-    if [ -n "$LUA_BIN" ]; then
-      LUX_LUA="$HOME/.local/share/lux/tree/5.1/.lua/bin/lua"
-      mkdir -p "$(dirname "$LUX_LUA")"
-      ln -sf "$LUA_BIN" "$LUX_LUA"
+    if [ -z "$LUA_BIN" ]; then
+      echo "lux setup: no lua-5.1 binary found in container PATH" >&2
+      exit 1
     fi
-  '
+    LUX_LUA="$HOME/.local/share/lux/tree/5.1/.lua/bin/lua"
+    mkdir -p "$(dirname "$LUX_LUA")"
+    ln -sf "$LUA_BIN" "$LUX_LUA"
+  '; then
+    err "Lux lua tree setup failed inside bar-dev. Try 'just setup::distrobox' to rebuild."
+    return 1
+  fi
   ok "Lux lua tree configured"
   echo ""
 
@@ -1610,22 +1619,49 @@ cmd_setup_editor() {
     return 1
   fi
 
-  local local_bin="$HOME/.local/bin" bin
+  local local_bin="$HOME/.local/bin" bin export_failures=()
   mkdir -p "$local_bin"
   for bin in /usr/local/bin/emmylua_ls /usr/local/bin/emmylua_check /usr/bin/clangd /usr/local/bin/stylua /usr/bin/lx; do
     info "Exporting $(basename "$bin")..."
-    distrobox enter "$DEVTOOLS_DISTROBOX" -- distrobox-export --bin "$bin" --export-path "$local_bin"
+    if ! distrobox enter "$DEVTOOLS_DISTROBOX" -- distrobox-export --bin "$bin" --export-path "$local_bin"; then
+      export_failures+=("$bin")
+    fi
   done
+  if [ "${#export_failures[@]}" -gt 0 ]; then
+    err "distrobox-export failed for: ${export_failures[*]}"
+    err "  Most common cause: bar-dev container missing or down."
+    err "  Recover with: just setup::distrobox && just setup::editor"
+    return 1
+  fi
+  case ":$PATH:" in
+    *":$local_bin:"*) ;;
+    *)  warn "$local_bin is not on \$PATH; exported wrappers won't be found by your editor."
+        warn "  Add to your shell rc:  export PATH=\"\$HOME/.local/bin:\$PATH\""
+        ;;
+  esac
   echo ""
 
   if [ -f "$DEVTOOLS_DIR/RecoilEngine/CMakeLists.txt" ]; then
     step "Generating compile_commands.json for clangd..."
-    distrobox enter "$DEVTOOLS_DISTROBOX" -- bash -c "
+    # Without pipefail the `| tail -3` swallows cmake's non-zero exit
+    # (tail always succeeds), and we'd happily print "ready" against a
+    # missing or stale build/compile_commands.json. set -e + pipefail
+    # inside makes cmake's failure propagate.
+    if ! distrobox enter "$DEVTOOLS_DISTROBOX" -- bash -c "
+      set -eo pipefail
       cd '$DEVTOOLS_DIR/RecoilEngine' \
-      && mkdir -p build \
-      && cd build \
-      && cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON .. 2>&1 | tail -3
-    "
+        && mkdir -p build \
+        && cd build \
+        && cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON .. 2>&1 | tail -3
+    "; then
+      err "cmake configure failed; compile_commands.json not generated."
+      err "  Re-run 'just setup::editor' once the engine builds cleanly."
+      return 1
+    fi
+    if [ ! -f "$DEVTOOLS_DIR/RecoilEngine/build/compile_commands.json" ]; then
+      err "cmake reported success but build/compile_commands.json is missing."
+      return 1
+    fi
     ln -sf build/compile_commands.json "$DEVTOOLS_DIR/RecoilEngine/compile_commands.json"
     ok "compile_commands.json ready"
   else
@@ -1756,7 +1792,7 @@ cmd_init() {
     exit 1
   fi
 
-  step "0/7  Configuration"
+  step "0/8  Configuration"
   echo ""
   if is_wsl; then
     ensure_bar_data_dir || warn "Skipping BAR data dir setup (set BAR_DATA_DIR in .env to retry)."
@@ -1789,7 +1825,7 @@ cmd_init() {
   ensure_module_by_name editor          || true
   echo ""
 
-  step "1/7  Checking & installing dependencies"
+  step "1/8  Checking & installing dependencies"
   echo ""
   if check_git &>/dev/null && check_docker &>/dev/null; then
     ok "Core dependencies (git, docker) already installed."
@@ -1804,17 +1840,17 @@ cmd_init() {
   ensure_sync_daemon_deps_wsl
   echo ""
 
-  step "2/7  Dev environment (distrobox -- required)"
+  step "2/8  Dev environment (distrobox -- required)"
   echo ""
   cmd_setup_distrobox
   echo ""
 
-  step "3/7  Cloning repositories"
+  step "3/8  Cloning repositories"
   echo ""
   clone_for_features "$features"
   echo ""
 
-  step "4/7  Building Docker images"
+  step "4/8  Building Docker images"
   echo ""
   if features_include "$features" teiserver; then
     install_dockerignore
@@ -1827,7 +1863,7 @@ cmd_init() {
   fi
   echo ""
 
-  step "5/7  Engine build"
+  step "5/8  Engine build"
   echo ""
   if features_include "$features" recoil; then
     if [ -d "$DEVTOOLS_DIR/RecoilEngine/docker-build-v2" ]; then
@@ -1850,7 +1886,7 @@ cmd_init() {
   fi
   echo ""
 
-  step "6/7  Symlinks to game directory"
+  step "6/8  Symlinks to game directory"
   echo ""
   if [ -z "$game_dir" ]; then
     info "No game directory detected. Set BAR_DATA_DIR to enable linking."
@@ -1881,7 +1917,7 @@ cmd_init() {
   fi
   echo ""
 
-  step "7/7  bar-launch venv (just bar::launch)"
+  step "7/8  bar-launch venv (just bar::launch)"
   echo ""
   if is_wsl; then
     # On WSL2 the launcher runs as a Windows-side Python process so it
@@ -1892,7 +1928,11 @@ cmd_init() {
     cmd_setup_bar_launch
   fi
   echo ""
-  # (Editor integration ran at config time via the module registry.)
+
+  step "8/8  Deferred module apply (editor, etc.)"
+  echo ""
+  apply_deferred_modules
+  echo ""
 
   echo -e "${BOLD}=== Setup Complete ===${NC}"
   echo ""
