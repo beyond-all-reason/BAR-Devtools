@@ -1756,7 +1756,7 @@ cmd_init() {
     exit 1
   fi
 
-  step "0/8  Configuration"
+  step "0/7  Configuration"
   echo ""
   if is_wsl; then
     ensure_bar_data_dir || warn "Skipping BAR data dir setup (set BAR_DATA_DIR in .env to retry)."
@@ -1777,23 +1777,19 @@ cmd_init() {
   game_dir="$(detect_game_dir 2>/dev/null)" || true
   do_link="$(read_env_key BAR_LINK_ON_BUILD)"
 
-  ensure_module_by_name chobby_channel || true
-
-  prompt_springsettings_opt_in
-  prompt_ssh_setup_choice
-  prompt_editor_setup_choice
+  ensure_module_by_name chobby_channel  || true
+  ensure_module_by_name springsettings  || true
+  # ssh's apply runs the chosen setup-*.sh script -- still at config time,
+  # so the rest of cmd_init is unattended (manual flow's "paste pubkey to
+  # GitHub" pause happens here, not later).
+  ensure_module_by_name ssh             || true
+  # editor's apply (extension install) runs at config time too. The legacy
+  # cmd_init had it at step 8/8, but cmd_setup_editor doesn't depend on
+  # any later step; keeping it here matches the front-load pattern.
+  ensure_module_by_name editor          || true
   echo ""
 
-  # Run the SSH setup right after collecting the choice so the rest of init
-  # is fully unattended -- including the manual flow's "paste this pubkey on
-  # github.com" pause. Front-loading all interactive work matches the Step 0/N
-  # pattern; splitting op vs manual to different steps was the leftover. After
-  # this returns, clones can use git@ URLs from repos.local.conf and the user
-  # can walk away.
-  run_ssh_setup_choice
-  echo ""
-
-  step "1/8  Checking & installing dependencies"
+  step "1/7  Checking & installing dependencies"
   echo ""
   if check_git &>/dev/null && check_docker &>/dev/null; then
     ok "Core dependencies (git, docker) already installed."
@@ -1808,17 +1804,17 @@ cmd_init() {
   ensure_sync_daemon_deps_wsl
   echo ""
 
-  step "2/8  Dev environment (distrobox -- required)"
+  step "2/7  Dev environment (distrobox -- required)"
   echo ""
   cmd_setup_distrobox
   echo ""
 
-  step "3/8  Cloning repositories"
+  step "3/7  Cloning repositories"
   echo ""
   clone_for_features "$features"
   echo ""
 
-  step "4/8  Building Docker images"
+  step "4/7  Building Docker images"
   echo ""
   if features_include "$features" teiserver; then
     install_dockerignore
@@ -1831,7 +1827,7 @@ cmd_init() {
   fi
   echo ""
 
-  step "5/8  Engine build"
+  step "5/7  Engine build"
   echo ""
   if features_include "$features" recoil; then
     if [ -d "$DEVTOOLS_DIR/RecoilEngine/docker-build-v2" ]; then
@@ -1854,7 +1850,7 @@ cmd_init() {
   fi
   echo ""
 
-  step "6/8  Symlinks to game directory"
+  step "6/7  Symlinks to game directory"
   echo ""
   if [ -z "$game_dir" ]; then
     info "No game directory detected. Set BAR_DATA_DIR to enable linking."
@@ -1885,7 +1881,7 @@ cmd_init() {
   fi
   echo ""
 
-  step "7/8  bar-launch venv (just bar::launch)"
+  step "7/7  bar-launch venv (just bar::launch)"
   echo ""
   if is_wsl; then
     # On WSL2 the launcher runs as a Windows-side Python process so it
@@ -1896,11 +1892,7 @@ cmd_init() {
     cmd_setup_bar_launch
   fi
   echo ""
-
-  step "8/8  Editor integration"
-  echo ""
-  run_editor_setup_choice
-  echo ""
+  # (Editor integration ran at config time via the module registry.)
 
   echo -e "${BOLD}=== Setup Complete ===${NC}"
   echo ""
