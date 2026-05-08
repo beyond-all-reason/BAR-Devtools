@@ -67,5 +67,8 @@ doctor:
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
     source "$DEVTOOLS_DIR/scripts/repos.sh"
+    # setup.sh defines (and on its tail loads) the module registry; doctor
+    # iterates it to show "what cmd_init recorded".
+    source "$DEVTOOLS_DIR/scripts/setup.sh"
     source "$DEVTOOLS_DIR/scripts/doctor.sh"
     cmd_doctor

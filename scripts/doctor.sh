@@ -250,12 +250,25 @@ check_doctor_services() {
 }
 
 
+check_doctor_modules() {
+  # Read-only iteration over the setup module registry. Shows what
+  # cmd_init recorded so contributors can see what re-running setup::init
+  # would skip.
+  if [ "${#SETUP_MODULES[@]}" -eq 0 ]; then
+    return 0
+  fi
+  echo -e "${BOLD}Setup modules${NC}"
+  doctor_modules
+  echo ""
+}
+
 cmd_doctor() {
   echo -e "${BOLD}=== BAR Devtools Doctor ===${NC}"
   echo ""
 
   check_doctor_deps
   check_doctor_env
+  check_doctor_modules
   check_doctor_ports
   check_doctor_repos
   check_doctor_images

@@ -51,14 +51,18 @@ fi
 
 # --- Step 3: Toggle the SSH agent + CLI integration in 1Password Desktop ---
 step "3/7 Enable SSH agent + CLI integration"
-cat <<EOF
+if op_ssh_already_active; then
+    ok "1Password SSH agent already serving keys -- skipping toggle prompt."
+else
+    cat <<EOF
        In 1Password Desktop:
          Settings → Developer
            [x] Use the SSH agent
            [x] Integrate with 1Password CLI
        Then sign in to your account if you haven't already.
 EOF
-pause "Toggle both checkboxes in 1Password's Developer settings"
+    pause "Toggle both checkboxes in 1Password's Developer settings"
+fi
 
 # --- Step 4: socat in WSL ---
 step "4/7 Install socat in WSL"

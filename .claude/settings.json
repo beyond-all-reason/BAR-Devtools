@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(just bar::log)",
+      "Bash(just --list)",
+      "Bash(just --list *)",
+      "Bash(just --evaluate)",
+      "Bash(just doctor)"
+    ]
+  }
+}

@@ -118,14 +118,18 @@ install_op_cli
 
 # --- Step 3: Toggle SSH agent + CLI integration ---
 step "3/5 Enable SSH agent + CLI integration"
-cat <<EOF
+if op_ssh_already_active; then
+    ok "1Password SSH agent already serving keys -- skipping toggle prompt."
+else
+    cat <<EOF
        In 1Password Desktop:
          Settings → Developer
            [x] Use the SSH agent
            [x] Integrate with 1Password CLI
        Then sign in to your account if you haven't already.
 EOF
-pause "Toggle both checkboxes in 1Password's Developer settings"
+    pause "Toggle both checkboxes in 1Password's Developer settings"
+fi
 
 # --- Step 4: shell rc snippet ---
 SHELL_RC="$(shellrc_path)"

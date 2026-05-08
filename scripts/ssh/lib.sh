@@ -37,6 +37,20 @@ pause() {
     read -rp "       Press Enter when done... " _
 }
 
+# True if 1Password's SSH agent is already reachable AND has keys loaded.
+# Used by setup-{wsl,linux}-ssh.sh to skip the "Toggle both checkboxes in
+# 1Password's Developer settings" pause on re-runs: if ssh-add -l succeeds
+# against either of the conventional socket paths, the GUI toggle has
+# already been done and the user doesn't need to confirm anything.
+op_ssh_already_active() {
+    local sock
+    for sock in "$HOME/.1password/agent.sock" "$HOME/.ssh/agent.sock"; do
+        [ -S "$sock" ] || continue
+        SSH_AUTH_SOCK="$sock" ssh-add -l >/dev/null 2>&1 && return 0
+    done
+    return 1
+}
+
 # Echo the path to the user's interactive shell rc file. Mirrors the $SHELL
 # check in scripts/bootstrap.sh so both wizards target the same file.
 shellrc_path() {
