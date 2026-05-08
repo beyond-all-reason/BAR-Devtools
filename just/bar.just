@@ -49,12 +49,17 @@ dev-mode:
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
     source "$DEVTOOLS_DIR/scripts/setup.sh"
-    if [ -z "${BAR_DATA_DIR:-$(detect_game_dir 2>/dev/null || true)}" ]; then
+    game_dir="${BAR_DATA_DIR:-$(detect_game_dir 2>/dev/null || true)}"
+    if [ -z "$game_dir" ]; then
       err "Could not resolve BAR data dir. Set BAR_DATA_DIR or run 'just setup::init' first."
       exit 1
     fi
+    # Lobby-side: chobby's gameConfig channel -> local .sdd is default in skirmish.
     write_env_key BAR_CHOBBY_CHANNEL "byar-dev"
     apply_chobby_channel
+    # Engine-side: empty devmode.txt unlocks /cheat, unsigned LuaUI/gadgets,
+    # hot-reload, loose VFS. Idempotent (silent if it already exists).
+    ensure_devmode_marker "$game_dir"
     info "Relaunch Chobby (or run 'just bar::launch') to pick up the change."
 
 # Regenerate the Windows-side launcher shim from current .env values.
