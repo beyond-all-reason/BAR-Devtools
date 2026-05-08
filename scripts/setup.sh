@@ -1194,6 +1194,42 @@ ensure_watchman_wsl() {
   ok "watchman wrapper exported"
 }
 
+# Export the dev-toolchain binaries from the bar-dev container to the host
+# PATH via distrobox-export wrappers. These tools are container-lifecycle
+# concerns -- they exist because dev.Containerfile installed them, and they
+# disappear when the container is rebuilt. Keeping the export with the
+# container's setup (not editor-setup) ensures non-editor recipes
+# (`just bar::check`, `bar::lint`, `bar::fmt`, `bar::units`) still work
+# even if the user declined editor integration.
+#
+# Idempotent. Loud-fail per binary so a partially-built container surfaces
+# clearly instead of silently leaving wrappers missing for the editor /
+# recipes that need them.
+export_dev_binaries() {
+  local local_bin="$HOME/.local/bin" bin export_failures=()
+  mkdir -p "$local_bin"
+  step "Exporting dev binaries from $DEVTOOLS_DISTROBOX → $local_bin"
+  for bin in /usr/local/bin/emmylua_ls /usr/local/bin/emmylua_check /usr/bin/clangd /usr/local/bin/stylua /usr/bin/lx; do
+    info "  $(basename "$bin")"
+    if ! distrobox enter "$DEVTOOLS_DISTROBOX" -- distrobox-export --bin "$bin" --export-path "$local_bin" >/dev/null; then
+      export_failures+=("$bin")
+    fi
+  done
+  if [ "${#export_failures[@]}" -gt 0 ]; then
+    err "distrobox-export failed for: ${export_failures[*]}"
+    err "  The bar-dev image may be missing some dnf packages."
+    err "  Recover with: just setup::distrobox"
+    return 1
+  fi
+  case ":$PATH:" in
+    *":$local_bin:"*) ;;
+    *)  warn "$local_bin is not on \$PATH; exported wrappers won't be found by your editor or 'just' recipes."
+        warn "  Add to your shell rc:  export PATH=\"\$HOME/.local/bin:\$PATH\""
+        ;;
+  esac
+  ok "Dev binaries exported"
+}
+
 DEV_IMAGE="bar-dev"
 
 cmd_setup_distrobox() {
@@ -1256,6 +1292,9 @@ cmd_setup_distrobox() {
     return 1
   fi
   ok "Lux lua tree configured"
+  echo ""
+
+  export_dev_binaries || warn "Some dev binaries failed to export; recipes / editor that depend on them will need 'just setup::distrobox' rerun."
   echo ""
 
   if is_wsl; then
@@ -1619,27 +1658,20 @@ cmd_setup_editor() {
     return 1
   fi
 
-  local local_bin="$HOME/.local/bin" bin export_failures=()
-  mkdir -p "$local_bin"
-  for bin in /usr/local/bin/emmylua_ls /usr/local/bin/emmylua_check /usr/bin/clangd /usr/local/bin/stylua /usr/bin/lx; do
-    info "Exporting $(basename "$bin")..."
-    if ! distrobox enter "$DEVTOOLS_DISTROBOX" -- distrobox-export --bin "$bin" --export-path "$local_bin"; then
-      export_failures+=("$bin")
-    fi
+  # Dev binaries (emmylua_ls, clangd, stylua, lx, ...) are exported as
+  # part of `setup::distrobox` -- they're container-lifecycle, not
+  # editor-lifecycle, and recipes outside editor-setup (bar::check,
+  # bar::lint, bar::fmt) need them too. Bail loudly here if they're
+  # missing rather than half-doing the editor setup.
+  local local_bin="$HOME/.local/bin" bin missing_bins=()
+  for bin in emmylua_ls emmylua_check clangd stylua lx; do
+    [ -x "$local_bin/$bin" ] || missing_bins+=("$bin")
   done
-  if [ "${#export_failures[@]}" -gt 0 ]; then
-    err "distrobox-export failed for: ${export_failures[*]}"
-    err "  Most common cause: bar-dev container missing or down."
-    err "  Recover with: just setup::distrobox && just setup::editor"
+  if [ "${#missing_bins[@]}" -gt 0 ]; then
+    err "Dev binary wrappers missing in $local_bin: ${missing_bins[*]}"
+    err "  These are exported by setup::distrobox. Run: just setup::distrobox"
     return 1
   fi
-  case ":$PATH:" in
-    *":$local_bin:"*) ;;
-    *)  warn "$local_bin is not on \$PATH; exported wrappers won't be found by your editor."
-        warn "  Add to your shell rc:  export PATH=\"\$HOME/.local/bin:\$PATH\""
-        ;;
-  esac
-  echo ""
 
   if [ -f "$DEVTOOLS_DIR/RecoilEngine/CMakeLists.txt" ]; then
     step "Generating compile_commands.json for clangd..."
@@ -1685,12 +1717,12 @@ cmd_setup_editor() {
     echo ""
   fi
 
-  info "Binaries exported to ~/.local/bin:"
+  info "Binaries exported to ~/.local/bin (by setup::distrobox):"
   for bin in emmylua_ls emmylua_check clangd stylua lx; do
     if [ -x "$HOME/.local/bin/$bin" ]; then
       printf "  ${CYAN}✓ %s${NC}\n" "$bin"
     else
-      printf "  ${RED}✗ %s${NC}  ${DIM}(missing -- rerun setup::editor)${NC}\n" "$bin"
+      printf "  ${RED}✗ %s${NC}  ${DIM}(missing -- rerun setup::distrobox)${NC}\n" "$bin"
     fi
   done
   echo ""
