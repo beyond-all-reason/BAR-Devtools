@@ -293,19 +293,57 @@ def _drain_pair(src_root: Path, dst_root: Path,
                         # Could be a state-enter/state-leave message; ignore.
                         continue
 
-                    files = msg.get("files", []) or []
+                    files = list(msg.get("files") or [])
                     new_clock = _decode(msg.get("clock"))
-                    if msg.get("is_fresh_instance"):
+                    is_fresh = bool(msg.get("is_fresh_instance"))
+
+                    # Coalesce: editors that save-then-autoformat (or write
+                    # via temp+rename, or run a Save action that fires a
+                    # flurry of writes) emit several watchman events for
+                    # one logical save, ~50-100ms apart. Without coalesce
+                    # each save lands as 3-4 separate `mirrored 1` log
+                    # lines. Wait briefly for follow-on events on this
+                    # subscription, merge them into the current batch,
+                    # then apply once. Cap at 200ms so a single edit feels
+                    # near-instant.
+                    if not is_fresh and not cold_only:
+                        client.setTimeout(0.05)
+                        deadline = time.monotonic() + 0.20
+                        while not stop.is_set() and time.monotonic() < deadline:
+                            try:
+                                extra = client.receive()
+                            except pywatchman.SocketTimeout:
+                                break
+                            if not isinstance(extra, dict) \
+                               or "subscription" not in extra:
+                                continue
+                            files.extend(extra.get("files") or [])
+                            ec = _decode(extra.get("clock"))
+                            if ec:
+                                new_clock = ec
+                            if extra.get("is_fresh_instance"):
+                                is_fresh = True
+                        client.setTimeout(2.0)
+
+                    if is_fresh:
                         log.info(
-                            "is_fresh_instance: %s (%d files) -- "
-                            "%s",
+                            "is_fresh_instance: %s (%d files) -- %s",
                             src_root, len(files),
                             "watchman has no prior clock for this subscription"
                             if not saved_clock else
                             "watchman daemon was restarted; saved clock invalid")
 
                     if files:
-                        _apply_files(src_root, dst_root, files,
+                        # Dedupe by name (rapid edits to one file -> one rsync).
+                        # Last write wins on the exists flag.
+                        latest: dict[str, dict] = {}
+                        for f in files:
+                            n = _decode(f.get("name"))
+                            if n is None:
+                                continue
+                            latest[n] = f
+                        _apply_files(src_root, dst_root,
+                                     list(latest.values()),
                                      time.monotonic())
 
                     if new_clock:
