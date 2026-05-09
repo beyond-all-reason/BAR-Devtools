@@ -48,7 +48,6 @@ import hashlib
 import json
 import logging
 import os
-import shutil
 import signal
 import subprocess
 import sys
@@ -70,27 +69,6 @@ except ImportError as exc:
 
 
 log = logging.getLogger("bar-launch.sync")
-
-
-def _copy_inplace(src: Path, dst: Path) -> None:
-    """Mirror src -> dst with in-place write (no rename, no inode rotation).
-
-    Mirrors verbatim: spring's archive scanner accepts the literal "$VERSION"
-    placeholder in modinfo.lua and registers the archive as
-    "<name> $VERSION", which is what chobby's byar-dev gameConfig expects
-    (and what Linux symlinks already produce).
-    """
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    # shutil.copyfile opens dst with 'wb' which truncates and writes in
-    # place. That's what we want: an mmaped reader on dst sees the file
-    # change content, not a new inode.
-    shutil.copyfile(src, dst)
-    # Preserve mtime so timestamp-based reload heuristics work.
-    try:
-        st = src.stat()
-        os.utime(dst, ns=(st.st_atime_ns, st.st_mtime_ns))
-    except OSError:
-        pass
 
 
 # Subtrees that the engine never reads but cost a lot to sync. .git pack
@@ -156,43 +134,83 @@ def _decode(v):
 def _apply_files(src_root: Path, dst_root: Path,
                  files: list[dict], event_ts: float) -> None:
     """Mirror each (name, exists) tuple from a watchman response into
-    dst_root. Missing files are deleted; present ones are copied."""
-    copied = 0
-    deleted = 0
-    skipped = 0
+    dst_root. Existing files are batch-copied via `rsync --files-from=-`
+    (one fork-exec for the whole batch); deletions are per-file unlinks
+    afterward.
+
+    rsync over per-file Python copyfile because /mnt/c is drvfs and each
+    open/write/close is a Plan-9 round-trip (~5-25ms). On a fresh-instance
+    seed of ~19k BAR files, a Python loop runs 8+ minutes; rsync
+    pipelines writes and finishes in well under that. `--inplace` is
+    load-bearing: spring mmaps Lua sources, so a tempfile-and-rename
+    would invalidate the mmap mid-frame."""
+    changed: list[str] = []
+    deleted_names: list[str] = []
     for f in files:
         name = _decode(f["name"])
         rel = Path(name)
         if _is_skipped(rel):
-            skipped += 1
             continue
         if f.get("exists", True):
-            try:
-                src = src_root / rel
-                if src.is_file():
-                    _copy_inplace(src, dst_root / rel)
-                    copied += 1
-                # else: dir (watchman reports them too) or stale event;
-                # nothing to mirror per file.
-            except OSError as exc:
-                # Most common cause on /mnt/c targets: Windows is holding
-                # the dst file open (engine DLL race, AV scan).
-                log.warning(
-                    "mirror failed for %s: %s. If this is an engine DLL, "
-                    "stop spring.exe / BAR launcher (just bar::stop). If "
-                    "it's a Lua source, check whether the destination is "
-                    "writable from WSL.", rel, exc)
+            changed.append(name)
         else:
-            target = dst_root / rel
-            try:
-                target.unlink()
-                deleted += 1
-            except FileNotFoundError:
-                pass
-            except OSError as exc:
+            deleted_names.append(name)
+
+    copied = 0
+    if changed:
+        # rsync paths are relative to the source argument when --files-from
+        # is used; watchman's `name` field is already relative to relative_root
+        # (which we set to relative_path at subscribe time), so the names
+        # line up without translation.
+        try:
+            subprocess.run(
+                ["rsync", "-a", "--inplace", "--files-from=-",
+                 f"{src_root}/", f"{dst_root}/"],
+                input="\n".join(changed) + "\n",
+                text=True,
+                check=True,
+            )
+            copied = len(changed)
+        except FileNotFoundError as exc:
+            log.error("rsync not found on PATH inside container: %s", exc)
+        except subprocess.CalledProcessError as exc:
+            # exit 23: "some files were not transferred" -- usually means
+            # Windows is holding dst files open (engine DLL race / AV).
+            # Survivable: the user's next save will retry.
+            if exc.returncode == 23:
                 log.warning(
-                    "could not delete dst %s (Windows may hold an open "
-                    "handle; next save will overwrite): %s", rel, exc)
+                    "rsync exit 23 for %s -> %s (some files not transferred). "
+                    "Most common cause: Windows holds open handles on the "
+                    "destination. Stop spring.exe / BAR launcher (just bar::stop) "
+                    "and re-trigger.", src_root, dst_root)
+            else:
+                log.warning("rsync exit %d for %s -> %s -- batch may be partial",
+                            exc.returncode, src_root, dst_root)
+            # Don't claim full copy count; underestimate is harmless.
+            copied = 0
+
+    deleted = 0
+    for name in deleted_names:
+        target = dst_root / name
+        try:
+            target.unlink()
+            deleted += 1
+        except FileNotFoundError:
+            pass
+        except IsADirectoryError:
+            # rare: watchman reported a dir as removed; rsync handles
+            # subtree deletes via --delete on cold seeds, but live event
+            # batches don't get that. Best-effort: rmtree if empty.
+            try:
+                target.rmdir()
+                deleted += 1
+            except OSError:
+                pass
+        except OSError as exc:
+            log.warning(
+                "could not delete dst %s (Windows may hold an open "
+                "handle; next save will overwrite): %s", target, exc)
+
     if copied or deleted:
         latency_ms = (time.monotonic() - event_ts) * 1000.0
         log.info("mirrored %d, deleted %d (%dms) [%s]",
