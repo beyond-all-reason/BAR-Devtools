@@ -35,15 +35,18 @@ RUN printf '%s\n' \
     > /etc/profile.d/starship.sh \
     && chmod 0644 /etc/profile.d/starship.sh
 
+# lumen-oss/lux dropped .deb packaging at v0.29.0 in favor of plain
+# tarballs named lx-<arch>-unknown-linux-gnu.tar.gz. Extract `lx` straight
+# into /usr/local/bin -- no ar/dpkg dance needed anymore.
 ARG LUX_VERSION=latest
 RUN ARCH=$(uname -m) \
-    && case "$ARCH" in x86_64) DEB_ARCH=amd64;; aarch64) DEB_ARCH=arm64;; *) echo "unsupported: $ARCH" >&2; exit 1;; esac \
-    && DEB_URL=$(curl -fsSL "https://api.github.com/repos/lumen-oss/lux/releases/${LUX_VERSION}" \
-       | jq -r --arg arch "$DEB_ARCH" '.assets[] | select(.name | test("_" + $arch + "\\.deb$")) | .browser_download_url') \
-    && curl -fsSL "$DEB_URL" -o /tmp/lux.deb \
-    && cd /tmp && ar x lux.deb \
-    && tar xf data.tar.* -C / \
-    && rm -f /tmp/lux.deb /tmp/data.tar.* /tmp/control.tar.* /tmp/debian-binary
+    && case "$ARCH" in x86_64|aarch64) ;; *) echo "unsupported: $ARCH" >&2; exit 1;; esac \
+    && URL=$(curl -fsSL "https://api.github.com/repos/lumen-oss/lux/releases/${LUX_VERSION}" \
+       | jq -r --arg arch "$ARCH" '.assets[] | select(.name == "lx-" + $arch + "-unknown-linux-gnu.tar.gz") | .browser_download_url') \
+    && [ -n "$URL" ] && [ "$URL" != "null" ] \
+       || { echo "lux: no asset for arch $ARCH on tag ${LUX_VERSION}" >&2; exit 1; } \
+    && curl -fsSL "$URL" | tar xz -C /usr/local/bin \
+    && chmod +x /usr/local/bin/lx
 
 # lux's bundled lua 5.1 lacks dlopen, breaking C modules like luafilesystem.
 # Symlink the system lua-5.1 over it so lx test / lx shell work correctly.
