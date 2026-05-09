@@ -35,18 +35,23 @@ RUN printf '%s\n' \
     > /etc/profile.d/starship.sh \
     && chmod 0644 /etc/profile.d/starship.sh
 
-# lumen-oss/lux dropped .deb packaging at v0.29.0 in favor of plain
-# tarballs named lx-<arch>-unknown-linux-gnu.tar.gz. Extract `lx` straight
-# into /usr/local/bin -- no ar/dpkg dance needed anymore.
-ARG LUX_VERSION=latest
-RUN ARCH=$(uname -m) \
-    && case "$ARCH" in x86_64|aarch64) ;; *) echo "unsupported: $ARCH" >&2; exit 1;; esac \
-    && URL=$(curl -fsSL "https://api.github.com/repos/lumen-oss/lux/releases/${LUX_VERSION}" \
-       | jq -r --arg arch "$ARCH" '.assets[] | select(.name == "lx-" + $arch + "-unknown-linux-gnu.tar.gz") | .browser_download_url') \
-    && [ -n "$URL" ] && [ "$URL" != "null" ] \
-       || { echo "lux: no asset for arch $ARCH on tag ${LUX_VERSION}" >&2; exit 1; } \
-    && curl -fsSL "$URL" | tar xz -C /usr/local/bin \
-    && chmod +x /usr/local/bin/lx
+# lux (lumen-oss/lux) is fetched via cargo-binstall instead of a hand-rolled
+# GitHub Releases query. cargo-binstall recognizes a wide range of asset
+# naming conventions, so when upstream renames or repackages (as lux did at
+# v0.29.0, dropping .deb in favor of tarballs) we don't have to chase it
+# here. Bootstrap cargo-binstall first since neither Fedora's repos nor the
+# stock `cargo` package ships it.
+# LUX_VERSION is empty -> install the latest release; pass `--build-arg
+# LUX_VERSION=0.28.0` to pin.
+ARG LUX_VERSION=
+RUN curl -L --proto '=https' --tlsv1.2 -sSf \
+        https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh \
+      | bash \
+    && /root/.cargo/bin/cargo-binstall --no-confirm \
+        ${LUX_VERSION:+--version $LUX_VERSION} \
+        --install-path /usr/local/bin \
+        lux-cli \
+    && rm -rf /root/.cargo
 
 # lux's bundled lua 5.1 lacks dlopen, breaking C modules like luafilesystem.
 # Symlink the system lua-5.1 over it so lx test / lx shell work correctly.
