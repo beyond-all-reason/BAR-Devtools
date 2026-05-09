@@ -2,9 +2,9 @@ set export
 
 DEVTOOLS_DIR        := justfile_directory()
 COMPOSE_FILE        := DEVTOOLS_DIR / "docker-compose.dev.yml"
-COMPOSE             := "docker compose -f " + COMPOSE_FILE
+COMPOSE             := "podman compose -f " + COMPOSE_FILE
 BAR_DIR             := DEVTOOLS_DIR / "Beyond-All-Reason"
-INTEGRATION_COMPOSE := "docker compose -f " + BAR_DIR / "tools" / "headless_testing" / "docker-compose.yml"
+INTEGRATION_COMPOSE := "podman compose -f " + BAR_DIR / "tools" / "headless_testing" / "docker-compose.yml"
 # Batch check uses `emmylua_check` (Rust EmmyLua analyzer). Install via dev container image or
 # https://github.com/EmmyLuaLs/emmylua-analyzer-rust/releases — `emmylua_ls` is LSP-only (no --check).
 

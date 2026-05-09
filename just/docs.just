@@ -3,7 +3,7 @@ set export
 DEVTOOLS_DIR := justfile_directory()
 RECOIL_DIR   := DEVTOOLS_DIR / "RecoilEngine"
 COMPOSE_FILE := DEVTOOLS_DIR / "docker-compose.dev.yml"
-COMPOSE      := "docker compose -f " + COMPOSE_FILE
+COMPOSE      := "podman compose -f " + COMPOSE_FILE
 
 # Generate Lua API pages (full pipeline: extract -> JSON -> markdown)
 generate:

@@ -2,7 +2,7 @@ set export
 
 DEVTOOLS_DIR := justfile_directory()
 COMPOSE_FILE := DEVTOOLS_DIR / "docker-compose.dev.yml"
-COMPOSE      := "docker compose -f " + COMPOSE_FILE
+COMPOSE      := "podman compose -f " + COMPOSE_FILE
 REPOS_CONF   := DEVTOOLS_DIR / "repos.conf"
 REPOS_LOCAL  := DEVTOOLS_DIR / "repos.local.conf"
 

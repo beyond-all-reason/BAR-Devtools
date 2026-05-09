@@ -112,12 +112,6 @@ clean_dir() {
         [ -d "$dir" ] || return 0
     fi
 
-    if command -v docker &>/dev/null; then
-        warn "Retrying removal via docker..."
-        docker run --rm -v "$parent:/p:z" alpine rm -rf "/p/$name"
-        return $?
-    fi
-
     err "Cannot remove $dir — files owned by another user"
     err "Try: sudo rm -rf '$dir'"
     return 1
@@ -142,7 +136,7 @@ _in_container() {
 # "docker: command not found" 127.
 require_host() {
     if _in_container; then
-        err "This recipe runs on the host (needs docker / podman) -- not from inside bar-dev."
+        err "This recipe runs on the host (needs podman) -- not from inside bar-dev."
         info "  Exit the container ('exit' or Ctrl-D), then re-run."
         exit 1
     fi

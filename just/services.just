@@ -2,7 +2,7 @@ set export
 
 DEVTOOLS_DIR := justfile_directory()
 COMPOSE_FILE := DEVTOOLS_DIR / "docker-compose.dev.yml"
-COMPOSE      := "docker compose -f " + COMPOSE_FILE
+COMPOSE      := "podman compose -f " + COMPOSE_FILE
 LOBBY_DIR    := DEVTOOLS_DIR / "bar-lobby"
 
 # Start dev services. Options: lobby, spads

@@ -21,18 +21,17 @@ check_doctor_deps() {
     _pass "git $(git --version | awk '{print $3}')"
   fi
 
-  if ! command -v docker &>/dev/null; then
-    _fail "Docker not installed"
+  if ! command -v podman &>/dev/null; then
+    _fail "podman not installed"
     echo "       Run: just setup::deps"
-  elif ! docker info &>/dev/null; then
-    _fail "Docker daemon not running or permission denied"
-    echo "       Start:  sudo systemctl start docker"
-    echo "       Perms:  sudo usermod -aG docker \$USER  (then re-login)"
-  elif ! docker compose version &>/dev/null; then
-    _fail "Docker Compose V2 not installed"
+  elif ! podman info &>/dev/null; then
+    _fail "'podman info' failed (storage init issue?)"
+    echo "       Try: podman system reset  (destroys local images)"
+  elif ! podman compose --help &>/dev/null; then
+    _fail "podman compose subcommand unavailable (need podman-compose installed)"
     echo "       Run: just setup::deps"
   else
-    _pass "Docker $(docker --version | awk '{print $3}' | tr -d ',') + Compose V2"
+    _pass "podman $(podman --version | awk '{print $3}') + compose"
   fi
 
   if ! command -v distrobox &>/dev/null; then
@@ -160,10 +159,10 @@ check_doctor_repos() {
 
 
 check_doctor_images() {
-  echo -e "${BOLD}Docker images${NC}"
+  echo -e "${BOLD}Container images${NC}"
 
-  if ! command -v docker &>/dev/null || ! docker info &>/dev/null; then
-    _warn "Skipping — Docker not available"
+  if ! command -v podman &>/dev/null || ! podman info &>/dev/null; then
+    _warn "Skipping — podman not available"
     echo ""
     return
   fi
@@ -171,7 +170,7 @@ check_doctor_images() {
   local project_name teiserver_image
   project_name="$(basename "$DEVTOOLS_DIR" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]_-')"
   teiserver_image="${project_name}-teiserver:latest"
-  if docker image inspect "$teiserver_image" &>/dev/null; then
+  if podman image inspect "$teiserver_image" &>/dev/null; then
     _pass "Teiserver image built"
   elif [ ! -d "$DEVTOOLS_DIR/teiserver" ]; then
     _fail "Teiserver image not built (teiserver repo not cloned)"
@@ -181,7 +180,7 @@ check_doctor_images() {
     echo "       Run: just services::build"
   fi
 
-  if docker image inspect "badosu/spads:latest" &>/dev/null; then
+  if podman image inspect "badosu/spads:latest" &>/dev/null; then
     _pass "SPADS image available"
   else
     _warn "SPADS image not pulled (optional)"
@@ -195,13 +194,13 @@ check_doctor_images() {
 check_doctor_services() {
   echo -e "${BOLD}Running services${NC}"
 
-  if ! command -v docker &>/dev/null || ! docker info &>/dev/null; then
-    _warn "Skipping — Docker not available"
+  if ! command -v podman &>/dev/null || ! podman info &>/dev/null; then
+    _warn "Skipping — podman not available"
     echo ""
     return
   fi
 
-  local compose="docker compose -f $DEVTOOLS_DIR/docker-compose.dev.yml"
+  local compose="podman compose -f $DEVTOOLS_DIR/docker-compose.dev.yml"
   local any_running=0
 
   for svc in postgres teiserver; do

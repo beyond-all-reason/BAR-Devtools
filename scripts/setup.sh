@@ -59,20 +59,28 @@ pkg_name() {
   local generic="$1"
   local distro
   distro="$(detect_distro)"
+  # We install podman, not docker. Rationale (vs docker-ce):
+  #   - rootless by default: no `usermod -aG docker` + WSL shutdown step.
+  #   - in-tree on Debian/Fedora/Arch: no third-party apt repo to pin.
+  #   - distrobox already prefers podman; same backend everywhere.
+  # `podman compose` (subcommand, podman ≥ 4.0) provides the docker-compose-v2
+  # CLI surface; podman-compose is the python provider it shells out to when
+  # docker-compose isn't present. Both go in the install list so a fresh box
+  # has working compose without further configuration.
   case "${distro}:${generic}" in
-    arch:docker)           echo "docker docker-buildx" ;;
-    arch:docker-compose)   echo "docker-compose" ;;
-    arch:git)              echo "git" ;;
-    arch:distrobox)        echo "distrobox" ;;
-    debian:docker)         echo "docker-ce docker-ce-cli containerd.io docker-buildx-plugin" ;;
-    debian:docker-compose) echo "docker-compose-plugin" ;;
-    debian:git)            echo "git" ;;
-    debian:distrobox)      echo "distrobox" ;;
-    fedora:docker)         echo "docker-ce docker-ce-cli containerd.io" ;;
-    fedora:docker-compose) echo "docker-compose-plugin" ;;
-    fedora:git)            echo "git" ;;
-    fedora:distrobox)      echo "distrobox" ;;
-    *)                     echo "$generic" ;;
+    arch:container-runtime)    echo "podman" ;;
+    arch:container-compose)    echo "podman-compose" ;;
+    arch:git)                  echo "git" ;;
+    arch:distrobox)            echo "distrobox" ;;
+    debian:container-runtime)  echo "podman" ;;
+    debian:container-compose)  echo "podman-compose" ;;
+    debian:git)                echo "git" ;;
+    debian:distrobox)          echo "distrobox" ;;
+    fedora:container-runtime)  echo "podman" ;;
+    fedora:container-compose)  echo "podman-compose" ;;
+    fedora:git)                echo "git" ;;
+    fedora:distrobox)          echo "distrobox" ;;
+    *)                         echo "$generic" ;;
   esac
 }
 
@@ -84,30 +92,25 @@ check_git() {
   ok "git $(git --version | awk '{print $3}') detected"
 }
 
-check_docker() {
-  if ! command -v docker &>/dev/null; then
-    err "Docker is not installed."
+check_podman() {
+  if ! command -v podman &>/dev/null; then
+    err "podman is not installed."
     return 1
   fi
-  if ! docker info &>/dev/null; then
-    err "Docker daemon is not running or current user lacks permissions."
-    echo ""
-    echo "  Start the daemon:   sudo systemctl start docker"
-    echo "  Enable on boot:     sudo systemctl enable docker"
-    echo "  Add yourself:       sudo usermod -aG docker \$USER"
-    if grep -qi microsoft /proc/version 2>/dev/null; then
-      echo "  Then on WSL2:       wsl --shutdown  (from Windows PowerShell), reopen WSL"
-    else
-      echo "  Then re-login (log out of your desktop session and back in)"
-    fi
-    echo ""
+  # Rootless podman has no daemon -- `podman info` either works or it
+  # doesn't, with no enable/group dance to coach the user through.
+  if ! podman info &>/dev/null; then
+    err "podman is installed but 'podman info' failed (storage init issue?)."
+    info "  Try a fresh init:  podman system reset  (destroys local images)"
     return 1
   fi
-  if ! docker compose version &>/dev/null; then
-    err "Docker Compose V2 plugin is not installed."
+  if ! podman compose --help &>/dev/null; then
+    err "podman compose subcommand unavailable. Install podman-compose:"
+    info "  Debian/Ubuntu:  sudo apt-get install podman-compose"
+    info "  Fedora:         sudo dnf install podman-compose"
     return 1
   fi
-  ok "Docker $(docker --version | awk '{print $3}' | tr -d ',') + Compose V2 detected"
+  ok "podman $(podman --version | awk '{print $3}') + compose detected"
 }
 
 check_distrobox() {
@@ -141,7 +144,7 @@ check_prerequisites() {
   echo ""
   local failed=0
   check_git       || failed=1
-  check_docker    || failed=1
+  check_podman    || failed=1
   check_distrobox || true
   check_ports
   echo ""
@@ -161,7 +164,7 @@ install_dockerignore() {
 }
 
 # Idempotent WSL2 environment prep: enable systemd, mark / as a shared mount.
-# Required for docker-backed distrobox to work. No-op outside WSL2.
+# Required for podman-backed distrobox to work. No-op outside WSL2.
 ensure_wsl_setup() {
   grep -qi microsoft /proc/version 2>/dev/null || return 0
 
@@ -181,7 +184,7 @@ ensure_wsl_setup() {
   if ! sudo grep -qE '^\s*systemd\s*=\s*true' "$wsl_conf"; then
     if sudo grep -qE '^\s*systemd\s*=' "$wsl_conf"; then
       warn "$wsl_conf has 'systemd=' set to a non-true value -- leaving it alone."
-      warn "  BAR-Devtools' docker path needs systemd; flip it manually if that's a mistake."
+      warn "  BAR-Devtools' container path needs systemd; flip it manually if that's a mistake."
     else
       info "Enabling systemd in $wsl_conf"
       sudo sed -i '/^\[boot\]/a systemd=true' "$wsl_conf"
@@ -292,48 +295,6 @@ ensure_windows_python() {
   fi
 }
 
-# Set up Docker's official apt repository (Debian/Ubuntu).
-# Idempotent: returns early if the keyring + sources file are already in place.
-setup_docker_repo_debian() {
-  if [ -f /etc/apt/keyrings/docker.asc ] && [ -f /etc/apt/sources.list.d/docker.list ]; then
-    return 0
-  fi
-  info "Adding Docker's official apt repository (apt's docker.io lags upstream)..."
-  sudo apt-get update -qq
-  sudo apt-get install -y -qq ca-certificates curl
-  sudo install -m 0755 -d /etc/apt/keyrings
-  sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
-    -o /etc/apt/keyrings/docker.asc
-  sudo chmod a+r /etc/apt/keyrings/docker.asc
-  local arch codename
-  arch="$(dpkg --print-architecture)"
-  codename="$(. /etc/os-release && echo "${VERSION_CODENAME:-${UBUNTU_CODENAME:-noble}}")"
-  echo "deb [arch=$arch signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $codename stable" \
-    | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
-  sudo apt-get update -qq
-  ok "Docker apt repository configured"
-}
-
-# If Ubuntu's apt-shipped 'docker.io' is installed, offer to replace with docker-ce stack.
-# Returns 0 whether or not migration happened (caller continues either way).
-migrate_docker_io_debian() {
-  if ! dpkg -l docker.io 2>/dev/null | grep -q '^ii'; then
-    return 0
-  fi
-  warn "Detected apt's 'docker.io' package -- it lags upstream Docker CE."
-  echo "  To get the modern Docker stack we'd purge docker.io / docker-buildx /"
-  echo "  docker-compose-v2 and replace with docker-ce + plugins from Docker's repo."
-  read -rp "Replace docker.io with docker-ce? [Y/n] " ans
-  if [[ "$ans" =~ ^[Nn]$ ]]; then
-    info "Keeping apt's docker.io. Skipping docker-ce upgrade."
-    return 0
-  fi
-  info "Stopping docker daemon and purging apt's docker.io / docker-buildx / docker-compose-v2..."
-  sudo systemctl stop docker.socket docker.service 2>/dev/null || true
-  sudo apt-get purge -y docker.io docker-buildx docker-compose-v2 2>/dev/null || true
-  sudo apt-get autoremove -y -qq 2>/dev/null || true
-}
-
 # Install distrobox from upstream main. Apt's distrobox on Ubuntu LTS (1.7.0)
 # predates PR #1965 (merged 2026-01-17, first in tag 1.8.2.3) which dropped the
 # 'chpasswd -e' usage that fails against shadow-utils 4.13+'s hash validation.
@@ -377,7 +338,7 @@ cmd_install_deps() {
   install_cmd="$(pkg_install_cmd)"
 
   if [ "$distro" = "unknown" ] || [ -z "$install_cmd" ]; then
-    err "Unsupported distro. Install these manually: git, docker, docker-compose, distrobox"
+    err "Unsupported distro. Install these manually: git, podman, podman-compose, distrobox"
     info "See docker/dev.Containerfile for the full list of dev tool dependencies."
     exit 1
   fi
@@ -385,22 +346,21 @@ cmd_install_deps() {
   info "Detected distro: ${BOLD}${distro}${NC}"
   echo ""
 
-  # Debian-specific: switch from apt's stale docker.io to Docker CE before detecting deps.
-  if [ "$distro" = "debian" ]; then
-    setup_docker_repo_debian
-    migrate_docker_io_debian
-  fi
+  # No third-party repo dance: podman + podman-compose ship in stock apt /
+  # dnf / pacman repos on every distro we support. (docker-ce required
+  # adding Docker's own keyring + sources file; podman doesn't.)
 
   local missing=()
 
   if ! command -v git &>/dev/null; then
     missing+=("git")
   fi
-  if ! command -v docker &>/dev/null; then
-    missing+=("docker")
+  if ! command -v podman &>/dev/null; then
+    missing+=("container-runtime")
   fi
-  if ! docker compose version &>/dev/null 2>&1; then
-    missing+=("docker-compose")
+  if ! podman compose --help &>/dev/null 2>&1 \
+     && ! command -v podman-compose &>/dev/null; then
+    missing+=("container-compose")
   fi
   if ! command -v distrobox &>/dev/null; then
     missing+=("distrobox")
@@ -420,15 +380,6 @@ cmd_install_deps() {
 
     # Even when nothing was missing, ensure distrobox on Debian is the upstream version.
     [ "$distro" = "debian" ] && install_distrobox_upstream
-
-    if ! docker info &>/dev/null; then
-      warn "Docker is installed but the daemon isn't running or you lack permissions."
-      echo ""
-      echo "  sudo systemctl start docker"
-      echo "  sudo systemctl enable docker"
-      echo "  sudo usermod -aG docker \$USER   # then re-login"
-      echo ""
-    fi
     return 0
   fi
 
@@ -452,26 +403,9 @@ cmd_install_deps() {
     echo ""
   fi
 
-  if [[ " ${missing[*]} " == *" docker "* ]]; then
-    info "Enabling and starting Docker daemon..."
-    sudo systemctl enable --now docker 2>/dev/null || true
-
-    if ! groups | grep -qw docker; then
-      info "Adding $USER to the docker group..."
-      sudo usermod -aG docker "$USER"
-      echo ""
-      warn "Docker group membership only takes effect in a fresh shell."
-      if grep -qi microsoft /proc/version 2>/dev/null; then
-        warn "  On WSL2: from Windows PowerShell, run:  wsl --shutdown"
-        warn "  Then reopen your WSL terminal (closing the tab is NOT enough --"
-        warn "  the WSL2 distro keeps running headless until you shut it down)."
-      else
-        warn "  On Linux desktop: log out of your session and log back in."
-      fi
-      warn "After that, re-run: just setup::init"
-      exit 0
-    fi
-  fi
+  # No daemon to enable, no group to join: podman is rootless. The whole
+  # `usermod -aG docker $USER` + `wsl --shutdown` pause that used to live
+  # here is gone with docker-ce.
 
   ok "Dependencies installed successfully."
 }
@@ -1207,23 +1141,20 @@ cmd_setup_distrobox() {
     ok "Added DEVTOOLS_DISTROBOX=$DEVTOOLS_DISTROBOX to .env (edit to rename your box)"
   fi
 
-  local runtime="podman"
-  command -v podman &>/dev/null || runtime="docker"
-
   step "Building dev container image ($DEV_IMAGE)..."
-  $runtime build -t "$DEV_IMAGE" -f "$DEVTOOLS_DIR/docker/dev.Containerfile" "$DEVTOOLS_DIR"
+  podman build -t "$DEV_IMAGE" -f "$DEVTOOLS_DIR/docker/dev.Containerfile" "$DEVTOOLS_DIR"
   ok "Image built: $DEV_IMAGE"
   echo ""
 
   distrobox stop --yes "$DEVTOOLS_DISTROBOX" >/dev/null 2>&1 || true
   distrobox rm -f --yes "$DEVTOOLS_DISTROBOX" >/dev/null 2>&1 \
-    || $runtime rm -f "$DEVTOOLS_DISTROBOX" >/dev/null 2>&1 \
+    || podman rm -f "$DEVTOOLS_DISTROBOX" >/dev/null 2>&1 \
     || true
 
   step "Creating distrobox '$DEVTOOLS_DISTROBOX'..."
-  local image_ref="$DEV_IMAGE"
-  [ "$runtime" = "podman" ] && image_ref="localhost/$DEV_IMAGE"
-  distrobox create --name "$DEVTOOLS_DISTROBOX" --image "$image_ref" --yes
+  # podman tags built images under localhost/<name>; distrobox needs the fully
+  # qualified ref so it doesn't try to pull from a registry.
+  distrobox create --name "$DEVTOOLS_DISTROBOX" --image "localhost/$DEV_IMAGE" --yes
   ok "Distrobox created: $DEVTOOLS_DISTROBOX"
   echo ""
 
@@ -1273,20 +1204,16 @@ cmd_setup_sync_distrobox() {
   is_wsl || return 0
 
   step "Building sync container image ($SYNC_IMAGE)..."
-  local runtime="podman"
-  command -v podman &>/dev/null || runtime="docker"
-  $runtime build -t "$SYNC_IMAGE" -f "$DEVTOOLS_DIR/docker/sync.Containerfile" "$DEVTOOLS_DIR"
+  podman build -t "$SYNC_IMAGE" -f "$DEVTOOLS_DIR/docker/sync.Containerfile" "$DEVTOOLS_DIR"
   ok "Image built: $SYNC_IMAGE"
 
   distrobox stop --yes "$DEVTOOLS_SYNC_DISTROBOX" >/dev/null 2>&1 || true
   distrobox rm -f --yes "$DEVTOOLS_SYNC_DISTROBOX" >/dev/null 2>&1 \
-    || $runtime rm -f "$DEVTOOLS_SYNC_DISTROBOX" >/dev/null 2>&1 \
+    || podman rm -f "$DEVTOOLS_SYNC_DISTROBOX" >/dev/null 2>&1 \
     || true
 
   step "Creating distrobox '$DEVTOOLS_SYNC_DISTROBOX'..."
-  local image_ref="$SYNC_IMAGE"
-  [ "$runtime" = "podman" ] && image_ref="localhost/$SYNC_IMAGE"
-  distrobox create --name "$DEVTOOLS_SYNC_DISTROBOX" --image "$image_ref" --yes
+  distrobox create --name "$DEVTOOLS_SYNC_DISTROBOX" --image "localhost/$SYNC_IMAGE" --yes
   ok "Distrobox created: $DEVTOOLS_SYNC_DISTROBOX"
 
   # Smoke-test: confirm pywatchman + watchman both load inside the container
@@ -1851,8 +1778,8 @@ cmd_init() {
 
   step "1/8  Checking & installing dependencies"
   echo ""
-  if check_git &>/dev/null && check_docker &>/dev/null; then
-    ok "Core dependencies (git, docker) already installed."
+  if check_git &>/dev/null && check_podman &>/dev/null; then
+    ok "Core dependencies (git, podman) already installed."
   else
     cmd_install_deps || { err "Dependency installation failed. Fix and retry."; exit 1; }
   fi
