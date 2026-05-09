@@ -338,7 +338,7 @@ run_wsl() {
   # printf, not info: `echo -e` interprets \b in ...\bin\... as backspace.
   printf '\033[0;34m[info]\033[0m  Launching detached: %s %s\n' "$shim_win" "${launch_args[*]}"
   printf '\033[0;34m[info]\033[0m  logs:  just bar::log -- -F      (engine infolog)\n'
-  printf '\033[0;34m[info]\033[0m         just bar::sync-logs -- -F (cold-copy log)\n'
+  printf '\033[0;34m[info]\033[0m         just bar::sync-logs            (cold-copy log)\n'
 
   # Detach via nohup + & + disown so the Electron launcher's ~10-30s
   # graceful shutdown doesn't block our return.

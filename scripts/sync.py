@@ -213,8 +213,16 @@ def _apply_files(src_root: Path, dst_root: Path,
 
     if copied or deleted:
         latency_ms = (time.monotonic() - event_ts) * 1000.0
-        log.info("mirrored %d, deleted %d (%dms) [%s]",
-                 copied, deleted, round(latency_ms), src_root.name)
+        # Show paths for small batches so a "why is this firing?" trail (esp.
+        # editor save artifacts: foo.lua~, .foo.lua.swp, #foo.lua#) is visible
+        # in `just bar::sync-logs`. Big batches collapse to just the count.
+        sample = changed + [f"-{n}" for n in deleted_names]
+        if len(sample) <= 5:
+            detail = ": " + ", ".join(sample)
+        else:
+            detail = ""
+        log.info("mirrored %d, deleted %d (%dms) [%s]%s",
+                 copied, deleted, round(latency_ms), src_root.name, detail)
 
 
 def _watch_root(client: "pywatchman.client", src_root: Path) -> tuple[str, str | None]:

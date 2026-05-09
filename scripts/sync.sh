@@ -200,7 +200,7 @@ cmd_start() {
   rm -f "$READY_FILE"
 
   step "Starting sync daemon (cold-copy + watcher) inside ${DEVTOOLS_SYNC_DISTROBOX}"
-  info "log: $LOG_FILE  (live: just bar::sync-logs -- -F)"
+  info "log: $LOG_FILE  (live: just bar::sync-logs)"
   : >"$LOG_FILE"
   # The PID we save is the host-side `distrobox enter` shim; it forwards
   # SIGTERM to the in-container python3 on stop. Container stays alive as
@@ -305,7 +305,7 @@ cmd_cold_copy() {
   done <<<"$pair_lines"
 
   step "Cold-copy seed (one-shot, no watcher) inside ${DEVTOOLS_SYNC_DISTROBOX}"
-  info "log: $LOG_FILE  (live: just bar::sync-logs -- -F)"
+  info "log: $LOG_FILE  (live: just bar::sync-logs)"
   : >"$LOG_FILE"
 
   # Stream log to stderr so the user sees rsync/watchman progress instead
