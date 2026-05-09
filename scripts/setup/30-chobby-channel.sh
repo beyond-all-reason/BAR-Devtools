@@ -2,9 +2,8 @@
 # shellcheck source=scripts/setup/_lib.sh
 # Module: chobby_channel.
 #
-# Sets Chobby's gameConfig "channel" by writing the "game" field in
-# <BAR_DATA_DIR>/chobby_config.json. The choice flows downstream in two
-# load-bearing ways:
+# Sets Chobby's gameConfig "channel" to "byar-dev" (or "byar"). The choice
+# flows downstream in two load-bearing ways:
 #
 #   1. byar-dev makes Chobby default the skirmish dropdown to the local
 #      Beyond-All-Reason.sdd checkout instead of the rapid-fetched test
@@ -15,12 +14,13 @@
 #      widgets/warnings on.
 #
 # We persist the user's choice in BAR_CHOBBY_CHANNEL and apply it on every
-# cmd_init / `just bar::dev-mode` run. apply_ is idempotent: if
-# chobby_config.json's "game" field already matches BAR_CHOBBY_CHANNEL,
-# no write happens.
-#
-# Helpers _chobby_game_field / _write_chobby_game live in scripts/common.sh
-# (used by both this module and the bar::dev-mode recipe).
+# cmd_init / `just bar::dev-mode` / `just bar::launch` run via
+# set_chobby_channel -- which has to write BOTH chobby_config.json AND
+# IGL_data.lua because Chobby's widget loader otherwise clobbers (1) with the
+# previous session's saved value. See scripts/chobby-channel.sh for details.
+
+# shellcheck source=scripts/chobby-channel.sh
+source "$DEVTOOLS_DIR/scripts/chobby-channel.sh"
 
 prompt_chobby_channel() {
     local data_dir cfg current
@@ -50,19 +50,19 @@ prompt_chobby_channel() {
 }
 
 apply_chobby_channel() {
-    local data_dir cfg desired current
+    local data_dir desired current widget_current
     data_dir="${BAR_DATA_DIR:-$(read_env_key BAR_DATA_DIR)}"
     [ -n "$data_dir" ] || return 0
-    cfg="$data_dir/chobby_config.json"
     desired="$(read_env_key BAR_CHOBBY_CHANNEL)"
     [ -n "$desired" ] || return 0
 
-    current="$(_chobby_game_field "$cfg")"
-    if [ "$current" = "$desired" ]; then
+    current="$(_chobby_game_field "$data_dir/chobby_config.json")"
+    widget_current="$(_chobby_widget_game_field "$data_dir")"
+    if [ "$current" = "$desired" ] && { [ -z "$widget_current" ] || [ "$widget_current" = "$desired" ]; }; then
         return 0
     fi
-    _write_chobby_game "$cfg" "$desired"
-    ok "Chobby gameConfig set to $desired ($cfg)"
+    set_chobby_channel "$data_dir" "$desired"
+    ok "Chobby gameConfig set to $desired (chobby_config.json + IGL_data.lua)"
 }
 
 register_module chobby_channel BAR_CHOBBY_CHANNEL prompt_chobby_channel apply_chobby_channel

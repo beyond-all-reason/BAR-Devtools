@@ -15,6 +15,7 @@ export REPOS_CONF REPOS_LOCAL
 source "$DEVTOOLS_DIR/scripts/common.sh"
 source "$DEVTOOLS_DIR/scripts/setup.sh"
 source "$DEVTOOLS_DIR/scripts/repos.sh"
+source "$DEVTOOLS_DIR/scripts/chobby-channel.sh"
 
 # Refuse to run from inside bar-dev: watchman/Windows-interop need the host.
 require_host
@@ -41,10 +42,81 @@ preflight_symlinks() {
   info "(continuing; bar-launch will still work for non-local sources like 'rapid://...:test')"
 }
 
-# NOTE: chobby-channel selection lives in setup::init's module registry
-# now (scripts/setup/30-chobby-channel.sh). bar::launch trusts that the
-# user made the choice at setup time; if they want to revisit it, that's
-# `just bar::dev-mode` (which calls apply_chobby_channel directly).
+# bar::launch is implicitly "I made local edits and I want to see THOSE",
+# but only when the launch chain is going to actually use them. The chobby
+# channel only matters when:
+#   (a) chobby is in the launch chain (no --play, or --play chobby), AND
+#   (b) a local Beyond-All-Reason.sdd is symlinked into data_dir.
+# Otherwise (bar::launch --play bar, or no `link::create bar` yet) the
+# channel selection has nothing to honor and we stay quiet.
+#
+# When both gates pass:
+#   - If BAR_CHOBBY_CHANNEL=byar-dev, silently re-enforce both
+#     chobby_config.json AND IGL_data.lua. Chobby's widget loader otherwise
+#     clobbers chobby_config.json on every startup with the previous
+#     session's saved gameConfigName, so a one-time setup write isn't
+#     enough. See scripts/chobby-channel.sh for the mechanism.
+#   - Otherwise (channel = byar / unset) warn loudly: their local .sdd
+#     won't load and isDevMode will be off.
+preflight_chobby_channel() {
+  local data_dir="$1"; shift
+  [ -n "$data_dir" ] || return 0
+
+  # Gate (a): only relevant when chobby drives game selection.
+  if _has_flag --play "$@"; then
+    local play_val
+    play_val="$(_flag_value --play "$@")"
+    [ "$play_val" = "chobby" ] || return 0
+  fi
+
+  # Gate (b): only relevant if there's a local BAR.sdd to point chobby at.
+  if [ ! -L "$data_dir/games/Beyond-All-Reason.sdd" ] && \
+     [ ! -d "$data_dir/games/Beyond-All-Reason.sdd" ]; then
+    return 0
+  fi
+
+  local desired="${BAR_CHOBBY_CHANNEL:-}"
+  if [ -z "$desired" ]; then
+    desired="$(read_env_key BAR_CHOBBY_CHANNEL 2>/dev/null || true)"
+  fi
+
+  local cfg_current widget_current
+  cfg_current="$(_chobby_game_field "$data_dir/chobby_config.json")"
+  widget_current="$(_chobby_widget_game_field "$data_dir")"
+  # widget_current is what Chobby actually uses on startup once it's been
+  # saved (SetConfigData overrides chobby_config.json's default).
+  local effective="${widget_current:-$cfg_current}"
+
+  if [ "$desired" = "byar-dev" ]; then
+    if [ "$cfg_current" = "byar-dev" ] && \
+       { [ -z "$widget_current" ] || [ "$widget_current" = "byar-dev" ]; }; then
+      return 0
+    fi
+
+    warn "Chobby channel drifted from byar-dev:"
+    warn "  chobby_config.json:   ${cfg_current:-<unset>}"
+    warn "  IGL_data.lua widget:  ${widget_current:-<unset>}  <-- this is what the dropdown will use"
+    warn "Your local Beyond-All-Reason.sdd edits will NOT load until this is fixed."
+
+    if [ ! -t 0 ]; then
+      warn "(non-interactive shell -- not prompting; run 'just bar::dev-mode' to fix)"
+      return 0
+    fi
+    local ans
+    read -rp "Reset Chobby channel to byar-dev now? [Y/n] " ans
+    if [ -z "$ans" ] || [[ "$ans" =~ ^[Yy] ]]; then
+      set_chobby_channel "$data_dir" "byar-dev"
+      ok "Chobby channel reset to byar-dev"
+    else
+      warn "Continuing without fix; Chobby will load the rapid build for this run."
+    fi
+    return 0
+  fi
+
+  warn "bar::launch found a local Beyond-All-Reason.sdd but Chobby channel = '${effective:-<unset>}', NOT byar-dev."
+  warn "Your local edits will NOT load and dev-mode is OFF."
+  warn "Fix: just bar::dev-mode   (or set BAR_CHOBBY_CHANNEL=byar-dev in .env)"
+}
 
 run_linux() {
   if ! command -v bar-launch &>/dev/null; then
@@ -80,6 +152,7 @@ run_linux() {
   game_dir="$(detect_game_dir 2>/dev/null)" || true
   if [ -n "$game_dir" ]; then
     ensure_devmode_marker "$game_dir"
+    preflight_chobby_channel "$game_dir" "${user_args[@]}"
     _apply_managed_springsettings "$game_dir/springsettings.cfg" "${user_args[@]}"
     if [ -e "$game_dir/engine/local-build" ] && ! _has_flag --engine "${user_args[@]}"; then
       injected+=(--engine local-build)
@@ -110,6 +183,23 @@ _has_flag() {
     fi
   done
   return 1
+}
+
+# Echo the value of $1 (a flag like --play) from the remaining args. Empty
+# if absent. Matches both "--play X" and "--play=X" forms; on collision, the
+# last occurrence wins (consistent with argparse).
+_flag_value() {
+  local needle="$1"; shift
+  local prev="" arg out=""
+  for arg in "$@"; do
+    if [ "$prev" = "$needle" ]; then
+      out="$arg"
+    elif [[ "$arg" == "$needle="* ]]; then
+      out="${arg#*=}"
+    fi
+    prev="$arg"
+  done
+  printf '%s' "$out"
 }
 
 # Pop a known boolean flag from "$@" by name. Echoes the remaining args (one
@@ -218,6 +308,7 @@ run_wsl() {
   fi
 
   ensure_devmode_marker "$BAR_DATA_DIR"
+  preflight_chobby_channel "$BAR_DATA_DIR" "$@"
   _apply_managed_springsettings "$BAR_DATA_DIR/springsettings.cfg" "$@"
 
   # Strip --debug-gl from forwarded args so the Windows-side launcher /
