@@ -1046,17 +1046,25 @@ _setup_consent_splash() {
   is_wsl || return 0
 
   local need_apt=() cur_limit need_sysctl=0 need_distrobox_setup=0 need_distrobox_install=0
-  python3 -c 'import watchdog' &>/dev/null || need_apt+=("python3-watchdog")
-  command -v inotifywait &>/dev/null     || need_apt+=("inotify-tools")
-  command -v rsync &>/dev/null           || need_apt+=("rsync")
+  # python3-watchdog/inotify-tools/rsync used to be host apt deps for sync.py;
+  # they now live inside bar-sync (docker/sync.Containerfile). Host only owns
+  # the inotify sysctl (kernel-level, propagates into the container namespace).
 
   cur_limit="$(cat /proc/sys/fs/inotify/max_user_watches 2>/dev/null || echo 0)"
   [ "$cur_limit" -lt 131072 ] && need_sysctl=1
 
   if ! command -v distrobox &>/dev/null; then
     need_distrobox_install=1
-  elif ! distrobox list 2>/dev/null | grep -q "| $DEVTOOLS_DISTROBOX "; then
-    need_distrobox_setup=1
+  else
+    # Capture the listing before piping: under set -o pipefail, `grep -q`
+    # would SIGPIPE the producer and flip a found-match into a failure
+    # (see scripts/sync.sh:_require_sync_distrobox for the same trap).
+    local listing
+    listing="$(distrobox list 2>/dev/null || true)"
+    if ! printf '%s\n' "$listing" | grep -F "| $DEVTOOLS_DISTROBOX " >/dev/null 2>&1 \
+       || ! printf '%s\n' "$listing" | grep -F "| $DEVTOOLS_SYNC_DISTROBOX " >/dev/null 2>&1; then
+      need_distrobox_setup=1
+    fi
   fi
 
   if [ "${#need_apt[@]}" -eq 0 ] && [ "$need_sysctl" = "0" ] \
@@ -1091,10 +1099,14 @@ _setup_consent_splash() {
   fi
 
   if [ "$need_distrobox_setup" = "1" ]; then
-    echo "  distrobox container (~3-5min, network):"
-    echo "    bar-dev    per docker/dev.Containerfile; toolchain habitat."
-    echo "               Toolchain (emmylua_ls, clangd, stylua, lux, watchman)"
-    echo "               exposed on host PATH via distrobox-export."
+    echo "  distrobox containers (~3-5min, network):"
+    echo "    bar-dev    per docker/dev.Containerfile; cross-platform dev toolchain."
+    echo "               Toolchain (emmylua_ls, clangd, stylua, lux) exposed on"
+    echo "               host PATH via distrobox-export."
+    if is_wsl; then
+      echo "    bar-sync   per docker/sync.Containerfile; WSL-only filesystem"
+      echo "               mirror daemon (watchman + pywatchman + rsync)."
+    fi
     echo ""
   fi
 
@@ -1103,95 +1115,38 @@ _setup_consent_splash() {
   sudo -v 2>/dev/null || warn "sudo -v could not pre-cache credentials; subsequent steps may re-prompt."
 }
 
-# Verify the WSL-side sync daemon's deps are in place:
-#   1. python3-watchdog (apt) -- the Observer's inotify backend.
-#   2. fs.inotify.max_user_watches large enough for the BAR tree (~100k+
-#      files including .git/, .lux/, vendored Lua). Distro default is 8192.
-# Watchman (also a sync.py dep) lives inside the bar-dev container and is
-# wired to host PATH by ensure_watchman_wsl, called from cmd_setup_distrobox
-# after the container exists.
-# Each of these requires sudo, so we don't install silently -- we report
-# what's missing and surface the exact commands. Idempotent and safe to
-# re-run; quiet when everything's already in place.
+# Verify the WSL-side sync daemon's *kernel-level* deps are in place. The
+# daemon itself runs inside bar-sync (docker/sync.Containerfile) and that
+# container carries python3 / pywatchman / watchman / rsync. The only host
+# concern is fs.inotify.max_user_watches: it's a kernel sysctl, propagates
+# into the container's namespace, and the BAR tree (~100k+ files including
+# .git/, .lux/, vendored Lua) blows past the 8192 default.
+# Idempotent and safe to re-run; quiet when already configured.
 ensure_sync_daemon_deps_wsl() {
   is_wsl || return 0
 
-  step "Checking WSL sync daemon deps"
-
-  local missing=0
-
-  if python3 -c 'import watchdog' &>/dev/null; then
-    info "python3-watchdog: present"
-  else
-    step "  installing python3-watchdog (apt)"
-    sudo apt-get install -y python3-watchdog >/dev/null 2>&1 \
-      && ok "python3-watchdog installed" \
-      || { err "python3-watchdog install failed"; missing=1; }
-  fi
-
-  if command -v inotifywait &>/dev/null; then
-    info "inotify-tools: present"
-  else
-    step "  installing inotify-tools (apt)"
-    sudo apt-get install -y inotify-tools >/dev/null 2>&1 \
-      && ok "inotify-tools installed" \
-      || warn "inotify-tools install failed"
-  fi
-
-  if command -v rsync &>/dev/null; then
-    info "rsync: present"
-  else
-    step "  installing rsync (apt)"
-    sudo apt-get install -y rsync >/dev/null 2>&1 \
-      && ok "rsync installed" \
-      || { err "rsync install failed"; missing=1; }
-  fi
+  step "Checking WSL sync kernel limits"
 
   # 524288 is the canonical bump everyone (watchdog, dropbox, jetbrains)
-  # converges on; the kernel default of 8192 is below BAR's directory count.
+  # converges on. Set on the host kernel; visible from inside bar-sync
+  # because container namespaces inherit /proc/sys/fs/inotify/* unmodified.
   local cur_limit min_limit=131072
   cur_limit="$(cat /proc/sys/fs/inotify/max_user_watches 2>/dev/null || echo 0)"
   if [ "$cur_limit" -ge "$min_limit" ]; then
     info "fs.inotify.max_user_watches=$cur_limit (≥ $min_limit)"
-  else
-    step "  bumping fs.inotify.max_user_watches → 524288 (sysctl drop-in)"
-    if echo 'fs.inotify.max_user_watches=524288' \
-         | sudo tee /etc/sysctl.d/99-bar-devtools.conf >/dev/null \
-       && sudo sysctl -p /etc/sysctl.d/99-bar-devtools.conf >/dev/null 2>&1; then
-      ok "fs.inotify.max_user_watches set to 524288"
-    else
-      warn "Could not write /etc/sysctl.d/99-bar-devtools.conf"
-      missing=1
-    fi
+    ok "WSL sync kernel limits OK"
+    return 0
   fi
 
-  if [ "$missing" = "1" ]; then
-    warn "Some sync deps are still missing; sync daemon may not start cleanly."
-    return 1
+  step "  bumping fs.inotify.max_user_watches → 524288 (sysctl drop-in)"
+  if echo 'fs.inotify.max_user_watches=524288' \
+       | sudo tee /etc/sysctl.d/99-bar-devtools.conf >/dev/null \
+     && sudo sysctl -p /etc/sysctl.d/99-bar-devtools.conf >/dev/null 2>&1; then
+    ok "fs.inotify.max_user_watches set to 524288"
+    return 0
   fi
-  ok "WSL sync daemon deps OK"
-  return 0
-}
-
-# Wire watchman through to the host PATH via distrobox-export. Watchman
-# is installed in the bar-dev container by dev.Containerfile; the
-# wrapper at ~/.local/bin/watchman runs `distrobox enter -- watchman`
-# so sync.py calls `watchman -j` like any host binary.
-ensure_watchman_wsl() {
-  # Don't short-circuit on `command -v watchman`: if setup::init runs from
-  # inside bar-dev (where /usr/bin/watchman is on PATH from the dnf install),
-  # that check returns 0 and we silently skip creating the host wrapper at
-  # ~/.local/bin/watchman -- so later host invocations of sync.py find no
-  # watchman at all. distrobox-export is idempotent; just always run it.
-  step "exporting watchman from $DEVTOOLS_DISTROBOX → ~/.local/bin"
-  mkdir -p "$HOME/.local/bin"
-  distrobox enter "$DEVTOOLS_DISTROBOX" -- \
-    distrobox-export --bin /usr/local/bin/watchman --export-path "$HOME/.local/bin" >/dev/null
-  if [ ! -x "$HOME/.local/bin/watchman" ]; then
-    err "distrobox-export ran but $HOME/.local/bin/watchman is missing or not executable"
-    return 1
-  fi
-  ok "watchman wrapper exported"
+  warn "Could not write /etc/sysctl.d/99-bar-devtools.conf -- watcher may miss events on deep subtrees"
+  return 1
 }
 
 # Export the dev-toolchain binaries from the bar-dev container to the host
@@ -1298,7 +1253,7 @@ cmd_setup_distrobox() {
   echo ""
 
   if is_wsl; then
-    ensure_watchman_wsl || warn "watchman host wrapper not installed; sync daemon will fall back to full rsync."
+    cmd_setup_sync_distrobox || warn "bar-sync container build failed; 'just bar::launch' will not be able to mirror edits to /mnt/c."
     echo ""
   fi
 
@@ -1307,6 +1262,43 @@ cmd_setup_distrobox() {
   echo "  Recipes that need lux/node/cargo will now run inside '$DEVTOOLS_DISTROBOX' automatically."
   echo "  To enter the box manually:  distrobox enter $DEVTOOLS_DISTROBOX"
   echo "  To rebuild after changes:   just setup::distrobox"
+}
+
+# WSL-only sister to cmd_setup_distrobox: build + create the bar-sync
+# container that owns the filesystem mirror daemon. See common.sh's
+# DEVTOOLS_SYNC_DISTROBOX comment and docker/sync.Containerfile for the
+# split rationale.
+SYNC_IMAGE="bar-sync"
+cmd_setup_sync_distrobox() {
+  is_wsl || return 0
+
+  step "Building sync container image ($SYNC_IMAGE)..."
+  local runtime="podman"
+  command -v podman &>/dev/null || runtime="docker"
+  $runtime build -t "$SYNC_IMAGE" -f "$DEVTOOLS_DIR/docker/sync.Containerfile" "$DEVTOOLS_DIR"
+  ok "Image built: $SYNC_IMAGE"
+
+  distrobox stop --yes "$DEVTOOLS_SYNC_DISTROBOX" >/dev/null 2>&1 || true
+  distrobox rm -f --yes "$DEVTOOLS_SYNC_DISTROBOX" >/dev/null 2>&1 \
+    || $runtime rm -f "$DEVTOOLS_SYNC_DISTROBOX" >/dev/null 2>&1 \
+    || true
+
+  step "Creating distrobox '$DEVTOOLS_SYNC_DISTROBOX'..."
+  local image_ref="$SYNC_IMAGE"
+  [ "$runtime" = "podman" ] && image_ref="localhost/$SYNC_IMAGE"
+  distrobox create --name "$DEVTOOLS_SYNC_DISTROBOX" --image "$image_ref" --yes
+  ok "Distrobox created: $DEVTOOLS_SYNC_DISTROBOX"
+
+  # Smoke-test: confirm pywatchman + watchman both load inside the container
+  # before sync.sh tries to use them. Failing here is much clearer than a
+  # cryptic ImportError from a backgrounded daemon later.
+  if ! distrobox enter "$DEVTOOLS_SYNC_DISTROBOX" -- python3 -c \
+       'import pywatchman; pywatchman.client(timeout=5).query("version")' \
+       >/dev/null 2>&1; then
+    err "pywatchman + watchman smoke test failed inside $DEVTOOLS_SYNC_DISTROBOX"
+    return 1
+  fi
+  ok "pywatchman + watchman ready in $DEVTOOLS_SYNC_DISTROBOX"
 }
 
 # Feature -> repo dirs it pulls in. Reads from the loaded repos.conf so the
@@ -1865,10 +1857,9 @@ cmd_init() {
     cmd_install_deps || { err "Dependency installation failed. Fix and retry."; exit 1; }
   fi
   ensure_windows_python
-  # Install python3-watchdog / inotify-tools / rsync up front: the engine build
-  # in step 5 triggers `sync.sh mirror-engine` on success, which imports
-  # watchdog. Leaving this for step 7 means a transient engine-build failure
-  # aborts init before the deps the splash promised get installed.
+  # Sync daemon's runtime deps (watchman, pywatchman, rsync) live inside
+  # bar-sync now (built in step 2 below). Host only needs the inotify sysctl
+  # bumped, which propagates into the container.
   ensure_sync_daemon_deps_wsl
   echo ""
 

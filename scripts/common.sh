@@ -9,6 +9,13 @@
 : "${DEVTOOLS_DISTROBOX:=bar-dev}"
 export DEVTOOLS_DISTROBOX
 
+# WSL-only sister container that owns the filesystem mirror daemon (sync.py).
+# Kept separate from bar-dev because Linux-native contributors never run sync
+# and shouldn't pull watchman + pywatchman just to lint Lua. See
+# docker/sync.Containerfile and scripts/sync.sh.
+: "${DEVTOOLS_SYNC_DISTROBOX:=bar-sync}"
+export DEVTOOLS_SYNC_DISTROBOX
+
 # $'...' ANSI-C quoting embeds real ESC (0x1b) bytes so the variables work
 # in `cat <<EOF`, `printf "%s"`, and `echo` without -e. Keeping `echo -e`
 # in the helpers below is still fine — there's nothing left for -e to

@@ -17,9 +17,10 @@ set -euo pipefail
 : "${DEVTOOLS_DIR:?DEVTOOLS_DIR must be set (Justfile exports it)}"
 source "$DEVTOOLS_DIR/scripts/common.sh"
 
-# Watchman, /mnt/c writes, and Windows interop (tasklist.exe etc.) all need
-# the WSL host -- not the bar-dev distrobox where watchman's per-user state
-# dir is unreadable.
+# This entry-point script (start/stop/status/etc.) runs on the WSL host.
+# It enters the bar-sync container to run the actual python daemon -- see
+# docker/sync.Containerfile for what's in there. Must not run from inside
+# bar-dev (Windows interop + container-from-container is fragile).
 require_host
 
 if [ -z "${BAR_DATA_DIR:-}" ]; then
@@ -31,6 +32,25 @@ if ! grep -qi microsoft /proc/version 2>/dev/null; then
   err "scripts/sync.sh only runs on WSL2 (target is a Windows-side data dir)."
   exit 1
 fi
+
+# Confirm the sync container exists before any subcommand tries to enter it.
+# Cheaper than letting `distrobox enter` fail with a confusing message inside
+# a backgrounded nohup pipeline.
+#
+# Don't use `grep -q`: under `set -o pipefail` (set at the top of this file),
+# grep -q exits at the first match and SIGPIPEs `distrobox list` on the next
+# write, leaving the pipeline rc=141 and the negation flipping a successful
+# match into a failure. Capturing the listing into a variable first sidesteps
+# the pipe race entirely.
+_require_sync_distrobox() {
+  local listing
+  listing="$(distrobox list 2>/dev/null || true)"
+  if ! printf '%s\n' "$listing" | grep -F "| ${DEVTOOLS_SYNC_DISTROBOX} " >/dev/null 2>&1; then
+    err "sync container '${DEVTOOLS_SYNC_DISTROBOX}' does not exist."
+    info "Build it: just setup::distrobox  (creates bar-dev + bar-sync on WSL)"
+    return 1
+  fi
+}
 
 STATE_DIR="$BAR_DATA_DIR/.bar-launch"
 LOG_FILE="$STATE_DIR/sync.log"
@@ -167,16 +187,7 @@ cmd_start() {
     return 0
   fi
 
-  if ! command -v python3 &>/dev/null; then
-    err "python3 not found on PATH. Install via your distro's package manager."
-    return 1
-  fi
-  if ! python3 -c 'import watchdog' &>/dev/null; then
-    err "python3 watchdog module not available."
-    info "On Ubuntu/WSL2: sudo apt-get install -y python3-watchdog"
-    info "Or re-run: just setup::init"
-    return 1
-  fi
+  _require_sync_distrobox || return 1
 
   # Engine pair is mirrored on demand from cmd_mirror_engine; never watched
   # (it would race the build hook).
@@ -188,10 +199,14 @@ cmd_start() {
 
   rm -f "$READY_FILE"
 
-  step "Starting sync daemon (cold-copy + watcher)"
+  step "Starting sync daemon (cold-copy + watcher) inside ${DEVTOOLS_SYNC_DISTROBOX}"
   info "log: $LOG_FILE  (live: just bar::sync-logs -- -F)"
   : >"$LOG_FILE"
-  nohup python3 "$DEVTOOLS_DIR/scripts/sync.py" \
+  # The PID we save is the host-side `distrobox enter` shim; it forwards
+  # SIGTERM to the in-container python3 on stop. Container stays alive as
+  # long as that process is alive (distrobox/podman semantics).
+  nohup distrobox enter "${DEVTOOLS_SYNC_DISTROBOX}" -- \
+      python3 "$DEVTOOLS_DIR/scripts/sync.py" \
       --log "$LOG_FILE" \
       --ready-file "$READY_FILE" \
       "${pair_args[@]}" \
@@ -281,15 +296,7 @@ cmd_cold_copy() {
     return 1
   fi
 
-  if ! command -v python3 &>/dev/null; then
-    err "python3 not found on PATH."
-    return 1
-  fi
-  if ! python3 -c 'import watchdog' &>/dev/null; then
-    err "python3 watchdog module not available."
-    info "On Ubuntu/WSL2: sudo apt-get install -y python3-watchdog"
-    return 1
-  fi
+  _require_sync_distrobox || return 1
 
   local pair_args=()
   local p
@@ -297,7 +304,7 @@ cmd_cold_copy() {
     [ -n "$p" ] && pair_args+=(--pair "$p")
   done <<<"$pair_lines"
 
-  step "Cold-copy seed (one-shot, no watcher)"
+  step "Cold-copy seed (one-shot, no watcher) inside ${DEVTOOLS_SYNC_DISTROBOX}"
   info "log: $LOG_FILE  (live: just bar::sync-logs -- -F)"
   : >"$LOG_FILE"
 
@@ -308,7 +315,8 @@ cmd_cold_copy() {
   disown "$tail_pid" 2>/dev/null || true
 
   local rc=0
-  python3 "$DEVTOOLS_DIR/scripts/sync.py" \
+  distrobox enter "${DEVTOOLS_SYNC_DISTROBOX}" -- \
+      python3 "$DEVTOOLS_DIR/scripts/sync.py" \
       --log "$LOG_FILE" \
       --cold-copy \
       "${pair_args[@]}" \
@@ -344,8 +352,10 @@ cmd_mirror_engine() {
     return 1
   fi
 
-  step "Mirroring engine artifacts to $BAR_DATA_DIR/engine/local-build"
-  python3 "$DEVTOOLS_DIR/scripts/sync.py" --cold-copy --log "$LOG_FILE" --pair "$engine_pair"
+  _require_sync_distrobox || return 1
+  step "Mirroring engine artifacts to $BAR_DATA_DIR/engine/local-build (via ${DEVTOOLS_SYNC_DISTROBOX})"
+  distrobox enter "${DEVTOOLS_SYNC_DISTROBOX}" -- \
+      python3 "$DEVTOOLS_DIR/scripts/sync.py" --cold-copy --log "$LOG_FILE" --pair "$engine_pair"
   ok "engine mirrored"
 }
 

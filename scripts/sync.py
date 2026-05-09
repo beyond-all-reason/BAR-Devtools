@@ -1,37 +1,45 @@
-r"""WSL-side BAR-Devtools sync daemon (Phase 3, architecture iv =
-`wsl-watchdog-mntc`).
+r"""WSL-side BAR-Devtools sync daemon (Phase 3, architecture iv).
 
-Watches Devtools checkout subtrees on the WSL ext4 side using native inotify
-(via the `watchdog` Observer) and mirrors changes through /mnt/c into the
-Windows-local NTFS data dir the engine reads from.
+Runs *inside* the bar-sync distrobox container. Watches Devtools checkout
+subtrees (Beyond-All-Reason, BYAR-Chobby, RecoilEngine install/) on the
+WSL ext4 side via watchman subscriptions and mirrors changes through
+/mnt/c into the Windows-local NTFS data dir the engine reads from.
 
 Why WSL-side instead of Windows-side: the Phase 1 probe's prior architecture
-(iii) ran the watcher on Windows reading WSL paths over `\\wsl.localhost\…`
+ran the watcher on Windows reading WSL paths over `\\wsl.localhost\…`
 (Plan 9). Plan 9 does NOT deliver inotify across the boundary, so that
 watcher silently degraded to PollingObserver semantics regardless of how
 it advertised itself. Re-running the probe with the watcher on the WSL side
-(arm iv) measured a **97.6 ms median / 160 ms p95 / 181 ms max** sustained
-edit-loop latency at 5 touches/sec, vs. Windows-side at 109/179/215 -- with
-the additional benefit that detection is real fsevents instead of polling.
-See bar-design-docs/bifurcated_types/dev_setup_restructured.md → Tests 4-5.
+measured a **97.6 ms median / 160 ms p95 / 181 ms max** sustained edit-loop
+latency at 5 touches/sec, vs. Windows-side at 109/179/215 -- with the
+additional benefit that detection is real fsevents instead of polling.
 
-Invocation (typically via scripts/sync.sh from WSL):
+Why watchman + pywatchman (not watchdog/inotify directly): the prior
+implementation maintained two parallel filesystem watchers -- watchdog
+for live events and watchman only for cold-copy delta. That dual-stack
+caused a confusing edge case where a fresh watchman daemon (after WSL
+killed the previous one) replied to "since <old-clock>" with the entire
+tree (`is_fresh_instance: true`), making cold-copy log "19,301 files
+changed" with no actual edits. Watchman is designed to be the single
+source of truth for "what changed in this directory ever," so we
+collapse onto it: subscriptions stream events and the same clock token
+also drives cross-restart deltas. `is_fresh_instance: true` becomes a
+clearly-named log line, not a mystery 80s rsync.
+
+Invocation (always via scripts/sync.sh, which `distrobox enter`s bar-sync):
 
     python3 scripts/sync.py \
         --pair <linux-source>::<linux-dst> \
         --pair ... \
-        [--log <path>] [--polling]
+        [--log <path>] [--cold-copy] [--ready-file <path>]
 
 Sources are POSIX paths on the WSL side (`/home/<u>/code/...`); destinations
 are POSIX paths under `/mnt/c/...` so the watcher writes to NTFS via the
-9P-mediated drvfs mount. Each --pair gets its own watchdog scheduler; one
-process aggregates them so the engine sees changes from all the repos
-cohesively.
+9P-mediated drvfs mount.
 
-Inode-stable writes (--inplace equivalent): we open the destination for
-write+truncate and stream bytes in. We never rename a temp file over the
-target, because the engine mmaps Lua sources and a rename would invalidate
-the mmap mid-frame.
+Inode-stable writes: we open the destination for write+truncate and stream
+bytes in. We never rename a temp file over the target, because the engine
+mmaps Lua sources and a rename would invalidate the mmap mid-frame.
 """
 from __future__ import annotations
 
@@ -50,14 +58,13 @@ from pathlib import Path
 from typing import Iterable
 
 try:
-    from watchdog.events import FileSystemEventHandler
-    from watchdog.observers import Observer
-    from watchdog.observers.polling import PollingObserver
+    import pywatchman
 except ImportError as exc:
     sys.stderr.write(
-        "watchdog not installed. On Ubuntu/WSL2 install with:\n"
-        "    sudo apt-get install -y python3-watchdog\n"
-        "Or re-run `just setup::init`, which prompts for the same install.\n"
+        "pywatchman not installed. This script is meant to run inside the\n"
+        "bar-sync distrobox container -- see docker/sync.Containerfile.\n"
+        "If you're invoking it directly, build the container with:\n"
+        "    just setup::distrobox\n"
     )
     raise SystemExit(1) from exc
 
@@ -71,10 +78,7 @@ def _copy_inplace(src: Path, dst: Path) -> None:
     Mirrors verbatim: spring's archive scanner accepts the literal "$VERSION"
     placeholder in modinfo.lua and registers the archive as
     "<name> $VERSION", which is what chobby's byar-dev gameConfig expects
-    (and what Linux symlinks already produce). An earlier revision of this
-    file substituted "$VERSION" -> "local" here, on the mistaken premise
-    that the scanner skipped it; that broke the byar-dev path on WSL2 by
-    diverging from the Linux flow's archive name.
+    (and what Linux symlinks already produce).
     """
     dst.parent.mkdir(parents=True, exist_ok=True)
     # shutil.copyfile opens dst with 'wb' which truncates and writes in
@@ -101,8 +105,8 @@ def _is_skipped(rel: Path) -> bool:
 
 def _state_dir() -> Path:
     """Per-user persistent state. Lives on Linux ext4 (NOT /mnt/c) so
-    Watchman's clock tokens and our per-pair state survive across daemon
-    restarts without paying drvfs costs every read."""
+    Watchman's clock tokens survive across daemon restarts without
+    paying drvfs costs every read."""
     base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
     d = Path(base) / "bar-devtools"
     d.mkdir(parents=True, exist_ok=True)
@@ -116,139 +120,6 @@ def _pair_state_path(src_root: Path, dst_root: Path) -> Path:
     return _state_dir() / f"sync-state-{h}.json"
 
 
-def _watchman(args: list[str], timeout: float = 60.0) -> dict:
-    """Run watchman with -j (JSON over stdin), return parsed response."""
-    proc = subprocess.run(
-        ["watchman", "-j", "--no-pretty"],
-        input=json.dumps(args),
-        capture_output=True, text=True, timeout=timeout, check=True,
-    )
-    return json.loads(proc.stdout)
-
-
-def _cold_copy(src_root: Path, dst_root: Path) -> None:
-    """Mirror src_root -> dst_root using Watchman to skip the rsync
-    stat-walk on unchanged subtrees. First call for a (src, dst) pair
-    seeds dst with full rsync; subsequent calls use `watchman since
-    <clock>` + rsync --files-from for only the changed files.
-
-    --inplace preserves the engine's mmap-stable inode contract: rsync
-    overwrites in place rather than tempfile + rename, so a Lua source
-    the engine has mmaped doesn't change inode under it."""
-    dst_root.mkdir(parents=True, exist_ok=True)
-    _cold_copy_via_watchman(src_root, dst_root)
-
-
-def _cold_copy_full_rsync(src_root: Path, dst_root: Path) -> None:
-    """The unconditional path: rsync everything, skipping by size+mtime.
-    Always correct, slow on /mnt/c due to per-file stat round-trips."""
-    excludes: list[str] = []
-    for d in _SKIP_DIRS:
-        excludes += ["--exclude", f"/{d}", "--exclude", f"**/{d}"]
-    cmd = ["rsync", "-a", "--delete", "--inplace",
-           *excludes,
-           f"{src_root}/", f"{dst_root}/"]
-    try:
-        subprocess.run(cmd, check=True)
-    except FileNotFoundError as exc:
-        raise SystemExit(
-            "rsync not found on PATH. Install via: sudo apt-get install -y rsync"
-        ) from exc
-    except subprocess.CalledProcessError as exc:
-        # Most common cause for this codebase: Windows holds open handles
-        # on engine DLLs, so rsync writes from Linux through drvfs hit
-        # EACCES. Other causes are unreadable source files (rare), or
-        # rsync failing to delete a stale dst entry (also rare). Always
-        # survivable, but the user should know what to check.
-        if exc.returncode == 23:
-            log.warning(
-                "rsync exit 23 (some files not transferred) for %s -> %s. "
-                "Most likely cause: Windows is holding open handles on the "
-                "destination files. Check whether spring.exe or the BAR "
-                "launcher is running:  just bar::stop  then re-run.",
-                src_root, dst_root)
-        else:
-            log.warning("rsync exit %s for %s -> %s -- cold copy may be partial",
-                        exc.returncode, src_root, dst_root)
-
-
-def _cold_copy_via_watchman(src_root: Path, dst_root: Path) -> None:
-    """Watchman-driven incremental cold copy. Called from _cold_copy on
-    the happy path; the caller catches our exceptions and falls back to
-    full rsync. Raises on any error so the fallback is unambiguous."""
-    state_path = _pair_state_path(src_root, dst_root)
-
-    # `watch-project` is idempotent and returns the watch root (which may
-    # be an ancestor of src_root if a parent dir is already watched). The
-    # `relative_path` it returns scopes our queries to our subtree.
-    watch_resp = _watchman(["watch-project", str(src_root)])
-    watch_root = watch_resp["watch"]
-    relative_path = watch_resp.get("relative_path")
-
-    state = _load_pair_state(state_path)
-    same_pair = (state.get("src") == str(src_root)
-                 and state.get("dst") == str(dst_root)
-                 and state.get("watch_root") == watch_root)
-
-    if not same_pair or not state.get("clock"):
-        # First run for this (src, dst) pair, or pair changed: full rsync,
-        # capture clock at the END so any concurrent edits during rsync
-        # show up as "changed since clock" on the next run.
-        _cold_copy_full_rsync(src_root, dst_root)
-        clock = _watchman(["clock", watch_root])["clock"]
-        _save_pair_state(state_path, src_root, dst_root, watch_root, clock)
-        log.info("watchman: initial clock recorded (%s) for %s", clock, src_root)
-        return
-
-    # Incremental path: ask "what changed since the saved clock?"
-    query: dict = {
-        "since": state["clock"],
-        "fields": ["name", "exists"],
-    }
-    if relative_path:
-        query["relative_root"] = relative_path
-
-    resp = _watchman(["query", watch_root, query])
-
-    files = resp.get("files", [])
-    new_clock = resp["clock"]
-
-    changed: list[str] = []
-    deleted: list[str] = []
-    for f in files:
-        name = f["name"]
-        # Skip subtrees we never sync. Match against any path component
-        # so '.git/HEAD' is filtered the same as 'foo/.git/HEAD'.
-        rel_parts = Path(name).parts
-        if any(p in _SKIP_DIRS for p in rel_parts):
-            continue
-        if f.get("exists", True):
-            changed.append(name)
-        else:
-            deleted.append(name)
-
-    if changed:
-        # rsync ONLY the changed files. --files-from reads paths relative
-        # to src_root (when src_root is the SRC arg), one per line.
-        cmd = ["rsync", "-a", "--inplace", "--files-from=-",
-               f"{src_root}/", f"{dst_root}/"]
-        subprocess.run(cmd, input="\n".join(changed) + "\n",
-                       text=True, check=True)
-
-    for rel in deleted:
-        target = dst_root / rel
-        try:
-            target.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError as exc:
-            log.warning("could not delete dst %s: %s", target, exc)
-
-    _save_pair_state(state_path, src_root, dst_root, watch_root, new_clock)
-    log.info("watchman incremental: %d changed, %d deleted (%s)",
-             len(changed), len(deleted), src_root)
-
-
 def _load_pair_state(path: Path) -> dict:
     try:
         with open(path) as f:
@@ -258,14 +129,13 @@ def _load_pair_state(path: Path) -> dict:
 
 
 def _save_pair_state(path: Path, src_root: Path, dst_root: Path,
-                     watch_root: str, clock: str) -> None:
+                     clock: str) -> None:
     """Atomic-rename write, fsync'd. State file integrity matters because
-    a corrupted clock token reads as 'unknown changeset' on next start
-    and we'd silently full-rsync forever -- annoying but recoverable."""
+    a corrupted clock token reads as is_fresh_instance on next start and
+    we'd needlessly re-seed -- annoying but recoverable."""
     payload = json.dumps({
         "src": str(src_root),
         "dst": str(dst_root),
-        "watch_root": watch_root,
         "clock": clock,
     }, indent=2)
     tmp = path.with_suffix(f".tmp.{os.getpid()}")
@@ -276,122 +146,170 @@ def _save_pair_state(path: Path, src_root: Path, dst_root: Path,
     os.replace(tmp, path)
 
 
-class _MirrorHandler(FileSystemEventHandler):
-    """Translate FS events on src_root into mirrored writes under dst_root.
+def _decode(v):
+    """pywatchman BSER returns bytes for string values; normalize to str."""
+    if isinstance(v, bytes):
+        return v.decode("utf-8", errors="replace")
+    return v
 
-    We re-resolve paths relative to src_root for every event rather than
-    trusting the event payload's absolute path -- watchdog's normalization
-    of UNC paths is fiddly across Python builds.
-    """
 
-    def __init__(self, src_root: Path, dst_root: Path) -> None:
-        self._src = src_root
-        self._dst = dst_root
-        # Coalesce rapid-fire events on the same path -- editors save via
-        # multiple syscalls and we'd otherwise copy 3x per save.
-        self._pending: dict[str, float] = {}
-        self._lock = threading.Lock()
-
-    def _enqueue(self, path: str) -> None:
-        with self._lock:
-            self._pending[path] = time.monotonic()
-
-    def on_modified(self, event) -> None:
-        if event.is_directory:
-            return
-        self._enqueue(event.src_path)
-
-    def on_created(self, event) -> None:
-        if event.is_directory:
-            return
-        self._enqueue(event.src_path)
-
-    def on_moved(self, event) -> None:
-        if event.is_directory:
-            return
-        # Treat moves as create-at-destination + delete-at-source.
-        self._delete_at(event.src_path)
-        self._enqueue(event.dest_path)
-
-    def on_deleted(self, event) -> None:
-        if event.is_directory:
-            return
-        self._delete_at(event.src_path)
-
-    def _delete_at(self, src_path: str) -> None:
-        try:
-            rel = Path(src_path).resolve().relative_to(self._src.resolve())
-        except (ValueError, OSError):
-            return
-        dst = self._dst / rel
-        try:
-            dst.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError as exc:
-            # Same root-cause family as mirror failures above: Windows
-            # holding the dst open. We don't refuse to continue -- the
-            # next save of the same file will overwrite, which is the
-            # user's natural recovery anyway.
-            log.warning(
-                "could not delete dst %s (Windows may hold an open handle; "
-                "next save will overwrite anyway): %s", rel, exc)
-
-    def drain(self, max_age_seconds: float = 0.10) -> None:
-        """Flush pending events older than max_age_seconds."""
-        now = time.monotonic()
-        ready: list[tuple[str, float]] = []
-        with self._lock:
-            for path, ts in list(self._pending.items()):
-                if now - ts >= max_age_seconds:
-                    ready.append((path, ts))
-                    del self._pending[path]
-        for src_path, event_ts in ready:
+def _apply_files(src_root: Path, dst_root: Path,
+                 files: list[dict], event_ts: float) -> None:
+    """Mirror each (name, exists) tuple from a watchman response into
+    dst_root. Missing files are deleted; present ones are copied."""
+    copied = 0
+    deleted = 0
+    skipped = 0
+    for f in files:
+        name = _decode(f["name"])
+        rel = Path(name)
+        if _is_skipped(rel):
+            skipped += 1
+            continue
+        if f.get("exists", True):
             try:
-                src = Path(src_path)
-                if not src.is_file():
-                    continue
-                rel = src.resolve().relative_to(self._src.resolve())
-                _copy_inplace(src, self._dst / rel)
-                # Log at INFO so `just bar::sync-logs` shows propagation
-                # events live -- a silent log is hard to distinguish from
-                # a broken watcher when nothing seems to be syncing. The
-                # 100 ms coalesce in self._pending keeps this from
-                # spamming under burst writes. The trailing `(Nms)` is
-                # the wall time from first inotify event to rsync
-                # completion -- the headline number for "is the dev loop
-                # actually fast" and the thing that pays for this whole
-                # architecture.
-                latency_ms = (time.monotonic() - event_ts) * 1000.0
-                log.info("mirrored %s (%dms)", rel, round(latency_ms))
-            except ValueError as exc:
-                # relative_to() raised -- the event path didn't resolve
-                # under self._src. Almost always a symlink-target change
-                # mid-run; the daemon is now watching stale inodes and
-                # the contributor needs a restart to pick up the new tree.
-                log.warning(
-                    "skipping %s: not under watched root %s (symlink may "
-                    "have been re-pointed; consider 'just link::create <name>' "
-                    "and restart the sync daemon)", src_path, self._src)
+                src = src_root / rel
+                if src.is_file():
+                    _copy_inplace(src, dst_root / rel)
+                    copied += 1
+                # else: dir (watchman reports them too) or stale event;
+                # nothing to mirror per file.
             except OSError as exc:
-                # Most common failure here on /mnt/c targets: Windows is
-                # holding the dst file open (engine DLL race, antivirus
-                # scan, antivirus controlled-folder-access policy).
+                # Most common cause on /mnt/c targets: Windows is holding
+                # the dst file open (engine DLL race, AV scan).
                 log.warning(
                     "mirror failed for %s: %s. If this is an engine DLL, "
-                    "stop spring.exe / BAR launcher (just bar::stop) and "
-                    "re-trigger. If it's a Lua source, check whether the "
-                    "destination is writable from WSL.", src_path, exc)
+                    "stop spring.exe / BAR launcher (just bar::stop). If "
+                    "it's a Lua source, check whether the destination is "
+                    "writable from WSL.", rel, exc)
+        else:
+            target = dst_root / rel
+            try:
+                target.unlink()
+                deleted += 1
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                log.warning(
+                    "could not delete dst %s (Windows may hold an open "
+                    "handle; next save will overwrite): %s", rel, exc)
+    if copied or deleted:
+        latency_ms = (time.monotonic() - event_ts) * 1000.0
+        log.info("mirrored %d, deleted %d (%dms) [%s]",
+                 copied, deleted, round(latency_ms), src_root.name)
+
+
+def _watch_root(client: "pywatchman.client", src_root: Path) -> tuple[str, str | None]:
+    """`watch-project` is idempotent and returns the watch root (which may
+    be an ancestor of src_root if a parent dir is already watched). The
+    `relative_path` it returns scopes our queries to our subtree."""
+    resp = client.query("watch-project", str(src_root))
+    return _decode(resp["watch"]), _decode(resp.get("relative_path"))
+
+
+def _build_subscribe_query(relative_path: str | None,
+                           since_clock: str | None) -> dict:
+    q: dict = {"fields": ["name", "exists"]}
+    if relative_path:
+        q["relative_root"] = relative_path
+    if since_clock:
+        q["since"] = since_clock
+    # Watchman also reports directory events; we filter to files in
+    # _apply_files via src.is_file() rather than expressing a type
+    # filter here, because dir-create events are useful for shaping
+    # the subscription's clock advancement even though we don't copy
+    # dirs themselves.
+    return q
+
+
+def _drain_pair(src_root: Path, dst_root: Path,
+                stop: threading.Event,
+                cold_only: bool,
+                ready_signal: threading.Event | None) -> None:
+    """One pair's subscription loop: reconnects on socket close, applies
+    each batch of files, saves the latest clock after each batch."""
+    state_path = _pair_state_path(src_root, dst_root)
+    state = _load_pair_state(state_path)
+    same_pair = (state.get("src") == str(src_root)
+                 and state.get("dst") == str(dst_root))
+    saved_clock = state.get("clock") if same_pair else None
+
+    sub_name = f"bar-sync-{os.getpid()}-{src_root.name}"
+
+    while not stop.is_set():
+        try:
+            client = pywatchman.client(timeout=60.0)
+            try:
+                watch_root, relative_path = _watch_root(client, src_root)
+                query = _build_subscribe_query(relative_path, saved_clock)
+                client.query("subscribe", watch_root, sub_name, query)
+                if saved_clock:
+                    log.info("subscription opened: %s (since clock=%s)",
+                             src_root, saved_clock[-12:])
+                else:
+                    log.info("subscription opened: %s (no prior clock -- initial seed)",
+                             src_root)
+
+                # Receive loop. timeout=None blocks; we set a short timeout
+                # to let stop-signal checks fan out without spinning hot.
+                client.setTimeout(2.0)
+                while not stop.is_set():
+                    try:
+                        msg = client.receive()
+                    except pywatchman.SocketTimeout:
+                        continue
+                    # Subscription messages have shape:
+                    # {"subscription": <name>, "files": [...], "clock": ...,
+                    #  "is_fresh_instance": bool, "root": ...}
+                    if not isinstance(msg, dict):
+                        continue
+                    if "subscription" not in msg:
+                        # Could be a state-enter/state-leave message; ignore.
+                        continue
+
+                    files = msg.get("files", []) or []
+                    new_clock = _decode(msg.get("clock"))
+                    if msg.get("is_fresh_instance"):
+                        log.info(
+                            "is_fresh_instance: %s (%d files) -- "
+                            "%s",
+                            src_root, len(files),
+                            "watchman has no prior clock for this subscription"
+                            if not saved_clock else
+                            "watchman daemon was restarted; saved clock invalid")
+
+                    if files:
+                        _apply_files(src_root, dst_root, files,
+                                     time.monotonic())
+
+                    if new_clock:
+                        saved_clock = new_clock
+                        _save_pair_state(state_path, src_root, dst_root,
+                                         new_clock)
+
+                    # First batch processed -> we're "ready"; subsequent
+                    # batches keep arriving as the user edits.
+                    if ready_signal is not None and not ready_signal.is_set():
+                        ready_signal.set()
+
+                    if cold_only:
+                        return
+            finally:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+        except (pywatchman.WatchmanError, OSError) as exc:
+            if stop.is_set():
+                return
+            log.warning("watchman socket error for %s: %s -- reconnecting in 2s",
+                        src_root, exc)
+            stop.wait(2.0)
 
 
 def _parse_pairs(pairs: Iterable[str]) -> list[tuple[Path, Path]]:
     parsed: list[tuple[Path, Path]] = []
     for raw in pairs:
-        # UNC paths contain ':' (after the drive letter when normalized) but
-        # the source side is always a UNC \\wsl$\..., so split on the LAST
-        # ':' that follows a path separator. Simpler: use '::' as the
-        # separator in the CLI, but keep ':' for human ergonomics by
-        # splitting on the first occurrence after position 3.
         sep = raw.find("::")
         if sep < 0:
             raise SystemExit(f"--pair must be SRC::DST, got: {raw!r}")
@@ -406,9 +324,8 @@ def _parse_pairs(pairs: Iterable[str]) -> list[tuple[Path, Path]]:
 def _setup_logging(log_path: Path | None) -> None:
     # When --log is provided we ONLY install the FileHandler. sync.sh runs
     # the daemon with `2>>"$LOG_FILE"`, so adding a StreamHandler(stderr)
-    # would write every line twice -- once via stderr -> file redirect,
-    # once via FileHandler. Foreground / interactive use (no --log) gets
-    # the stderr handler so the user sees output in their terminal.
+    # would write every line twice. Foreground / interactive use (no --log)
+    # gets the stderr handler so the user sees output in their terminal.
     handlers: list[logging.Handler] = []
     if log_path is not None:
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -426,33 +343,29 @@ def _setup_logging(log_path: Path | None) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="bar-launch-sync",
-        description="Mirror WSL Devtools checkouts to a Windows NTFS data dir.",
+        description="Mirror WSL Devtools checkouts to a Windows NTFS data dir via watchman.",
     )
     parser.add_argument(
         "--pair",
         action="append",
         required=True,
         metavar="SRC::DST",
-        help="Source (WSL ext4 path) and destination (POSIX form of /mnt/c/... "
-             "or any NTFS path), separated by '::'. Repeatable.",
+        help="Source (WSL ext4 path) and destination (POSIX form of /mnt/c/...), "
+             "separated by '::'. Repeatable.",
     )
-    parser.add_argument("--log", type=Path, help="Append log lines to this file in addition to stderr.")
-    parser.add_argument(
-        "--polling",
-        action="store_true",
-        help="Force PollingObserver instead of native inotify. "
-        "Use if inotify watch limits are exceeded or events stop propagating.",
-    )
+    parser.add_argument("--log", type=Path,
+                        help="Append log lines to this file in addition to stderr.")
     parser.add_argument(
         "--cold-copy",
         action="store_true",
-        help="Run a one-shot cold mirror of every pair, then exit. No watching.",
+        help="Run a one-shot mirror of each pair (process the first "
+             "subscription batch and exit). No watching.",
     )
     parser.add_argument(
         "--ready-file",
         type=Path,
-        help="After cold copy and watcher startup, touch this file. Used by "
-        "scripts/sync.sh to gate `bar-launch` invocation on a quiesced "
+        help="After every pair has processed its first batch, touch this file. "
+        "Used by scripts/sync.sh to gate `bar-launch` invocation on a quiesced "
         "initial mirror.",
     )
     args = parser.parse_args(argv)
@@ -460,70 +373,10 @@ def main(argv: list[str] | None = None) -> int:
     _setup_logging(args.log)
 
     pairs = _parse_pairs(args.pair)
-
     log.info("sync: %d pair(s)", len(pairs))
-    for src, dst in pairs:
-        if not src.exists():
-            log.warning("skipping sync: %s does not exist", src)
-            continue
-        t0 = time.monotonic()
-        _cold_copy(src, dst)
-        # The "cold copy" name is historical -- _cold_copy_via_watchman
-        # picks between full-rsync seed and watchman-incremental delta
-        # based on the per-pair state file. The follow-up log line from
-        # inside that function ("watchman: initial clock recorded ..."
-        # vs "watchman incremental: N changed, M deleted ...") tells you
-        # which branch ran. We just print the wall time here.
-        log.info("  %s -> %s (%.1fs)", src, dst, time.monotonic() - t0)
-
-    if args.cold_copy:
-        if args.ready_file is not None:
-            args.ready_file.parent.mkdir(parents=True, exist_ok=True)
-            args.ready_file.touch()
-        return 0
-
-    observer_cls = PollingObserver if args.polling else Observer
-    observer = observer_cls()
-    handlers: list[_MirrorHandler] = []
-    for src, dst in pairs:
-        if not src.exists():
-            log.warning("skipping watch: %s does not exist", src)
-            continue
-        handler = _MirrorHandler(src.resolve(), dst.resolve())
-        observer.schedule(handler, str(src), recursive=True)
-        handlers.append(handler)
-
-    observer.start()
-    # Surface the inotify watch limit at startup. The Observer registers
-    # one watch per directory, recursively; on Ubuntu the default is 8192
-    # which is well under BAR's per-tree directory count, and watches that
-    # exceed the limit fail silently inside the inotify backend. If events
-    # never fire for files in deep subtrees, this is the first thing to
-    # check.
-    try:
-        with open("/proc/sys/fs/inotify/max_user_watches") as f:
-            limit = int(f.read().strip())
-        log.info("watcher up; %d handler(s) scheduled (fs.inotify.max_user_watches=%d)",
-                 len(handlers), limit)
-        if limit < 131072:
-            log.warning(
-                "fs.inotify.max_user_watches=%d is low for BAR-sized trees; "
-                "events for deep subtrees may not fire. Bump persistently:\n"
-                "  echo 'fs.inotify.max_user_watches=524288' | sudo tee /etc/sysctl.d/99-bar-devtools.conf\n"
-                "  sudo sysctl -p /etc/sysctl.d/99-bar-devtools.conf", limit)
-    except OSError:
-        log.info("watcher up; %d handler(s) scheduled", len(handlers))
-
-    if args.ready_file is not None:
-        args.ready_file.parent.mkdir(parents=True, exist_ok=True)
-        args.ready_file.touch()
 
     stop = threading.Event()
 
-    # Per-signal explanation so a user reading the log knows whether they
-    # caused the shutdown (Ctrl-C / `bar::stop`) or something else did
-    # (HUP from terminal close, OOM killer, etc.). "signal 15" tells
-    # nobody anything.
     _SIGNAL_REASONS = {
         signal.SIGINT:  "SIGINT (Ctrl-C in the foreground terminal)",
         signal.SIGTERM: "SIGTERM (likely 'just bar::stop' or 'sync.sh stop')",
@@ -532,29 +385,85 @@ def main(argv: list[str] | None = None) -> int:
 
     def _on_signal(signum, _frame):
         reason = _SIGNAL_REASONS.get(signum, f"signal {signum}")
-        log.info("received %s -- draining pending events and exiting", reason)
+        log.info("received %s -- closing subscriptions and exiting", reason)
         stop.set()
 
     signal.signal(signal.SIGINT, _on_signal)
     signal.signal(signal.SIGTERM, _on_signal)
-    # SIGHUP is what nohup is supposed to mask; surfacing it just in case
-    # a non-nohup launch path inherits it from the controlling terminal.
     try:
         signal.signal(signal.SIGHUP, _on_signal)
     except (AttributeError, ValueError):
         pass
 
+    # One thread per pair so a slow rsync on one tree doesn't block events
+    # for another. ready_events is a list of per-pair "first batch applied"
+    # signals; we touch the ready file once they're all set.
+    ready_events: list[threading.Event] = []
+    threads: list[threading.Thread] = []
+    for src, dst in pairs:
+        if not src.exists():
+            log.warning("skipping pair: %s does not exist", src)
+            continue
+        dst.mkdir(parents=True, exist_ok=True)
+        ev = threading.Event()
+        ready_events.append(ev)
+        t = threading.Thread(
+            target=_drain_pair,
+            args=(src.resolve(), dst.resolve(), stop, args.cold_copy, ev),
+            name=f"sync-{src.name}",
+            daemon=True,
+        )
+        t.start()
+        threads.append(t)
+
+    if not threads:
+        log.error("no pairs to mirror; exiting")
+        return 1
+
+    # Surface inotify limit at startup so a "watcher up but events never
+    # arrive" pathology has an obvious first thing to check.
     try:
-        while not stop.is_set():
-            for handler in handlers:
-                handler.drain()
-            stop.wait(0.05)
-    finally:
-        observer.stop()
-        observer.join(timeout=5)
-        # Final drain so events that arrived during teardown still get out.
-        for handler in handlers:
-            handler.drain(max_age_seconds=0.0)
+        with open("/proc/sys/fs/inotify/max_user_watches") as f:
+            limit = int(f.read().strip())
+        log.info("watcher up; %d pair(s) (fs.inotify.max_user_watches=%d)",
+                 len(threads), limit)
+        if limit < 131072:
+            log.warning(
+                "fs.inotify.max_user_watches=%d is low for BAR-sized trees; "
+                "events for deep subtrees may not fire. Bump persistently:\n"
+                "  echo 'fs.inotify.max_user_watches=524288' | sudo tee /etc/sysctl.d/99-bar-devtools.conf\n"
+                "  sudo sysctl -p /etc/sysctl.d/99-bar-devtools.conf", limit)
+    except OSError:
+        log.info("watcher up; %d pair(s) scheduled", len(threads))
+
+    # Wait for every pair's first batch, then signal ready. Each pair's
+    # _drain_pair sets its event after applying the initial seed.
+    if args.ready_file is not None or args.cold_copy:
+        for ev in ready_events:
+            while not ev.wait(timeout=0.5):
+                # If a thread died before signalling ready, its absence
+                # would let us hang forever; check liveness.
+                if all(not t.is_alive() for t in threads):
+                    log.error("all sync threads exited before signalling ready")
+                    return 1
+                if stop.is_set():
+                    return 0
+        if args.ready_file is not None:
+            args.ready_file.parent.mkdir(parents=True, exist_ok=True)
+            args.ready_file.touch()
+
+    if args.cold_copy:
+        # Each pair's thread returns after its first batch. Join them.
+        for t in threads:
+            t.join(timeout=10)
+        return 0
+
+    # Live mode: hand control to the threads; idle here until signalled.
+    while not stop.is_set():
+        stop.wait(0.5)
+
+    for t in threads:
+        t.join(timeout=5)
     return 0
 
 
