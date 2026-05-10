@@ -63,21 +63,26 @@ pkg_name() {
   #   - rootless by default: no `usermod -aG docker` + WSL shutdown step.
   #   - in-tree on Debian/Fedora/Arch: no third-party apt repo to pin.
   #   - distrobox already prefers podman; same backend everywhere.
-  # `podman compose` (subcommand, podman ≥ 4.0) provides the docker-compose-v2
-  # CLI surface; podman-compose is the python provider it shells out to when
-  # docker-compose isn't present. Both go in the install list so a fresh box
-  # has working compose without further configuration.
+  # `podman compose` (subcommand, podman ≥ 4.0) is a dispatcher that delegates
+  # to whichever compose provider it finds first on PATH. We install the Go
+  # docker-compose v2 binary (docker-compose-v2 on Debian, docker-compose on
+  # Arch/Fedora) -- *not* the python podman-compose. Reason: python
+  # podman-compose <=1.5.0 stat()s the joined ctx+dockerfile path before
+  # normpath, which fails when the build context is a symlink and the
+  # dockerfile uses `..` to escape it (kernel resolves the symlink first, so
+  # `..` walks to the wrong parent). The Go provider does lexical
+  # normalization and works correctly. Same provider Bazzite ships.
   case "${distro}:${generic}" in
     arch:container-runtime)    echo "podman" ;;
-    arch:container-compose)    echo "podman-compose" ;;
+    arch:container-compose)    echo "docker-compose" ;;
     arch:git)                  echo "git" ;;
     arch:distrobox)            echo "distrobox" ;;
     debian:container-runtime)  echo "podman" ;;
-    debian:container-compose)  echo "podman-compose" ;;
+    debian:container-compose)  echo "docker-compose-v2" ;;
     debian:git)                echo "git" ;;
     debian:distrobox)          echo "distrobox" ;;
     fedora:container-runtime)  echo "podman" ;;
-    fedora:container-compose)  echo "podman-compose" ;;
+    fedora:container-compose)  echo "docker-compose" ;;
     fedora:git)                echo "git" ;;
     fedora:distrobox)          echo "distrobox" ;;
     *)                         echo "$generic" ;;
@@ -105,9 +110,10 @@ check_podman() {
     return 1
   fi
   if ! podman compose --help &>/dev/null; then
-    err "podman compose subcommand unavailable. Install podman-compose:"
-    info "  Debian/Ubuntu:  sudo apt-get install podman-compose"
-    info "  Fedora:         sudo dnf install podman-compose"
+    err "podman compose subcommand unavailable. Install a compose provider:"
+    info "  Debian/Ubuntu:  sudo apt install --no-install-recommends docker-compose-v2"
+    info "  Fedora:         sudo dnf install docker-compose"
+    info "  Arch:           sudo pacman -S docker-compose"
     return 1
   fi
   ok "podman $(podman --version | awk '{print $3}') + compose detected"
@@ -338,7 +344,7 @@ cmd_install_deps() {
   install_cmd="$(pkg_install_cmd)"
 
   if [ "$distro" = "unknown" ] || [ -z "$install_cmd" ]; then
-    err "Unsupported distro. Install these manually: git, podman, podman-compose, distrobox"
+    err "Unsupported distro. Install these manually: git, podman, docker-compose-v2 (or docker-compose), distrobox"
     info "See docker/dev.Containerfile for the full list of dev tool dependencies."
     exit 1
   fi
@@ -346,7 +352,7 @@ cmd_install_deps() {
   info "Detected distro: ${BOLD}${distro}${NC}"
   echo ""
 
-  # No third-party repo dance: podman + podman-compose ship in stock apt /
+  # No third-party repo dance: podman + docker-compose-v2 ship in stock apt /
   # dnf / pacman repos on every distro we support. (docker-ce required
   # adding Docker's own keyring + sources file; podman doesn't.)
 
@@ -385,15 +391,33 @@ cmd_install_deps() {
 
   if [ "${#apt_missing[@]}" -gt 0 ]; then
     local packages=""
+    local compose_pkg=""
     for dep in "${apt_missing[@]}"; do
-      packages+=" $(pkg_name "$dep")"
+      local p
+      p="$(pkg_name "$dep")"
+      # docker-compose-v2 Recommends docker.io (the daemon) on Debian. We
+      # install with --no-install-recommends so we don't drag the daemon
+      # back in -- we just removed docker-ce on purpose.
+      if [ "$distro" = "debian" ] && [ "$p" = "docker-compose-v2" ]; then
+        compose_pkg="$p"
+      else
+        packages+=" $p"
+      fi
     done
 
     info "Missing (via package manager): ${apt_missing[*]}"
-    info "Running: ${install_cmd}${packages}"
-    echo ""
-    $install_cmd $packages
-    echo ""
+    if [ -n "$packages" ]; then
+      info "Running: ${install_cmd}${packages}"
+      echo ""
+      $install_cmd $packages
+      echo ""
+    fi
+    if [ -n "$compose_pkg" ]; then
+      info "Running: sudo apt install -y --no-install-recommends $compose_pkg"
+      echo ""
+      sudo apt install -y --no-install-recommends "$compose_pkg"
+      echo ""
+    fi
   fi
 
   # Always run after apt step on Debian -- handles both "distrobox missing" and

@@ -28,7 +28,7 @@ check_doctor_deps() {
     _fail "'podman info' failed (storage init issue?)"
     echo "       Try: podman system reset  (destroys local images)"
   elif ! podman compose --help &>/dev/null; then
-    _fail "podman compose subcommand unavailable (need podman-compose installed)"
+    _fail "podman compose subcommand unavailable (need docker-compose-v2 installed)"
     echo "       Run: just setup::deps"
   else
     _pass "podman $(podman --version | awk '{print $3}') + compose"
