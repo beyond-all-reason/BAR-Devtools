@@ -364,8 +364,10 @@ cmd_install_deps() {
   if ! command -v podman &>/dev/null; then
     missing+=("container-runtime")
   fi
-  if ! podman compose --help &>/dev/null 2>&1 \
-     && ! command -v podman-compose &>/dev/null; then
+  # We require the Go docker-compose specifically -- the python podman-compose
+  # has a path-resolution bug with symlinked build contexts. So check for the
+  # docker-compose binary, not "any compose provider on PATH."
+  if ! command -v docker-compose &>/dev/null; then
     missing+=("container-compose")
   fi
   if ! command -v distrobox &>/dev/null; then
