@@ -1178,11 +1178,24 @@ ensure_sync_daemon_deps_wsl() {
 # Idempotent. Loud-fail per binary so a partially-built container surfaces
 # clearly instead of silently leaving wrappers missing for the editor /
 # recipes that need them.
+# Container paths of binaries exposed to the host via distrobox-export
+# wrappers. Re-running export against a freshly-rebuilt container
+# overwrites any stale wrappers in place, so this list also implicitly
+# defines what gets refreshed when paths in the image move (e.g. lx
+# moving from /usr/bin to /usr/local/bin after the cargo-binstall switch).
+DEV_BINARIES=(
+  /usr/local/bin/emmylua_ls
+  /usr/local/bin/emmylua_check
+  /usr/bin/clangd
+  /usr/local/bin/stylua
+  /usr/local/bin/lx
+)
+
 export_dev_binaries() {
   local local_bin="$HOME/.local/bin" bin export_failures=()
   mkdir -p "$local_bin"
   step "Exporting dev binaries from $DEVTOOLS_DISTROBOX → $local_bin"
-  for bin in /usr/local/bin/emmylua_ls /usr/local/bin/emmylua_check /usr/bin/clangd /usr/local/bin/stylua /usr/local/bin/lx; do
+  for bin in "${DEV_BINARIES[@]}"; do
     info "  $(basename "$bin")"
     if ! distrobox enter "$DEVTOOLS_DISTROBOX" -- distrobox-export --bin "$bin" --export-path "$local_bin" >/dev/null; then
       export_failures+=("$bin")
@@ -1242,6 +1255,13 @@ cmd_setup_distrobox() {
   ok "Distrobox created: $DEVTOOLS_DISTROBOX"
   echo ""
 
+  # Refresh host wrappers before first-entry setup. Re-exporting overwrites
+  # any stale wrapper from a previous container that hardcodes an old
+  # binary path (e.g. /usr/bin/lx); without this, the first-entry
+  # `lx install-lua` resolves to the stale wrapper and fails.
+  export_dev_binaries || warn "Some dev binaries failed to export; recipes / editor that depend on them will need 'just setup::distrobox' rerun."
+  echo ""
+
   step "Running first-entry setup (lux lua tree)..."
   # Inner script must `set -e` so a failure in `lx install-lua` or the
   # symlink isn't swallowed by bash -c continuing past it. We leak the
@@ -1262,9 +1282,6 @@ cmd_setup_distrobox() {
     return 1
   fi
   ok "Lux lua tree configured"
-  echo ""
-
-  export_dev_binaries || warn "Some dev binaries failed to export; recipes / editor that depend on them will need 'just setup::distrobox' rerun."
   echo ""
 
   if is_wsl; then
