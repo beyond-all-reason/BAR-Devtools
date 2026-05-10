@@ -59,9 +59,13 @@ else
          Settings → Developer
            [x] Use the SSH agent
            [x] Integrate with 1Password CLI
+         Settings → Security
+           Lock after the system is idle for: 4 hours
+       (BAR's first-time download/build is long enough that the default
+        15 minutes will re-lock the vault mid-setup and break SSH ops.)
        Then sign in to your account if you haven't already.
 EOF
-    pause "Toggle both checkboxes in 1Password's Developer settings"
+    pause "Toggle both Developer checkboxes and bump idle-lock to 4 hours"
 fi
 
 # --- Step 4: socat in WSL ---
