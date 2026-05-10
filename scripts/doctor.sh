@@ -27,11 +27,11 @@ check_doctor_deps() {
   elif ! podman info &>/dev/null; then
     _fail "'podman info' failed (storage init issue?)"
     echo "       Try: podman system reset  (destroys local images)"
-  elif ! podman compose --help &>/dev/null; then
-    _fail "podman compose subcommand unavailable (need docker-compose-v2 installed)"
+  elif ! command -v docker-compose &>/dev/null; then
+    _fail "Go docker-compose not installed (podman compose dispatcher needs it as provider)"
     echo "       Run: just setup::deps"
   else
-    _pass "podman $(podman --version | awk '{print $3}') + compose"
+    _pass "podman $(podman --version | awk '{print $3}') + docker-compose $(docker-compose version --short 2>/dev/null)"
   fi
 
   if ! command -v distrobox &>/dev/null; then

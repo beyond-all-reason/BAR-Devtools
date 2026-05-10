@@ -109,14 +109,17 @@ check_podman() {
     info "  Try a fresh init:  podman system reset  (destroys local images)"
     return 1
   fi
-  if ! podman compose --help &>/dev/null; then
-    err "podman compose subcommand unavailable. Install a compose provider:"
+  # `podman compose` is a dispatcher; it'll happily delegate to the buggy
+  # python podman-compose if that's all it finds. Require the Go binary
+  # specifically -- see pkg_name() comment for the symlink/.. bug.
+  if ! command -v docker-compose &>/dev/null; then
+    err "Go docker-compose not installed (podman compose needs it as a provider):"
     info "  Debian/Ubuntu:  sudo apt install --no-install-recommends docker-compose-v2"
     info "  Fedora:         sudo dnf install docker-compose"
     info "  Arch:           sudo pacman -S docker-compose"
     return 1
   fi
-  ok "podman $(podman --version | awk '{print $3}') + compose detected"
+  ok "podman $(podman --version | awk '{print $3}') + docker-compose $(docker-compose version --short 2>/dev/null) detected"
 }
 
 check_distrobox() {
