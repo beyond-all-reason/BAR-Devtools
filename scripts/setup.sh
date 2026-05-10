@@ -1182,7 +1182,7 @@ export_dev_binaries() {
   local local_bin="$HOME/.local/bin" bin export_failures=()
   mkdir -p "$local_bin"
   step "Exporting dev binaries from $DEVTOOLS_DISTROBOX → $local_bin"
-  for bin in /usr/local/bin/emmylua_ls /usr/local/bin/emmylua_check /usr/bin/clangd /usr/local/bin/stylua /usr/bin/lx; do
+  for bin in /usr/local/bin/emmylua_ls /usr/local/bin/emmylua_check /usr/bin/clangd /usr/local/bin/stylua /usr/local/bin/lx; do
     info "  $(basename "$bin")"
     if ! distrobox enter "$DEVTOOLS_DISTROBOX" -- distrobox-export --bin "$bin" --export-path "$local_bin" >/dev/null; then
       export_failures+=("$bin")
