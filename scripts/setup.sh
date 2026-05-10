@@ -63,22 +63,17 @@ pkg_name() {
   #   - rootless by default: no `usermod -aG docker` + WSL shutdown step.
   #   - in-tree on Debian/Fedora/Arch: no third-party apt repo to pin.
   #   - distrobox already prefers podman; same backend everywhere.
-  # `podman compose` (subcommand, podman ≥ 4.0) is a dispatcher that delegates
-  # to whichever compose provider it finds first on PATH. We install the Go
-  # docker-compose v2 binary (docker-compose-v2 on Debian, docker-compose on
-  # Arch/Fedora) -- *not* the python podman-compose. Reason: python
-  # podman-compose <=1.5.0 stat()s the joined ctx+dockerfile path before
-  # normpath, which fails when the build context is a symlink and the
-  # dockerfile uses `..` to escape it (kernel resolves the symlink first, so
-  # `..` walks to the wrong parent). The Go provider does lexical
-  # normalization and works correctly. Same provider Bazzite ships.
+  # Compose: Fedora/Arch's docker-compose package is v5+ (works with podman
+  # natively). Debian's apt only has v2.40 which has the bake/buildkit
+  # incompatibility with podman -- on Debian we install v5 from upstream
+  # GitHub releases via install_compose_upstream(), not from apt, so there
+  # is no debian:container-compose entry below.
   case "${distro}:${generic}" in
     arch:container-runtime)    echo "podman" ;;
     arch:container-compose)    echo "docker-compose" ;;
     arch:git)                  echo "git" ;;
     arch:distrobox)            echo "distrobox" ;;
     debian:container-runtime)  echo "podman" ;;
-    debian:container-compose)  echo "docker-compose-v2" ;;
     debian:git)                echo "git" ;;
     debian:distrobox)          echo "distrobox" ;;
     fedora:container-runtime)  echo "podman" ;;
@@ -111,12 +106,10 @@ check_podman() {
   fi
   # `podman compose` is a dispatcher; it'll happily delegate to the buggy
   # python podman-compose if that's all it finds. Require the Go binary
-  # specifically -- see pkg_name() comment for the symlink/.. bug.
+  # specifically. See install_compose_upstream() for why we want v5+.
   if ! command -v docker-compose &>/dev/null; then
-    err "Go docker-compose not installed (podman compose needs it as a provider):"
-    info "  Debian/Ubuntu:  sudo apt install --no-install-recommends docker-compose-v2"
-    info "  Fedora:         sudo dnf install docker-compose"
-    info "  Arch:           sudo pacman -S docker-compose"
+    err "docker-compose not installed (podman compose dispatcher needs it as provider)."
+    info "  Run: just setup::deps"
     return 1
   fi
   ok "podman $(podman --version | awk '{print $3}') + docker-compose $(docker-compose version --short 2>/dev/null) detected"
@@ -311,7 +304,7 @@ ensure_windows_python() {
 install_distrobox_upstream() {
   local current
   current="$(/usr/local/bin/distrobox --version 2>/dev/null | awk '{print $NF}')"
-  if [ -n "$current" ] && _distrobox_ver_ge "$current" "1.8.2.3"; then
+  if [ -n "$current" ] && _ver_ge "$current" "1.8.2.3"; then
     ok "distrobox already up-to-date at /usr/local/bin: $current"
     return 0
   fi
@@ -324,7 +317,7 @@ install_distrobox_upstream() {
 }
 
 # Pure-bash version comparison: returns 0 if $1 >= $2, else 1.
-_distrobox_ver_ge() {
+_ver_ge() {
   local IFS=.
   local -a a=($1) b=($2)
   local i max=${#a[@]}
@@ -337,6 +330,50 @@ _distrobox_ver_ge() {
   return 0
 }
 
+# Docker Compose v5.x from upstream releases. Used when the distro package
+# is too old. Compose v2.x (Ubuntu 24.04 ships 2.40.3) defaults to bake +
+# requires BuildKit, which podman doesn't implement -- builds fail with
+# "Cannot connect to the Docker daemon" against podman's compat socket.
+# Compose v5 (Dec 2025) dropped the internal BuildKit builder and degrades
+# gracefully when the daemon advertises Builder-Version=1 (no BuildKit),
+# which is what podman does. Fedora/Arch ship v5+ in-tree; Debian doesn't.
+# Installs to /usr/local/lib/docker/cli-plugins (where `podman compose`
+# discovers external providers) + symlinks /usr/local/bin/docker-compose
+# (so legacy `docker-compose` invocations and our `command -v` checks work).
+# Idempotent: skips if v5+ is already on PATH (regardless of source).
+install_compose_upstream() {
+  local min_version="5.0.0"
+  local pin_version="5.1.3"
+  local current=""
+  if command -v docker-compose &>/dev/null; then
+    current="$(docker-compose version --short 2>/dev/null | sed 's/^v//')"
+  fi
+  if [ -n "$current" ] && _ver_ge "$current" "$min_version"; then
+    ok "docker-compose ${current} already installed (>= ${min_version})"
+    return 0
+  fi
+
+  local arch
+  case "$(uname -m)" in
+    x86_64)  arch="x86_64" ;;
+    aarch64) arch="aarch64" ;;
+    *) err "install_compose_upstream: unsupported arch $(uname -m)"; return 1 ;;
+  esac
+
+  local plugin_dir="/usr/local/lib/docker/cli-plugins"
+  local target="${plugin_dir}/docker-compose"
+  local symlink="/usr/local/bin/docker-compose"
+  local url="https://github.com/docker/compose/releases/download/v${pin_version}/docker-compose-linux-${arch}"
+
+  info "Installing docker-compose v${pin_version} from upstream releases (apt's is ${current:-missing})..."
+  sudo mkdir -p "$plugin_dir"
+  sudo curl -fsSL "$url" -o "$target"
+  sudo chmod +x "$target"
+  sudo ln -sf "$target" "$symlink"
+  hash -r
+  ok "docker-compose installed: $(docker-compose version --short 2>/dev/null)"
+}
+
 cmd_install_deps() {
   echo -e "${BOLD}=== Install System Dependencies ===${NC}"
   echo ""
@@ -347,7 +384,7 @@ cmd_install_deps() {
   install_cmd="$(pkg_install_cmd)"
 
   if [ "$distro" = "unknown" ] || [ -z "$install_cmd" ]; then
-    err "Unsupported distro. Install these manually: git, podman, docker-compose-v2 (or docker-compose), distrobox"
+    err "Unsupported distro. Install these manually: git, podman, docker-compose >= 5.0, distrobox"
     info "See docker/dev.Containerfile for the full list of dev tool dependencies."
     exit 1
   fi
@@ -355,9 +392,11 @@ cmd_install_deps() {
   info "Detected distro: ${BOLD}${distro}${NC}"
   echo ""
 
-  # No third-party repo dance: podman + docker-compose-v2 ship in stock apt /
-  # dnf / pacman repos on every distro we support. (docker-ce required
-  # adding Docker's own keyring + sources file; podman doesn't.)
+  # No third-party repo dance: podman ships in stock apt / dnf / pacman repos
+  # on every distro we support. (docker-ce required adding Docker's own
+  # keyring + sources file; podman doesn't.) Compose: Fedora/Arch ship v5+
+  # in-tree; Debian's apt version is v2.40 (too old, see install_compose_upstream
+  # for why), so we install upstream there.
 
   local missing=()
 
@@ -367,10 +406,10 @@ cmd_install_deps() {
   if ! command -v podman &>/dev/null; then
     missing+=("container-runtime")
   fi
-  # We require the Go docker-compose specifically -- the python podman-compose
-  # has a path-resolution bug with symlinked build contexts. So check for the
-  # docker-compose binary, not "any compose provider on PATH."
-  if ! command -v docker-compose &>/dev/null; then
+  # Compose check: only delegate to apt/dnf/pacman on non-Debian. Debian
+  # always uses install_compose_upstream below (apt's docker-compose-v2 is
+  # too old to work with podman -- bake/buildkit incompatibility).
+  if [ "$distro" != "debian" ] && ! command -v docker-compose &>/dev/null; then
     missing+=("container-compose")
   fi
   if ! command -v distrobox &>/dev/null; then
@@ -385,52 +424,27 @@ cmd_install_deps() {
     apt_missing+=("$tool")
   done
 
-  if [ "${#missing[@]}" -eq 0 ]; then
-    ok "All package-manager dependencies already installed."
-    echo ""
-
-    # Even when nothing was missing, ensure distrobox on Debian is the upstream version.
-    [ "$distro" = "debian" ] && install_distrobox_upstream
-    return 0
-  fi
-
   if [ "${#apt_missing[@]}" -gt 0 ]; then
     local packages=""
-    local compose_pkg=""
     for dep in "${apt_missing[@]}"; do
-      local p
-      p="$(pkg_name "$dep")"
-      # docker-compose-v2 Recommends docker.io (the daemon) on Debian. We
-      # install with --no-install-recommends so we don't drag the daemon
-      # back in -- we just removed docker-ce on purpose.
-      if [ "$distro" = "debian" ] && [ "$p" = "docker-compose-v2" ]; then
-        compose_pkg="$p"
-      else
-        packages+=" $p"
-      fi
+      packages+=" $(pkg_name "$dep")"
     done
 
     info "Missing (via package manager): ${apt_missing[*]}"
-    if [ -n "$packages" ]; then
-      info "Running: ${install_cmd}${packages}"
-      echo ""
-      $install_cmd $packages
-      echo ""
-    fi
-    if [ -n "$compose_pkg" ]; then
-      info "Running: sudo apt install -y --no-install-recommends $compose_pkg"
-      echo ""
-      sudo apt install -y --no-install-recommends "$compose_pkg"
-      echo ""
-    fi
+    info "Running: ${install_cmd}${packages}"
+    echo ""
+    $install_cmd $packages
+    echo ""
   fi
 
-  # Always run after apt step on Debian -- handles both "distrobox missing" and
-  # "apt's distrobox installed but too old."
+  # Upstream-tarball installs (idempotent: each function self-skips if the
+  # right version is already on PATH).
   if [ "$distro" = "debian" ]; then
     install_distrobox_upstream
     echo ""
   fi
+  install_compose_upstream
+  echo ""
 
   # No daemon to enable, no group to join: podman is rootless. The whole
   # `usermod -aG docker $USER` + `wsl --shutdown` pause that used to live
