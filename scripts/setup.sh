@@ -112,7 +112,14 @@ check_podman() {
     info "  Run: just setup::deps"
     return 1
   fi
-  ok "podman $(podman --version | awk '{print $3}') + docker-compose $(docker-compose version --short 2>/dev/null) detected"
+  # docker-compose dials the rootless podman API socket; it has to be active.
+  local sock="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"
+  if [ ! -S "$sock" ]; then
+    err "podman socket not active at $sock (docker-compose can't reach the daemon)."
+    info "  Run: just setup::deps"
+    return 1
+  fi
+  ok "podman $(podman --version | awk '{print $3}') + docker-compose $(docker-compose version --short 2>/dev/null) + socket detected"
 }
 
 check_distrobox() {
@@ -446,11 +453,45 @@ cmd_install_deps() {
   install_compose_upstream
   echo ""
 
-  # No daemon to enable, no group to join: podman is rootless. The whole
-  # `usermod -aG docker $USER` + `wsl --shutdown` pause that used to live
-  # here is gone with docker-ce.
+  # Enable the rootless podman API socket so docker-compose (and anything
+  # else that speaks the docker API) can reach the daemon. Rootless still
+  # means no group dance -- this is just a per-user systemd socket.
+  ensure_podman_socket
+  echo ""
 
   ok "Dependencies installed successfully."
+}
+
+# Rootless podman exposes a docker-compatible REST API at
+# $XDG_RUNTIME_DIR/podman/podman.sock, but only when podman.socket is
+# active. docker-compose v5 dials this path; without it you get
+# "no such file or directory" build failures. The socket is shipped as
+# a systemd --user unit but isn't enabled by default. Also enable linger
+# so the user systemd instance (and the socket) survives shell logout --
+# critical on WSL2 where systemd-user dies with the last login session
+# otherwise. Idempotent.
+ensure_podman_socket() {
+  if ! systemctl --user is-enabled podman.socket &>/dev/null; then
+    info "Enabling user systemd podman.socket..."
+    systemctl --user enable podman.socket
+  fi
+  if ! systemctl --user is-active podman.socket &>/dev/null; then
+    info "Starting user systemd podman.socket..."
+    systemctl --user start podman.socket
+  fi
+
+  if ! loginctl show-user "$USER" 2>/dev/null | grep -q '^Linger=yes'; then
+    info "Enabling loginctl linger for ${USER} (so podman.socket survives logout)..."
+    sudo loginctl enable-linger "$USER"
+  fi
+
+  local sock="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"
+  if [ -S "$sock" ]; then
+    ok "podman socket active at $sock"
+  else
+    err "podman.socket says active but $sock isn't there. Try: systemctl --user restart podman.socket"
+    return 1
+  fi
 }
 
 # Resolve the bar_debug_launcher checkout. repos.local.conf may point it at an

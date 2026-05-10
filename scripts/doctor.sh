@@ -30,8 +30,11 @@ check_doctor_deps() {
   elif ! command -v docker-compose &>/dev/null; then
     _fail "Go docker-compose not installed (podman compose dispatcher needs it as provider)"
     echo "       Run: just setup::deps"
+  elif [ ! -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock" ]; then
+    _fail "podman API socket not active (docker-compose can't reach the daemon)"
+    echo "       Run: systemctl --user enable --now podman.socket  (or just setup::deps)"
   else
-    _pass "podman $(podman --version | awk '{print $3}') + docker-compose $(docker-compose version --short 2>/dev/null)"
+    _pass "podman $(podman --version | awk '{print $3}') + docker-compose $(docker-compose version --short 2>/dev/null) + socket"
   fi
 
   if ! command -v distrobox &>/dev/null; then
