@@ -23,38 +23,15 @@ RUN dnf install -y --setopt=install_weak_deps=False \
     && dnf clean all \
     && ln -s /usr/bin/lua-5.1 /usr/local/bin/lua
 
+# Install the starship binary so a contributor whose host ~/.zshrc (or
+# ~/.bashrc) inits starship gets their prompt inside `distrobox enter
+# bar-dev`. distrobox shares $HOME but not /usr/local/bin, so a host-side
+# `starship` binary isn't visible in the container -- the install here is
+# what makes the user's existing rc work. Deliberately no /etc/profile.d/
+# auto-init shim: contributors who don't use starship get a stock prompt,
+# and we don't have to dispatch on $SHELL / emulation mode.
 RUN dnf install -y starship \
     || curl -sS https://starship.rs/install.sh | sh -s -- -y -b /usr/local/bin
-
-# Enable starship for `distrobox enter bar-dev` interactive sessions without
-# touching the user's host ~/.bashrc. Login shells source /etc/profile.d/*
-# BEFORE the user's home rc files, so any custom PS1 they have wins. Recipes
-# that auto-enter via enter_distrobox run `bash -s` (non-interactive,
-# non-login) and skip profile.d entirely -- zero overhead for `just bar::*`.
-#
-# distrobox enter inherits the host's $SHELL, so an interactive login may be
-# either bash or zsh. Fedora's /etc/zshrc loops over /etc/profile.d/*.sh, so
-# unconditionally evaling `starship init bash` would feed `shopt` to zsh and
-# error out at every prompt. Dispatch by detected shell instead.
-#
-# `lx shell` launches zsh under `emulate sh` (POSIX mode), which keeps
-# $ZSH_VERSION set but disables [[ pat == (...) ]] -- exactly what
-# `starship init zsh` emits. Skip the init when zsh isn't in native mode
-# so `just bar::units-shell` doesn't print a parse error at every entry.
-# `case` (not `[[`) so the guard itself parses under emulation.
-RUN printf '%s\n' \
-        '# /etc/profile.d/starship.sh -- baked by dev.Containerfile' \
-        '# User PS1 in their shell rc still wins (loaded after this).' \
-        'command -v starship >/dev/null 2>&1 || return 0' \
-        'if [ -n "${ZSH_VERSION:-}" ]; then' \
-        '    case "$(emulate 2>/dev/null)" in' \
-        '        zsh) eval "$(starship init zsh)" ;;' \
-        '    esac' \
-        'elif [ -n "${BASH_VERSION:-}" ]; then' \
-        '    eval "$(starship init bash)"' \
-        'fi' \
-    > /etc/profile.d/starship.sh \
-    && chmod 0644 /etc/profile.d/starship.sh
 
 # lux (lumen-oss/lux) is fetched via cargo-binstall instead of a hand-rolled
 # GitHub Releases query. cargo-binstall recognizes a wide range of asset
