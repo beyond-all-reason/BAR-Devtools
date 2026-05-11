@@ -1317,18 +1317,37 @@ cmd_setup_distrobox() {
   # else triggers an install. lx's only command that actually fetches
   # test_dependencies is `lx test`, which runs the suite as a side effect
   # -- acceptable cost during setup, where the user already expects a
-  # multi-minute operation. Tolerate test failures: setup should complete
-  # even if BAR's tests are red, so the user can still get into the box
-  # to fix them.
+  # multi-minute operation.
+  #
+  # Verify *both* the lx exit code and a canary file (busted) afterwards.
+  # lx 0.29 has at least one failure mode where it prints an error,
+  # writes out a stub .lux/ tree, and still exits 0 (we hit it with the
+  # dkjson integrity check). Canary check catches that. On failure, exit
+  # non-zero so the "Distrobox dev environment ready" line never prints
+  # under a partially populated tree.
   local bar_dir="$DEVTOOLS_DIR/Beyond-All-Reason"
   if [ -d "$bar_dir/.git" ] || [ -f "$bar_dir/lux.toml" ]; then
     step "Warming Beyond-All-Reason/.lux/ via 'lx test'..."
-    if distrobox enter "$DEVTOOLS_DISTROBOX" -- \
-         bash -c "cd $(printf '%q' "$bar_dir") && lx --lua-version 5.1 test"; then
+    local lx_log lx_status
+    lx_log="$(mktemp -t lx-warmup.XXXXXX.log)"
+    set +e
+    distrobox enter "$DEVTOOLS_DISTROBOX" -- \
+        bash -c "cd $(printf '%q' "$bar_dir") && lx --lua-version 5.1 test" \
+      2>&1 | tee "$lx_log"
+    lx_status=${PIPESTATUS[0]}
+    set -e
+    local busted_canary="$bar_dir/.lux/5.1/test_dependencies/5.1/bin/busted"
+    if [ "$lx_status" -eq 0 ] && [ -e "$busted_canary" ]; then
       ok "Test deps installed (busted on PATH inside bar-dev)"
+      rm -f "$lx_log"
     else
-      warn "lx test reported failures; .lux/ may be partially populated."
-      info "  Re-run 'just bar::units' from a fresh shell to retry."
+      err "lx test failed during warm-up (exit=$lx_status, busted canary present=$([ -e "$busted_canary" ] && echo yes || echo no))."
+      info "  Full lx output: $lx_log"
+      info "  Common causes:"
+      info "    - duplicate-entrypoints: a transitive dep is also listed explicitly in BAR's lux.toml"
+      info "    - integrity error / not in lockfile: luarocks moved; run 'lx update <pkg>' inside bar-dev to refresh lux.lock"
+      info "  After fixing in BAR, re-run 'just setup::distrobox'."
+      return 1
     fi
     echo ""
   else
