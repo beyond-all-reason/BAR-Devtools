@@ -5,7 +5,7 @@
 # the WSL-only sister container docker/sync.Containerfile). Same base image
 # for both keeps interactive dev shells (`distrobox enter bar-dev`) feeling
 # the same as the sync container's runtime.
-FROM registry.fedoraproject.org/fedora:42
+FROM registry.fedoraproject.org/fedora:43
 
 RUN dnf install -y --setopt=install_weak_deps=False \
         compat-lua compat-lua-devel readline-devel \

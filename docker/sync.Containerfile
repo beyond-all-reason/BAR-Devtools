@@ -14,7 +14,7 @@
 #
 # Watchman install is duplicated from docker/dev.Containerfile (Meta's RPM
 # pin matters). Bump in lockstep when Meta cuts a new release.
-FROM registry.fedoraproject.org/fedora:42
+FROM registry.fedoraproject.org/fedora:43
 
 # python3 is in the base image; we need pywatchman for the subscription API
 # and rsync for the actual file copy. inotify-tools is handy for live debug
