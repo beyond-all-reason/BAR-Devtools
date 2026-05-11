@@ -382,6 +382,14 @@ install_compose_upstream() {
 }
 
 cmd_install_deps() {
+  # Refuse to run inside bar-dev: `sudo dnf install systemd-udev` etc.
+  # need a real systemd to drive the post-install scriptlets, and
+  # rootless podman containers don't expose host dbus -- the transaction
+  # aborts with "Failed to send reload request: Permission denied"
+  # halfway through. Better to bounce contributors out cleanly than to
+  # half-install host packages into a container's filesystem.
+  require_host
+
   echo -e "${BOLD}=== Install System Dependencies ===${NC}"
   echo ""
 
@@ -1219,6 +1227,11 @@ export_dev_binaries() {
 DEV_IMAGE="bar-dev"
 
 cmd_setup_distrobox() {
+  # `podman build` and `distrobox create` need to talk to the host's
+  # podman daemon -- neither tool is even installed inside bar-dev, so
+  # the failure would otherwise be a cryptic 127.
+  require_host
+
   echo -e "${BOLD}=== Distrobox Dev Environment ===${NC}"
   echo ""
 
@@ -1837,6 +1850,12 @@ clone_for_features() {
 }
 
 cmd_init() {
+  # Umbrella first-time setup runs cmd_install_deps + cmd_setup_distrobox
+  # (and a half-dozen host-side things in between). Catch the
+  # in-container mistake here so we don't run several minutes of prompts
+  # before tripping the inner guard.
+  require_host
+
   echo -e "${BOLD}==========================================${NC}"
   echo -e "${BOLD}  BAR Dev Environment - First Time Setup${NC}"
   echo -e "${BOLD}==========================================${NC}"
@@ -2054,6 +2073,10 @@ cmd_init() {
 }
 
 cmd_setup() {
+  # `setup::check` -- verifies podman + builds the teiserver compose
+  # stack; both need the host's container daemon.
+  require_host
+
   echo -e "${BOLD}=== BAR Dev Environment Setup ===${NC}"
   echo ""
   check_prerequisites || exit 1
