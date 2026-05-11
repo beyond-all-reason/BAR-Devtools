@@ -177,6 +177,8 @@ units *args: require-bar
 # Drop into an interactive shell with busted on PATH (for unit-test work).
 # Named units-shell, not test-shell, because `bar::test` runs both units AND
 # integrations -- this REPL is specifically the unit-test environment.
+# Assumes .lux/ is already populated; `setup::distrobox` does that for you
+# after nuking the cache, and `bar::units` repopulates it as a side effect.
 units-shell: require-bar
     #!/usr/bin/env bash
     set -e

@@ -1311,6 +1311,32 @@ cmd_setup_distrobox() {
   ok "Lux lua tree configured"
   echo ""
 
+  # Repopulate Beyond-All-Reason/.lux/ test_dependencies if BAR is cloned.
+  # We nuked .lux/ earlier; without this, the next `bar::units-shell` lands
+  # in an empty environment (`busted: command not found`) until something
+  # else triggers an install. lx's only command that actually fetches
+  # test_dependencies is `lx test`, which runs the suite as a side effect
+  # -- acceptable cost during setup, where the user already expects a
+  # multi-minute operation. Tolerate test failures: setup should complete
+  # even if BAR's tests are red, so the user can still get into the box
+  # to fix them.
+  local bar_dir="$DEVTOOLS_DIR/Beyond-All-Reason"
+  if [ -d "$bar_dir/.git" ] || [ -f "$bar_dir/lux.toml" ]; then
+    step "Warming Beyond-All-Reason/.lux/ via 'lx test'..."
+    if distrobox enter "$DEVTOOLS_DISTROBOX" -- \
+         bash -c "cd $(printf '%q' "$bar_dir") && lx --lua-version 5.1 test"; then
+      ok "Test deps installed (busted on PATH inside bar-dev)"
+    else
+      warn "lx test reported failures; .lux/ may be partially populated."
+      info "  Re-run 'just bar::units' from a fresh shell to retry."
+    fi
+    echo ""
+  else
+    info "Beyond-All-Reason not cloned; skipping .lux/ warm-up."
+    info "  Run 'just repos::clone bar' then 'just bar::units' to populate."
+    echo ""
+  fi
+
   if is_wsl; then
     cmd_setup_sync_distrobox || warn "bar-sync container build failed; 'just bar::launch' will not be able to mirror edits to /mnt/c."
     echo ""
