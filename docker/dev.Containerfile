@@ -36,12 +36,20 @@ RUN dnf install -y starship \
 # either bash or zsh. Fedora's /etc/zshrc loops over /etc/profile.d/*.sh, so
 # unconditionally evaling `starship init bash` would feed `shopt` to zsh and
 # error out at every prompt. Dispatch by detected shell instead.
+#
+# `lx shell` launches zsh under `emulate sh` (POSIX mode), which keeps
+# $ZSH_VERSION set but disables [[ pat == (...) ]] -- exactly what
+# `starship init zsh` emits. Skip the init when zsh isn't in native mode
+# so `just bar::units-shell` doesn't print a parse error at every entry.
+# `case` (not `[[`) so the guard itself parses under emulation.
 RUN printf '%s\n' \
         '# /etc/profile.d/starship.sh -- baked by dev.Containerfile' \
         '# User PS1 in their shell rc still wins (loaded after this).' \
         'command -v starship >/dev/null 2>&1 || return 0' \
         'if [ -n "${ZSH_VERSION:-}" ]; then' \
-        '    eval "$(starship init zsh)"' \
+        '    case "$(emulate 2>/dev/null)" in' \
+        '        zsh) eval "$(starship init zsh)" ;;' \
+        '    esac' \
         'elif [ -n "${BASH_VERSION:-}" ]; then' \
         '    eval "$(starship init bash)"' \
         'fi' \
