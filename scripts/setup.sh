@@ -1248,6 +1248,20 @@ cmd_setup_distrobox() {
     || podman rm -f "$DEVTOOLS_DISTROBOX" >/dev/null 2>&1 \
     || true
 
+  # Nuke per-repo lux caches: the .so artifacts in `.lux/` are compiled
+  # inside the container and link against whatever libc was visible at
+  # build time (distrobox passes the host libc through). When the base
+  # image or host libc changes, the cached .so files start failing with
+  # `GLIBC_X.YZ not found`. Easier to invalidate on every box rebuild
+  # than to detect drift after the fact.
+  local lux_dir="$DEVTOOLS_DIR/Beyond-All-Reason/.lux"
+  if [ -d "$lux_dir" ]; then
+    step "Clearing stale lux cache at $lux_dir..."
+    rm -rf "$lux_dir"
+    ok "Lux cache cleared (will rebuild on next 'just bar::units' / 'lx' run)"
+    echo ""
+  fi
+
   step "Creating distrobox '$DEVTOOLS_DISTROBOX'..."
   # podman tags built images under localhost/<name>; distrobox needs the fully
   # qualified ref so it doesn't try to pull from a registry.
