@@ -31,10 +31,20 @@ RUN dnf install -y starship \
 # BEFORE the user's home rc files, so any custom PS1 they have wins. Recipes
 # that auto-enter via enter_distrobox run `bash -s` (non-interactive,
 # non-login) and skip profile.d entirely -- zero overhead for `just bar::*`.
+#
+# distrobox enter inherits the host's $SHELL, so an interactive login may be
+# either bash or zsh. Fedora's /etc/zshrc loops over /etc/profile.d/*.sh, so
+# unconditionally evaling `starship init bash` would feed `shopt` to zsh and
+# error out at every prompt. Dispatch by detected shell instead.
 RUN printf '%s\n' \
         '# /etc/profile.d/starship.sh -- baked by dev.Containerfile' \
-        '# User PS1 in ~/.bashrc still wins (loaded after this).' \
-        'command -v starship >/dev/null 2>&1 && eval "$(starship init bash)"' \
+        '# User PS1 in their shell rc still wins (loaded after this).' \
+        'command -v starship >/dev/null 2>&1 || return 0' \
+        'if [ -n "${ZSH_VERSION:-}" ]; then' \
+        '    eval "$(starship init zsh)"' \
+        'elif [ -n "${BASH_VERSION:-}" ]; then' \
+        '    eval "$(starship init bash)"' \
+        'fi' \
     > /etc/profile.d/starship.sh \
     && chmod 0644 /etc/profile.d/starship.sh
 
