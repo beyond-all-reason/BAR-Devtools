@@ -39,9 +39,13 @@ RUN dnf install -y starship \
 # v0.29.0, dropping .deb in favor of tarballs) we don't have to chase it
 # here. Bootstrap cargo-binstall first since neither Fedora's repos nor the
 # stock `cargo` package ships it.
-# LUX_VERSION is empty -> install the latest release; pass `--build-arg
-# LUX_VERSION=0.28.0` to pin.
-ARG LUX_VERSION=
+#
+# Pinned, not floating: BAR's CI installs a specific lx version, and lockfile
+# integrity checks tightened between 0.26 and 0.29. A floating local version
+# means contributors regenerate lockfiles that CI's older lx then rejects
+# (and vice versa). Bump in lockstep with .github/workflows/test_unit.yml in
+# the BAR repo. Pass `--build-arg LUX_VERSION=X.Y.Z` to override locally.
+ARG LUX_VERSION=0.29.0
 RUN curl -L --proto '=https' --tlsv1.2 -sSf \
         https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh \
       | bash \
