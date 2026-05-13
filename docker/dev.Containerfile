@@ -48,8 +48,8 @@ RUN dnf install -y starship \
 ARG LUX_VERSION=0.29.0
 RUN curl -L --proto '=https' --tlsv1.2 -sSf \
         https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh \
-      | bash \
-    && /root/.cargo/bin/cargo-binstall --no-confirm \
+      | bash
+RUN /root/.cargo/bin/cargo-binstall --no-confirm \
         ${LUX_VERSION:+--version $LUX_VERSION} \
         --install-path /usr/local/bin \
         lux-cli \
