@@ -1376,8 +1376,19 @@ SYNC_IMAGE="bar-sync"
 cmd_setup_sync_distrobox() {
   is_wsl || return 0
 
+  # NB: this function is called as `cmd_setup_sync_distrobox || warn ...` from
+  # cmd_setup_distrobox, which disables `set -e` for the entire body (bash
+  # errexit suppression rule for functions on the LHS of ||). Every failure-
+  # sensitive command below therefore needs an explicit `|| { err; return 1; }`
+  # -- otherwise a failed `podman build` falls through to `distrobox create`,
+  # which tries to pull the missing image from a registry and dies with a
+  # confusing "connection refused to localhost:443" instead of the real RPM /
+  # build error.
   step "Building sync container image ($SYNC_IMAGE)..."
-  podman build -t "$SYNC_IMAGE" -f "$DEVTOOLS_DIR/docker/sync.Containerfile" "$DEVTOOLS_DIR"
+  if ! podman build -t "$SYNC_IMAGE" -f "$DEVTOOLS_DIR/docker/sync.Containerfile" "$DEVTOOLS_DIR"; then
+    err "podman build failed for $SYNC_IMAGE -- see output above for the real cause."
+    return 1
+  fi
   ok "Image built: $SYNC_IMAGE"
 
   distrobox stop --yes "$DEVTOOLS_SYNC_DISTROBOX" >/dev/null 2>&1 || true
@@ -1386,7 +1397,10 @@ cmd_setup_sync_distrobox() {
     || true
 
   step "Creating distrobox '$DEVTOOLS_SYNC_DISTROBOX'..."
-  distrobox create --name "$DEVTOOLS_SYNC_DISTROBOX" --image "localhost/$SYNC_IMAGE" --yes
+  if ! distrobox create --name "$DEVTOOLS_SYNC_DISTROBOX" --image "localhost/$SYNC_IMAGE" --yes; then
+    err "distrobox create failed for $DEVTOOLS_SYNC_DISTROBOX."
+    return 1
+  fi
   ok "Distrobox created: $DEVTOOLS_SYNC_DISTROBOX"
 
   # Smoke-test: confirm pywatchman + watchman both load inside the container

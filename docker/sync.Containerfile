@@ -14,7 +14,14 @@
 #
 # Watchman install is duplicated from docker/dev.Containerfile (Meta's RPM
 # pin matters). Bump in lockstep when Meta cuts a new release.
-FROM registry.fedoraproject.org/fedora:43
+#
+# Base pinned to fedora:42 (asymmetric with bar-dev's fedora:43) because Meta
+# only publishes fc42 watchman RPMs and those link libdwarf.so.0, which fc43
+# dropped/renamed -- dnf can't satisfy the dep on fc43, the build dies. This
+# container is single-purpose (watchman + rsync + pywatchman) so tracking
+# Fedora's latest matters less than matching the available RPM. Revisit when
+# Meta starts shipping an fc43 build.
+FROM registry.fedoraproject.org/fedora:42
 
 # python3 is in the base image; we need pywatchman for the subscription API
 # and rsync for the actual file copy. inotify-tools is handy for live debug
