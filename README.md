@@ -167,6 +167,8 @@ just bar::units         # run busted unit tests
 just bar::units-shell   # interactive busted shell,
                         #   run `busted -t focus` to test specs tagged "#focus"
                         #   for example: `it "should do something #focus", function()`
+just bar::lx-shell      # interactive lx shell for package work
+                        #   (`lx add <pkg>`, `lx sync`, `lx install`, etc.)
 ```
 
 ### Teiserver development

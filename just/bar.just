@@ -177,6 +177,7 @@ units *args: require-bar
 # Drop into an interactive shell with busted on PATH (for unit-test work).
 # Named units-shell, not test-shell, because `bar::test` runs both units AND
 # integrations -- this REPL is specifically the unit-test environment.
+# For non-test package work (lx add, lx install, etc.) use `bar::lx-shell`.
 # Assumes .lux/ is already populated; `setup::distrobox` does that for you
 # after nuking the cache, and `bar::units` repopulates it as a side effect.
 units-shell: require-bar
@@ -198,6 +199,21 @@ units-shell: require-bar
     info "Type 'exit' to return."
     echo ""
     distrobox_exec_interactive lx --lua-version 5.1 shell --test --no-loader
+
+# Drop into an interactive lux shell scoped to BAR's lux.toml. Use this for
+# package work (`lx add foo`, `lx install`, `lx sync`, ad-hoc inspection)
+# rather than wrapping each subcommand in its own recipe -- this is the one
+# door into lux. For the unit-test environment with busted on PATH, use
+# `bar::units-shell` instead.
+lx-shell: require-bar
+    #!/usr/bin/env bash
+    set -e
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    cd "$BAR_DIR"
+    ok "Entering lx shell (package work)."
+    info "Examples: 'lx add <pkg>', 'lx sync', 'lx install'. Type 'exit' to return."
+    echo ""
+    distrobox_exec_interactive lx --lua-version 5.1 shell --no-loader
 
 # Run headless integration tests (x86-64 only)
 integrations *args: require-bar

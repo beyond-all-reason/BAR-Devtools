@@ -1271,6 +1271,14 @@ cmd_setup_distrobox() {
   if [ -d "$lux_dir" ]; then
     step "Clearing stale lux cache at $lux_dir..."
     rm -rf "$lux_dir"
+    # Also remove lux.lock. lx's add_entrypoint / add_dependency push without
+    # dedup, so syncing against an empty install tree but a populated
+    # lockfile (exactly what we'd have after the wipe above) doubles every
+    # entry on the warmup run below. Deleting the lockfile forces warmup to
+    # regenerate it from lux.toml cleanly. The regenerated file should match
+    # HEAD; if it doesn't, that's a real lux.toml drift worth seeing.
+    # Drop this once the upstream lux fix lands and we've bumped LUX_VERSION.
+    rm -f "$DEVTOOLS_DIR/Beyond-All-Reason/lux.lock"
     ok "Lux cache cleared (will rebuild on next 'just bar::units' / 'lx' run)"
     echo ""
   fi
@@ -2095,6 +2103,7 @@ cmd_init() {
     echo -e "    ${BOLD}just services::up lobby${NC}       Launch bar-lobby and connect"
     echo -e "    ${BOLD}just bar::units${NC}               Run busted Lua unit tests"
     echo -e "    ${BOLD}just bar::units-shell${NC}         Drop into an interactive busted shell"
+    echo -e "    ${BOLD}just bar::lx-shell${NC}            Drop into an lx shell for package work"
     echo -e "    ${BOLD}just bar::check${NC}               EmmyLua type-check across the repo"
     echo -e "    ${BOLD}just bar::lint${NC}                luacheck (via lux)"
     echo -e "    ${BOLD}just bar::fmt${NC}                 stylua format"

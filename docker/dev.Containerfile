@@ -23,16 +23,6 @@ RUN dnf install -y --setopt=install_weak_deps=False \
     && dnf clean all \
     && ln -s /usr/bin/lua-5.1 /usr/local/bin/lua
 
-# Install the starship binary so a contributor whose host ~/.zshrc (or
-# ~/.bashrc) inits starship gets their prompt inside `distrobox enter
-# bar-dev`. distrobox shares $HOME but not /usr/local/bin, so a host-side
-# `starship` binary isn't visible in the container -- the install here is
-# what makes the user's existing rc work. Deliberately no /etc/profile.d/
-# auto-init shim: contributors who don't use starship get a stock prompt,
-# and we don't have to dispatch on $SHELL / emulation mode.
-RUN dnf install -y starship \
-    || curl -sS https://starship.rs/install.sh | sh -s -- -y -b /usr/local/bin
-
 # lux (lumen-oss/lux) is fetched via cargo-binstall instead of a hand-rolled
 # GitHub Releases query. cargo-binstall recognizes a wide range of asset
 # naming conventions, so when upstream renames or repackages (as lux did at
@@ -53,6 +43,7 @@ RUN /root/.cargo/bin/cargo-binstall --no-confirm \
         ${LUX_VERSION:+--version $LUX_VERSION} \
         --install-path /usr/local/bin \
         lux-cli \
+    && mv /root/.cargo/bin/cargo-binstall /usr/local/bin/ \
     && rm -rf /root/.cargo
 
 # lux's bundled lua 5.1 lacks dlopen, breaking C modules like luafilesystem.
@@ -60,6 +51,10 @@ RUN /root/.cargo/bin/cargo-binstall --no-confirm \
 RUN lx --lua-version 5.1 install-lua \
     && ln -sf /usr/bin/lua-5.1 /root/.local/share/lux/tree/5.1/.lua/bin/lua
 
+# stylua is installed directly rather than via `lx install` because BAR has
+# luarocks-conformant trees (non-src/ layouts) that we need to format, and
+# lux's tool runner only resolves targets under src/ today. Track:
+# https://github.com/lumen-oss/lux/issues/953
 ARG STYLUA_VERSION=2.0.2
 RUN ARCH=$(uname -m) \
     && case "$ARCH" in x86_64) PLAT=linux-x86_64;; aarch64) PLAT=linux-aarch64;; esac \
