@@ -64,7 +64,7 @@ To set up a new distrobox standalone:
 just setup::distrobox
 ```
 
-### Editor integration (VS Code / Cursor)
+### Editor integration
 
 `setup::init` wires up your editor automatically if you say yes at the Step 0/N prompt — language servers and formatters get exported from the distrobox to `~/.local/bin`, and `compile_commands.json` is generated against RecoilEngine for clangd. To re-run it standalone (if you skipped during init, or want to refresh after a Containerfile change):
 
@@ -110,6 +110,15 @@ The [test-switcher](https://marketplace.visualstudio.com/items?itemName=bmalehor
     }
 ]
 ```
+
+#### IntelliJ IDEA
+
+`setup::editor` exports the toolchain but does not configure IntelliJ — the auto-written `.vscode/settings.json` is VS Code only. Two manual steps cover the equivalent:
+
+* **Lua** — install the **EmmyLua** plugin from the JetBrains Marketplace (the analog of the EmmyLua extension above).
+* **Formatting** — to match the stylua format-on-save that VS Code users get from `.vscode/settings.json`, add a **File Watcher** (*Settings → Tools → File Watchers*) on Lua files: set **Program** to the *absolute* path of `~/.local/bin/stylua` (a GUI-launched IDE does not inherit your shell `PATH`) and **Arguments** to `$FilePath$`.
+
+If JetBrains use spreads, `setup::editor` could generate an `.idea/watcherTasks.xml` for this the way it already writes `.vscode/settings.json`.
 
 ### Git hooks
 
