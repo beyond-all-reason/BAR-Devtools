@@ -74,14 +74,6 @@ just setup::editor
 
 Exports `emmylua_ls`, `emmylua_check`, `clangd`, `stylua`, and `lx` as wrapper scripts in `~/.local/bin` (via `distrobox-export`). Your editor finds the wrappers on PATH and everything works as if installed natively.
 
-### Git hooks
-
-Install a pre-commit hook that runs `stylua` (formatting) and `luacheck` (linting) on every commit:
-
-```bash
-just setup::hooks
-```
-
 **Recommended extensions:**
 
 * [EmmyLua](https://marketplace.visualstudio.com/items?itemName=tangzx.emmylua) (Lua language server -- Cursor users: install from VSIX, the marketplace version is outdated)
@@ -117,6 +109,14 @@ The [test-switcher](https://marketplace.visualstudio.com/items?itemName=bmalehor
         "replacement": "spec/$1/$2_spec.lua"
     }
 ]
+```
+
+### Git hooks
+
+Install a pre-commit hook that runs `stylua` (formatting) and `luacheck` (linting) on every commit:
+
+```bash
+just setup::hooks
 ```
 
 ### Windows (WSL2)
