@@ -194,6 +194,12 @@ just tei::test-shell            # interactive bash shell with MIX_ENV=test
 
 If you've pulled new teiserver code with migrations, re-run `just tei::setup-test-db` to apply them.
 
+`services::up` mounts `teiserver/lib` and `teiserver/assets` into the running
+container, so editing the web UI (controllers, LiveViews, templates, CSS) takes
+effect live -- Phoenix recompiles and the browser at http://localhost:4000
+refreshes on save, no rebuild or restart. Changes to `mix.exs`, `config/`, or
+deps still need `just services::build` (or `services::up`, which rebuilds).
+
 ### Engine development
 
 ```bash
