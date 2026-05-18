@@ -21,6 +21,7 @@ repos.local.conf
 # Runtime / editor state
 tasks/
 .devtools/
+.backups/
 *.log
 bar-lua-codemod/target/
 .claude/settings.local.json

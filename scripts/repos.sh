@@ -253,32 +253,66 @@ repo_has_feature() {
 clone_or_update_repo() {
   local dir="$1" url="$2" branch="$3" upstream_url="$4" local_path="${5:-}" target="$DEVTOOLS_DIR/$dir"
 
+  # --- config wants a symlink: workspace slot -> external checkout --------
   if [ -n "$local_path" ]; then
+    # Create the canonical checkout's parent (e.g. ~/code for @local_root).
+    mkdir -p "$(dirname "$local_path")"
+
+    # Reconcile a real directory occupying the workspace slot before we
+    # populate $local_path. (A symlink is handled after the clone step.)
+    if [ ! -L "$target" ] && [ -d "$target" ]; then
+      if [ -d "$target/.git" ] && [ ! -d "$local_path" ]; then
+        # Workspace copy IS the repo and the canonical slot is free:
+        # promote it rather than discard the user's branches/work.
+        info "  ${dir}: moving workspace checkout -> ${local_path}"
+        mv "$target" "$local_path" || { err "  ${dir}: move failed"; return 1; }
+      else
+        # Stale duplicate ($local_path already populated) or a non-repo
+        # directory: move it aside so we never delete user data.
+        local backup="$DEVTOOLS_DIR/.backups/${dir}-$(date +%Y%m%d-%H%M%S)"
+        warn "  ${dir}: workspace has a real directory where config wants a symlink"
+        info "  ${dir}: backing it up -> ${backup}"
+        mkdir -p "$DEVTOOLS_DIR/.backups"
+        mv "$target" "$backup" || { err "  ${dir}: backup move failed"; return 1; }
+      fi
+    fi
+
     if [ ! -d "$local_path" ]; then
       do_clone "$dir" "$url" "$branch" "$upstream_url" "$local_path" || return 1
     else
       verify_remotes "$dir" "$local_path" "$url" "$upstream_url"
     fi
+
     if [ -L "$target" ]; then
       local current_link
       current_link="$(readlink "$target")"
       if [ "$current_link" = "$local_path" ]; then
         ok "  ${dir}: linked -> ${local_path}"
       else
-        warn "  ${dir}: symlink points to ${current_link}, config says ${local_path}"
-        info "  ${dir}: updating symlink..."
+        info "  ${dir}: repointing symlink (${current_link} -> ${local_path})"
         rm "$target"
         ln -s "$local_path" "$target"
         ok "  ${dir}: linked -> ${local_path}"
       fi
-    elif [ -d "$target" ]; then
-      warn "  ${dir}: exists as a real directory but config says link to ${local_path}"
-      warn "  ${dir}: remove it manually to use the local path"
     else
       ln -s "$local_path" "$target"
       ok "  ${dir}: linked -> ${local_path}"
     fi
     return 0
+  fi
+
+  # --- config wants an in-place clone: workspace slot IS the checkout -----
+  # Reverse drift: a symlink where config now wants a real in-place clone.
+  if [ -L "$target" ]; then
+    local dest
+    dest="$(readlink "$target")"
+    warn "  ${dir}: workspace is a symlink but config says clone-in-place"
+    rm "$target"
+    if [ -d "$dest/.git" ]; then
+      # Mirror the forward promote: keep the user's real repo, relocate it.
+      info "  ${dir}: moving ${dest} into the workspace"
+      mv "$dest" "$target" || { err "  ${dir}: move failed"; return 1; }
+    fi
   fi
 
   if [ -d "$target/.git" ]; then
