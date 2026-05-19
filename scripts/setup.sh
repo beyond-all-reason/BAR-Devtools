@@ -1218,6 +1218,13 @@ cmd_setup_distrobox() {
   # the failure would otherwise be a cryptic 127.
   require_host
 
+  # --rebuild forces the container recreate even when the dev image is
+  # unchanged (e.g. drift the image ID alone can't detect).
+  local force_rebuild=0 arg
+  for arg in "$@"; do
+    if [ "$arg" = "--rebuild" ]; then force_rebuild=1; fi
+  done
+
   echo -e "${BOLD}=== Distrobox Dev Environment ===${NC}"
   echo ""
 
@@ -1242,38 +1249,53 @@ cmd_setup_distrobox() {
   ok "Image built: $DEV_IMAGE"
   echo ""
 
-  distrobox stop --yes "$DEVTOOLS_DISTROBOX" >/dev/null 2>&1 || true
-  distrobox rm -f --yes "$DEVTOOLS_DISTROBOX" >/dev/null 2>&1 \
-    || podman rm -f "$DEVTOOLS_DISTROBOX" >/dev/null 2>&1 \
-    || true
-
-  # Nuke per-repo lux caches: the .so artifacts in `.lux/` are compiled
-  # inside the container and link against whatever libc was visible at
-  # build time (distrobox passes the host libc through). When the base
-  # image or host libc changes, the cached .so files start failing with
-  # `GLIBC_X.YZ not found`. Easier to invalidate on every box rebuild
-  # than to detect drift after the fact.
-  local lux_dir="$DEVTOOLS_DIR/Beyond-All-Reason/.lux"
-  if [ -d "$lux_dir" ]; then
-    step "Clearing stale lux cache at $lux_dir..."
-    rm -rf "$lux_dir"
-    # Also remove lux.lock. lx's add_entrypoint / add_dependency push without
-    # dedup, so syncing against an empty install tree but a populated
-    # lockfile (exactly what we'd have after the wipe above) doubles every
-    # entry on the warmup run below. Deleting the lockfile forces warmup to
-    # regenerate it from lux.toml cleanly. The regenerated file should match
-    # HEAD; if it doesn't, that's a real lux.toml drift worth seeing.
-    # Drop this once the upstream lux fix lands and we've bumped LUX_VERSION.
-    rm -f "$DEVTOOLS_DIR/Beyond-All-Reason/lux.lock"
-    ok "Lux cache cleared (will rebuild on next 'just bar::units' / 'lx' run)"
-    echo ""
+  # Fingerprint the built image: the container only needs recreating when the
+  # image actually changed. An empty id (inspect failed) falls back to the
+  # old always-recreate behavior.
+  local dev_image_id stamp_file image_changed=0
+  dev_image_id="$(podman image inspect --format '{{.Id}}' "$DEV_IMAGE" 2>/dev/null || true)"
+  stamp_file="$DEVTOOLS_DIR/.devtools/dev-image.id"
+  if [ -z "$dev_image_id" ] || [ ! -f "$stamp_file" ] \
+     || [ "$dev_image_id" != "$(cat "$stamp_file" 2>/dev/null)" ]; then
+    image_changed=1
   fi
 
-  step "Creating distrobox '$DEVTOOLS_DISTROBOX'..."
-  # podman tags built images under localhost/<name>; distrobox needs the fully
-  # qualified ref so it doesn't try to pull from a registry.
-  distrobox create --name "$DEVTOOLS_DISTROBOX" --image "localhost/$DEV_IMAGE" --yes
-  ok "Distrobox created: $DEVTOOLS_DISTROBOX"
+  # Recreate the container on that signal, or when it isn't there yet.
+  # An unchanged image's container is byte-identical -- recreating it just
+  # re-pays distrobox's first-enter init and discards container-local state.
+  local box_exists=0 dbx_list need_recreate=0
+  dbx_list="$(distrobox list 2>/dev/null || true)"
+  if printf '%s\n' "$dbx_list" | grep -F "| $DEVTOOLS_DISTROBOX " >/dev/null 2>&1; then
+    box_exists=1
+  fi
+  if [ "$force_rebuild" = "1" ] || [ "$image_changed" = "1" ] || [ "$box_exists" = "0" ]; then
+    need_recreate=1
+  fi
+
+  if [ "$need_recreate" = "1" ]; then
+    distrobox stop --yes "$DEVTOOLS_DISTROBOX" >/dev/null 2>&1 || true
+    distrobox rm -f --yes "$DEVTOOLS_DISTROBOX" >/dev/null 2>&1 \
+      || podman rm -f "$DEVTOOLS_DISTROBOX" >/dev/null 2>&1 \
+      || true
+  fi
+
+  # Stamp the built image so the next run can tell whether it changed. The
+  # per-repo lux cache (.lux/) is the bar layer's concern -- `bar::lux-install`
+  # populates it; distrobox setup never touches it.
+  mkdir -p "$(dirname "$stamp_file")"
+  if [ -n "$dev_image_id" ]; then
+    printf '%s\n' "$dev_image_id" > "$stamp_file"
+  fi
+
+  if [ "$need_recreate" = "1" ]; then
+    step "Creating distrobox '$DEVTOOLS_DISTROBOX'..."
+    # podman tags built images under localhost/<name>; distrobox needs the
+    # fully qualified ref so it doesn't try to pull from a registry.
+    distrobox create --name "$DEVTOOLS_DISTROBOX" --image "localhost/$DEV_IMAGE" --yes
+    ok "Distrobox created: $DEVTOOLS_DISTROBOX"
+  else
+    ok "Distrobox '$DEVTOOLS_DISTROBOX' kept (dev image unchanged)."
+  fi
   echo ""
 
   # Refresh host wrappers before first-entry setup. Re-exporting overwrites
@@ -1305,50 +1327,9 @@ cmd_setup_distrobox() {
   ok "Lux lua tree configured"
   echo ""
 
-  # Repopulate Beyond-All-Reason/.lux/ test_dependencies if BAR is cloned.
-  # We nuked .lux/ earlier; without this, the next `bar::units-shell` lands
-  # in an empty environment (`busted: command not found`) until something
-  # else triggers an install. lx's only command that actually fetches
-  # test_dependencies is `lx test`, which runs the suite as a side effect
-  # -- acceptable cost during setup, where the user already expects a
-  # multi-minute operation.
-  #
-  # Verify *both* the lx exit code and a canary file (busted) afterwards.
-  # lx 0.29 has at least one failure mode where it prints an error,
-  # writes out a stub .lux/ tree, and still exits 0 (we hit it with the
-  # dkjson integrity check). Canary check catches that. On failure, exit
-  # non-zero so the "Distrobox dev environment ready" line never prints
-  # under a partially populated tree.
-  local bar_dir="$DEVTOOLS_DIR/Beyond-All-Reason"
-  if [ -d "$bar_dir/.git" ] || [ -f "$bar_dir/lux.toml" ]; then
-    step "Warming Beyond-All-Reason/.lux/ via 'lx test'..."
-    local lx_log lx_status
-    lx_log="$(mktemp -t lx-warmup.XXXXXX.log)"
-    set +e
-    distrobox enter "$DEVTOOLS_DISTROBOX" -- \
-        bash -c "cd $(printf '%q' "$bar_dir") && lx --lua-version 5.1 test" \
-      2>&1 | tee "$lx_log"
-    lx_status=${PIPESTATUS[0]}
-    set -e
-    local busted_canary="$bar_dir/.lux/5.1/test_dependencies/5.1/bin/busted"
-    if [ "$lx_status" -eq 0 ] && [ -e "$busted_canary" ]; then
-      ok "Test deps installed (busted on PATH inside bar-dev)"
-      rm -f "$lx_log"
-    else
-      err "lx test failed during warm-up (exit=$lx_status, busted canary present=$([ -e "$busted_canary" ] && echo yes || echo no))."
-      info "  Full lx output: $lx_log"
-      info "  Common causes:"
-      info "    - duplicate-entrypoints: a transitive dep is also listed explicitly in BAR's lux.toml"
-      info "    - integrity error / not in lockfile: luarocks moved; run 'lx update <pkg>' inside bar-dev to refresh lux.lock"
-      info "  After fixing in BAR, re-run 'just setup::distrobox'."
-      return 1
-    fi
-    echo ""
-  else
-    info "Beyond-All-Reason not cloned; skipping .lux/ warm-up."
-    info "  Run 'just repos::clone bar' then 'just bar::units' to populate."
-    echo ""
-  fi
+  # Note: Beyond-All-Reason/.lux/ (BAR's Lua dependency cache) is NOT touched
+  # here -- populating it is a post-clone, bar-only step run by cmd_init via
+  # `just bar::lux-install`.
 
   if is_wsl; then
     cmd_setup_sync_distrobox || warn "bar-sync container build failed; 'just bar::launch' will not be able to mirror edits to /mnt/c."
@@ -2005,6 +1986,15 @@ cmd_init() {
   echo ""
   clone_for_features "$features"
   echo ""
+
+  # Install BAR's .lux/ Lua dependency tree post-clone -- bar-only, so a
+  # teiserver-only contributor never pays it. Idempotent (`lx sync` against
+  # lux.lock); re-runnable any time via `just bar::lux-install`.
+  if features_include "$features" bar; then
+    ( cd "$DEVTOOLS_DIR" && just bar::lux-install ) \
+      || warn "Lux install failed; run 'just bar::lux-install' once the tree settles."
+    echo ""
+  fi
 
   step "4/8  Building Docker images"
   echo ""

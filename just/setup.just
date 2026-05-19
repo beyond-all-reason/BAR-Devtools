@@ -34,13 +34,13 @@ deps:
     source "$DEVTOOLS_DIR/scripts/setup.sh"
     cmd_install_deps
 
-# Build dev container image and create distrobox
-distrobox:
+# Build dev container image and create distrobox (--rebuild forces lux cache wipe)
+distrobox *args:
     #!/usr/bin/env bash
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
     source "$DEVTOOLS_DIR/scripts/setup.sh"
-    cmd_setup_distrobox
+    cmd_setup_distrobox {{args}}
 
 # Wire your editor up for BAR development. Idempotent — re-runnable any time.
 # `setup::init` calls this at the end too (gated on the Step 0/N opt-in), so

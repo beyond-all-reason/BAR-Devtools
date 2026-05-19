@@ -172,12 +172,29 @@ units *args: require-bar
     enter_distrobox
     (cd "$BAR_DIR" && lx --lua-version 5.1 test {{args}})
 
+# Install BAR's Lua dependencies into .lux/ (idempotent; runs `lx sync`
+# against lux.lock). setup::init runs this post-clone; re-run it yourself
+# whenever the tree drifts. --clean wipes .lux/ first -- use it if a
+# dev-image change left stale compiled artifacts ("GLIBC ... not found").
+lux-install *args: require-bar
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    enter_distrobox
+    for arg in {{args}}; do
+        if [ "$arg" = "--clean" ]; then
+            warn "Clearing $BAR_DIR/.lux for a fresh install"
+            rm -rf "$BAR_DIR/.lux"
+        fi
+    done
+    (cd "$BAR_DIR" && lx --lua-version 5.1 sync)
+
 # Drop into an interactive shell with busted on PATH (for unit-test work).
 # Named units-shell, not test-shell, because `bar::test` runs both units AND
 # integrations -- this REPL is specifically the unit-test environment.
 # For non-test package work (lx add, lx install, etc.) use `bar::lx-shell`.
-# Assumes .lux/ is already populated; `setup::distrobox` does that for you
-# after nuking the cache, and `bar::units` repopulates it as a side effect.
+# Assumes .lux/ is already populated -- setup::init runs `bar::lux-install`;
+# run it yourself if you skipped setup.
 units-shell: require-bar
     #!/usr/bin/env bash
     set -e
