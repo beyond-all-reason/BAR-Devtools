@@ -5,7 +5,7 @@ description: Every cmd_init step except system-deps lives in scripts/setup/NN-<n
 
 # Setup module registry
 
-`setup::init` runs at least twice on every fresh machine — once to install distrobox + docker-ce, then a fresh shell to pick up docker group perms, then again to use docker. Anything the first run prompted for and didn't persist gets re-asked on the second run. That's the leak this convention closes.
+`setup::init` is idempotent and re-runnable — after a partial failure, to pick up a newly-selected feature, or via `setup::reconfigure`. Every decision it prompts for has to persist, or that re-run re-asks it. A bare `read -rp` that writes only a local variable is exactly that leak; this convention closes it by giving every decision a `.env`-backed home that the engine reads before deciding whether to prompt.
 
 ## The contract
 
