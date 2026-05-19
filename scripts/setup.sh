@@ -1334,38 +1334,21 @@ cmd_setup_distrobox() {
   fi
   echo ""
 
-  # Refresh host wrappers before first-entry setup. Re-exporting overwrites
-  # any stale wrapper from a previous container that hardcodes an old
-  # binary path (e.g. /usr/bin/lx); without this, the first-entry
-  # `lx install-lua` resolves to the stale wrapper and fails.
+  # Refresh host wrappers: re-exporting overwrites any stale wrapper from a
+  # previous container that hardcodes an old binary path (e.g. /usr/bin/lx
+  # after lx moved to /usr/local/bin). Recipes and the editor find lx /
+  # stylua / emmylua / clangd on the host PATH through these wrappers.
   export_dev_binaries || warn "Some dev binaries failed to export; recipes / editor that depend on them will need 'just setup::distrobox' rerun."
   echo ""
 
-  step "Running first-entry setup (lux lua tree)..."
-  # Inner script must `set -e` so a failure in `lx install-lua` or the
-  # symlink isn't swallowed by bash -c continuing past it. We leak the
-  # exit through `distrobox enter` -> outer caller, which gets reported.
-  if ! distrobox enter "$DEVTOOLS_DISTROBOX" -- bash -c '
-    set -e
-    lx install-lua
-    LUA_BIN=$(command -v lua-5.1 2>/dev/null || command -v lua5.1 2>/dev/null)
-    if [ -z "$LUA_BIN" ]; then
-      echo "lux setup: no lua-5.1 binary found in container PATH" >&2
-      exit 1
-    fi
-    LUX_LUA="$HOME/.local/share/lux/tree/5.1/.lua/bin/lua"
-    mkdir -p "$(dirname "$LUX_LUA")"
-    ln -sf "$LUA_BIN" "$LUX_LUA"
-  '; then
-    err "Lux lua tree setup failed inside bar-dev. Try 'just setup::distrobox' to rebuild."
-    return 1
-  fi
-  ok "Lux lua tree configured"
-  echo ""
-
-  # Note: Beyond-All-Reason/.lux/ (BAR's Lua dependency cache) is NOT touched
-  # here -- populating it is a post-clone, bar-only step run by cmd_init via
-  # `just bar::lux-install`.
+  # No `lx install-lua` step: lux uses the container's system Lua 5.1
+  # (compat-lua, on PATH as `lua`) directly -- that build has dlopen, so
+  # busted's C rocks load. `install-lua` builds lux's own dlopen-less Lua,
+  # which then needs patching back out. Mirrors BAR's test_unit.yml CI.
+  #
+  # Beyond-All-Reason/.lux/ (BAR's Lua dependency cache) is likewise NOT
+  # touched here -- populating it is a post-clone, bar-only step run by
+  # cmd_init via `just bar::lux-install`.
 
   if is_wsl; then
     cmd_setup_sync_distrobox || warn "bar-sync container build failed; 'just bar::launch' will not be able to mirror edits to /mnt/c."

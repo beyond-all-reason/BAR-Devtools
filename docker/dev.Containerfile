@@ -1,10 +1,6 @@
 # BAR development environment — canonical list of system dependencies.
 # Used with distrobox: just setup::distrobox
-# Or as a reference for manual installs on any distro / WSL / macOS (brew).
-# Pinned to fc42 because that's the Meta watchman RPM's target (kept in
-# the WSL-only sister container docker/sync.Containerfile). Same base image
-# for both keeps interactive dev shells (`distrobox enter bar-dev`) feeling
-# the same as the sync container's runtime.
+# Or as a reference for manual installs on any distro
 FROM registry.fedoraproject.org/fedora:43
 
 RUN dnf install -y --setopt=install_weak_deps=False \
@@ -29,16 +25,13 @@ RUN dnf install -y --setopt=install_weak_deps=False \
 # v0.29.0, dropping .deb in favor of tarballs) we don't have to chase it
 # here. Bootstrap cargo-binstall first since neither Fedora's repos nor the
 # stock `cargo` package ships it.
-#
-# Pinned, not floating: BAR's CI installs a specific lx version, and lockfile
-# integrity checks tightened between 0.26 and 0.29. A floating local version
-# means contributors regenerate lockfiles that CI's older lx then rejects
-# (and vice versa). Bump in lockstep with .github/workflows/test_unit.yml in
-# the BAR repo. Pass `--build-arg LUX_VERSION=X.Y.Z` to override locally.
-ARG LUX_VERSION=0.29.0
 RUN curl -L --proto '=https' --tlsv1.2 -sSf \
         https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh \
       | bash
+
+# Bump in lockstep with .github/workflows/test_unit.yml in the BAR repo.
+# Pass `--build-arg LUX_VERSION=X.Y.Z` to override locally.
+ARG LUX_VERSION=0.28.3
 RUN /root/.cargo/bin/cargo-binstall --no-confirm \
         ${LUX_VERSION:+--version $LUX_VERSION} \
         --install-path /usr/local/bin \
@@ -46,10 +39,11 @@ RUN /root/.cargo/bin/cargo-binstall --no-confirm \
     && mv /root/.cargo/bin/cargo-binstall /usr/local/bin/ \
     && rm -rf /root/.cargo
 
-# lux's bundled lua 5.1 lacks dlopen, breaking C modules like luafilesystem.
-# Symlink the system lua-5.1 over it so lx test / lx shell work correctly.
-RUN lx --lua-version 5.1 install-lua \
-    && ln -sf /usr/bin/lua-5.1 /root/.local/share/lux/tree/5.1/.lua/bin/lua
+# No `lx install-lua`: lux uses the system Lua 5.1 (compat-lua, symlinked to
+# `lua` above) directly -- that build has dlopen, so C rocks (luafilesystem,
+# busted's deps) compile and load. `install-lua` instead builds lux's own Lua
+# *without* dlopen, which then has to be patched back out. Mirrors BAR's
+# .github/workflows/test_unit.yml, which also skips it.
 
 # stylua is installed directly rather than via `lx install` because BAR has
 # luarocks-conformant trees (non-src/ layouts) that we need to format, and
