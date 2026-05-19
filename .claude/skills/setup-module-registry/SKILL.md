@@ -39,6 +39,7 @@ register_module <name> <KEY> prompt_<name> apply_<name>
 - `ensure_module_by_name <name>` — same, looked up by registered name. Used by `just <module>::setup` recipes so they share lifecycle with `cmd_init`.
 - `ensure_all_modules` — iterate every module in registration order with auto-numbered `step` headers.
 - `doctor_modules` — read-only iteration; prints the registry as a table for `just doctor`.
+- `summarize_modules` — read-only iteration for `confirm_setup_plan`'s pre-flight rollup; prints a module's optional `summary_<name>` if defined, else the raw `KEY = value`.
 
 `cmd_init`'s configuration phase becomes a flat sequence of `ensure_module_by_name <name>` calls. There is **no `read -rp` outside a module file** — that's what caused the re-ask leaks before this convention.
 
@@ -108,7 +109,7 @@ The loader globs `[0-9]*.sh` in alphanumeric order. **Use the numeric prefix as 
 Setup runs before `python3`, `pipx`, and `distrobox` are guaranteed to exist. A Python rewrite makes orchestration cleaner but introduces a bootstrap problem worse than the orchestration itself. Stay in bash; mitigate the stringly-typed function-pointer cost with discipline:
 
 - `register_module` runs `declare -F "$prompt_fn"` and `declare -F "$apply_fn"` — typos surface at source-load, not at user-prompt time.
-- Strict naming: `prompt_<name>`, `apply_<name>`, `read_<name>` (optional). Grep is the index.
+- Strict naming: `prompt_<name>`, `apply_<name>`, `read_<name>` / `summary_<name>` (both optional). Grep is the index.
 - `# shellcheck source=scripts/setup/_lib.sh` directive at the top of each module file keeps shellcheck cross-file checks working.
 - The engine itself (`ensure_module` / `_load_module_entry`) is ~30 lines. Trace it once; the indirection cost is bounded.
 

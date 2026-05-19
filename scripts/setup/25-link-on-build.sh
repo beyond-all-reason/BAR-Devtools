@@ -35,4 +35,12 @@ apply_link_on_build() {
     :
 }
 
+summary_link_on_build() {
+    if [ "$(read_env_key BAR_LINK_ON_BUILD)" = "yes" ]; then
+        echo "symlink selected repos into the game directory after build"
+    else
+        echo "no game-directory symlinks"
+    fi
+}
+
 register_module link_on_build BAR_LINK_ON_BUILD prompt_link_on_build apply_link_on_build

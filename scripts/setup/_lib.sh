@@ -181,6 +181,28 @@ doctor_modules() {
 }
 
 # ---------------------------------------------------------------------------
+# Pre-flight rollup: one human line per module, for confirm_setup_plan's
+# "this is what setup::init will do" summary. A module may define an
+# optional `summary_<name>` that echoes a readable description of its
+# choice; modules without one fall back to the raw persisted value.
+# ---------------------------------------------------------------------------
+
+summarize_modules() {
+    local entry fn val
+    for entry in "${SETUP_MODULES[@]}"; do
+        _load_module_entry "$entry"
+        fn="summary_${SETUP_M_NAME}"
+        if declare -F "$fn" >/dev/null; then
+            val="$("$fn")"
+        else
+            val="$(read_env_key "$SETUP_M_KEY")"
+            val="${val:-<unset>}"
+        fi
+        printf '    %-16s %s\n' "$SETUP_M_NAME" "$val"
+    done
+}
+
+# ---------------------------------------------------------------------------
 # Source all numbered module files in the same dir. Order = filename order.
 # Each module file is responsible for calling register_module at the bottom.
 # ---------------------------------------------------------------------------

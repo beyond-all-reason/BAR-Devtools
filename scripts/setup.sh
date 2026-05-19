@@ -1063,82 +1063,68 @@ EOF
   ok "Generated $shim_wsl"
 }
 
-# Inspect the current state, list ONLY what's actually missing, then
-# pre-cache sudo and continue. No Y/n: running setup::init is itself the
-# consent. Press Enter is the user's chance to read what's about to
-# happen; Ctrl-C aborts. When nothing is missing the splash is skipped
-# entirely.
-_setup_consent_splash() {
-  is_wsl || return 0
+# Pre-flight rollup: after the front-loaded config phase, before any system
+# change, show every decision the user made plus the work cmd_init is about
+# to do, then gate on a single Y/n. Supersedes the old WSL-only
+# _setup_consent_splash -- one combined consent point, every platform.
+confirm_setup_plan() {
+  local features="$1" game_dir="$2" do_link="$3"
 
-  local need_apt=() cur_limit need_sysctl=0 need_distrobox_setup=0 need_distrobox_install=0
-  # python3-watchdog/inotify-tools/rsync used to be host apt deps for sync.py;
-  # they now live inside bar-sync (docker/sync.Containerfile). Host only owns
-  # the inotify sysctl (kernel-level, propagates into the container namespace).
+  echo ""
+  echo -e "${BOLD}=== setup::init will now make these changes ===${NC}"
+  echo ""
 
-  cur_limit="$(cat /proc/sys/fs/inotify/max_user_watches 2>/dev/null || echo 0)"
-  [ "$cur_limit" -lt 131072 ] && need_sysctl=1
+  echo "  Your choices:"
+  summarize_modules
+  echo ""
 
-  if ! command -v distrobox &>/dev/null; then
-    need_distrobox_install=1
-  else
-    # Capture the listing before piping: under set -o pipefail, `grep -q`
-    # would SIGPIPE the producer and flip a found-match into a failure
-    # (see scripts/sync.sh:_require_sync_distrobox for the same trap).
-    local listing
-    listing="$(distrobox list 2>/dev/null || true)"
-    if ! printf '%s\n' "$listing" | grep -F "| $DEVTOOLS_DISTROBOX " >/dev/null 2>&1 \
-       || ! printf '%s\n' "$listing" | grep -F "| $DEVTOOLS_SYNC_DISTROBOX " >/dev/null 2>&1; then
-      need_distrobox_setup=1
+  echo "  System (host):"
+  echo "    install any missing packages -- git, podman, distrobox (needs sudo)"
+  echo "    build the bar-dev distrobox container (~3-5 min, downloads a base image)"
+  if is_wsl; then
+    echo "    build the bar-sync distrobox container (WSL filesystem mirror)"
+    echo "    raise fs.inotify.max_user_watches via /etc/sysctl.d (needs sudo)"
+  fi
+  echo ""
+
+  load_repos_conf
+  local wanted count r
+  wanted="$(features_to_repos "$features")"
+  count="$(echo $wanted | wc -w)"
+  echo "  Clone ${count} repositories into this workspace:"
+  for r in $wanted; do
+    echo "    $r"
+  done
+  echo ""
+
+  if features_include "$features" teiserver || features_include "$features" recoil; then
+    echo "  Build:"
+    if features_include "$features" teiserver; then
+      echo "    teiserver Docker image (compiles Elixir deps, generates TLS certs)"
     fi
-  fi
-
-  if [ "${#need_apt[@]}" -eq 0 ] && [ "$need_sysctl" = "0" ] \
-     && [ "$need_distrobox_install" = "0" ] && [ "$need_distrobox_setup" = "0" ]; then
-    info "System deps already in place; no install steps needed."
-    return 0
-  fi
-
-  echo ""
-  echo -e "${BOLD}=== System changes setup::init will make ===${NC}"
-  echo ""
-
-  if [ "${#need_apt[@]}" -gt 0 ]; then
-    echo "  apt install (sudo):"
-    local pkg
-    for pkg in "${need_apt[@]}"; do
-      echo "    $pkg"
-    done
-    echo ""
-  fi
-
-  if [ "$need_sysctl" = "1" ]; then
-    echo "  sysctl drop-in (sudo, /etc/sysctl.d/99-bar-devtools.conf):"
-    echo "    fs.inotify.max_user_watches=524288  (currently $cur_limit)"
-    echo ""
-  fi
-
-  if [ "$need_distrobox_install" = "1" ]; then
-    echo "  distrobox install (sudo apt):"
-    echo "    distrobox          dev toolchain habitat"
-    echo ""
-  fi
-
-  if [ "$need_distrobox_setup" = "1" ]; then
-    echo "  distrobox containers (~3-5min, network):"
-    echo "    bar-dev    per docker/dev.Containerfile; cross-platform dev toolchain."
-    echo "               Toolchain (emmylua_ls, clangd, stylua, lux) exposed on"
-    echo "               host PATH via distrobox-export."
-    if is_wsl; then
-      echo "    bar-sync   per docker/sync.Containerfile; WSL-only filesystem"
-      echo "               mirror daemon (watchman + pywatchman + rsync)."
+    if features_include "$features" recoil; then
+      echo "    Recoil engine from source (long -- tens of minutes)"
     fi
     echo ""
   fi
 
-  echo "  Press Enter to proceed, Ctrl-C to abort."
-  read -r _
-  sudo -v 2>/dev/null || warn "sudo -v could not pre-cache credentials; subsequent steps may re-prompt."
+  if [ -n "$game_dir" ] && [ "$do_link" = "yes" ]; then
+    echo "  Symlink into ${game_dir}:"
+    if features_include "$features" recoil; then echo "    engine/local-build"; fi
+    if features_include "$features" chobby; then echo "    games/BYAR-Chobby.sdd"; fi
+    if features_include "$features" bar;    then echo "    games/Beyond-All-Reason.sdd"; fi
+    echo ""
+  fi
+
+  local ans
+  read -rp "  Proceed? [Y/n] " ans
+  if [[ "$ans" =~ ^[Nn] ]]; then
+    info "Cancelled -- nothing has been changed."
+    exit 0
+  fi
+  # Pre-cache sudo so the long unattended run below doesn't block on a prompt.
+  sudo -v 2>/dev/null || warn "Could not pre-cache sudo; later steps may prompt for your password."
+  echo ""
 }
 
 # Verify the WSL-side sync daemon's *kernel-level* deps are in place. The
@@ -1442,10 +1428,14 @@ feature_repos() {
 
 # Comma-separated features -> deduplicated space-separated repo dirs.
 features_to_repos() {
-  local IFS=','
   local f r
+  local -a flist=()
   declare -A seen=()
-  for f in $1; do
+  # Split the feature list on commas via `read` (IFS scoped to that one
+  # command) so the inner loop keeps the default IFS it needs to
+  # word-split feature_repos' space-separated output.
+  IFS=',' read -ra flist <<< "$1"
+  for f in "${flist[@]}"; do
     for r in $(feature_repos "$f"); do
       seen[$r]=1
     done
@@ -1946,7 +1936,6 @@ cmd_init() {
   _check_just_min_version "1.31.0"
 
   ensure_wsl_setup
-  _setup_consent_splash
 
   # ===== Front-load all interactive decisions =====
   # Everything below is one big batch of prompts so the user can answer
@@ -1988,6 +1977,10 @@ cmd_init() {
   # any later step; keeping it here matches the front-load pattern.
   ensure_module_by_name editor          || true
   echo ""
+
+  # Last stop in the front-loaded phase: roll up every decision + the work
+  # ahead, get one Y/n, then everything below runs unattended.
+  confirm_setup_plan "$features" "$game_dir" "$do_link"
 
   step "1/8  Checking & installing dependencies"
   echo ""

@@ -14,6 +14,14 @@
 prompt_editor() { prompt_editor_setup_choice; }
 apply_editor()  { run_editor_setup_choice; }
 
+summary_editor() {
+    if [ "$(read_env_key BAR_EDITOR_SETUP)" = "yes" ]; then
+        echo "export emmylua/stylua/clangd to ~/.local/bin, write .vscode settings"
+    else
+        echo "no editor integration"
+    fi
+}
+
 # when=deferred: editor's apply runs distrobox-export, which requires the
 # bar-dev container to exist. cmd_init creates the container at step 2/N,
 # AFTER the front-loaded config phase. Tagging deferred so prompt_editor
