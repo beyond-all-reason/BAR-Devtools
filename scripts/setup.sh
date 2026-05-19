@@ -1080,29 +1080,62 @@ confirm_setup_plan() {
 
   echo "  System (host):"
   echo "    install any missing packages -- git, podman, distrobox (needs sudo)"
-  echo "    build the bar-dev distrobox container (~3-5 min, downloads a base image)"
+  # Probe whether the dev container already exists so the rollup says
+  # "already built" instead of implying a 3-5 min build on every run. Plain
+  # `grep -F ... >/dev/null` -- NOT `grep -q`: under `set -o pipefail`, -q's
+  # early exit SIGPIPEs `distrobox list` and flips the result (the trap the
+  # old _setup_consent_splash and sync.sh already document).
+  local dbx_built=0 dbx_listing
+  if command -v distrobox >/dev/null 2>&1; then
+    dbx_listing="$(distrobox list 2>/dev/null || true)"
+    if printf '%s\n' "$dbx_listing" | grep -F "| $DEVTOOLS_DISTROBOX " >/dev/null 2>&1; then
+      dbx_built=1
+    fi
+  fi
+  if [ "$dbx_built" = 1 ]; then
+    echo "    bar-dev distrobox: already built"
+  else
+    echo "    build the bar-dev distrobox container (~3-5 min, downloads a base image)"
+  fi
   if is_wsl; then
     echo "    build the bar-sync distrobox container (WSL filesystem mirror)"
     echo "    raise fs.inotify.max_user_watches via /etc/sysctl.d (needs sudo)"
   fi
   echo ""
 
+  # Repo rollup: bucket the selected repos into already-present vs new clones.
+  # "present" mirrors clone_for_features's clone-vs-update test -- a repo with
+  # a local_path override is present iff that path exists, else present iff
+  # the in-workspace dir has a .git. Name only the new clones (noisy bad).
   load_repos_conf
-  local wanted count r
+  local wanted i dir lp r_present=0 r_new=0 new_dirs=()
   wanted="$(features_to_repos "$features")"
-  count="$(echo $wanted | wc -w)"
-  echo "  Clone ${count} repositories into this workspace:"
-  for r in $wanted; do
-    echo "    $r"
+  for i in "${!REPO_DIRS[@]}"; do
+    dir="${REPO_DIRS[$i]}"
+    [[ " $wanted " == *" $dir "* ]] || continue
+    lp="${REPO_LOCAL_PATHS[$i]}"
+    if { [ -n "$lp" ] && [ -d "$lp" ]; } \
+       || { [ -z "$lp" ] && [ -d "$DEVTOOLS_DIR/$dir/.git" ]; }; then
+      r_present=$((r_present + 1))
+    else
+      r_new=$((r_new + 1))
+      new_dirs+=("$dir")
+    fi
   done
+  echo "  Repositories (${r_present} present, ${r_new} to clone):"
+  [ "$r_present" -gt 0 ] && echo "    ${r_present} already here -- just fetching updates"
+  if [ "$r_new" -gt 0 ]; then
+    echo "    ${r_new} new -- cloned over the network:"
+    echo "      ${new_dirs[*]}"
+  fi
   echo ""
 
-  if features_include "$features" teiserver || features_include "$features" recoil; then
+  if feature_selected teiserver || feature_selected recoil; then
     echo "  Build:"
-    if features_include "$features" teiserver; then
+    if feature_selected teiserver; then
       echo "    teiserver Docker image (compiles Elixir deps, generates TLS certs)"
     fi
-    if features_include "$features" recoil; then
+    if feature_selected recoil; then
       echo "    Recoil engine from source (long -- tens of minutes)"
     fi
     echo ""
@@ -1110,12 +1143,15 @@ confirm_setup_plan() {
 
   if [ -n "$game_dir" ] && [ "$do_link" = "yes" ]; then
     echo "  Symlink into ${game_dir}:"
-    if features_include "$features" recoil; then echo "    engine/local-build"; fi
-    if features_include "$features" chobby; then echo "    games/BYAR-Chobby.sdd"; fi
-    if features_include "$features" bar;    then echo "    games/Beyond-All-Reason.sdd"; fi
+    if feature_selected recoil; then echo "    engine/local-build"; fi
+    if feature_selected chobby; then echo "    games/BYAR-Chobby.sdd"; fi
+    if feature_selected bar;    then echo "    games/Beyond-All-Reason.sdd"; fi
     echo ""
   fi
 
+  echo "  Right after you confirm you'll be asked for your sudo password once"
+  echo "  (package install / sysctl); the rest then runs unattended."
+  echo ""
   local ans
   read -rp "  Proceed? [Y/n] " ans
   if [[ "$ans" =~ ^[Nn] ]]; then
@@ -1940,23 +1976,32 @@ cmd_init() {
     return 0
   fi
 
+  # The remaining modules are feature-gated: module_relevant consults the
+  # just-selected BAR_FEATURES and skips a module whose feature isn't in the
+  # selection -- a teiserver-only contributor is never asked about the Chobby
+  # channel, springsettings, the editor toolchain, or game-dir symlinks. The
+  # gate sits at the call site, so `just setup::<module>` still re-prompts any
+  # module directly.
+
   # Symlink decision is captured now; actual linking happens in step 6,
   # once the repos exist on disk. Persisted as BAR_LINK_ON_BUILD.
-  ensure_module_by_name link_on_build
   local game_dir do_link
+  if module_relevant link_on_build; then
+    ensure_module_by_name link_on_build
+  fi
   game_dir="$(detect_game_dir 2>/dev/null)" || true
   do_link="$(read_env_key BAR_LINK_ON_BUILD)"
 
-  ensure_module_by_name chobby_channel  || true
-  ensure_module_by_name springsettings  || true
-  # ssh's apply runs the chosen setup-*.sh script -- still at config time,
-  # so the rest of cmd_init is unattended (manual flow's "paste pubkey to
-  # GitHub" pause happens here, not later).
+  if module_relevant chobby_channel; then ensure_module_by_name chobby_channel || true; fi
+  if module_relevant springsettings; then ensure_module_by_name springsettings || true; fi
+  # ssh's apply runs the chosen setup-*.sh script -- still at config time, so
+  # the rest of cmd_init is unattended (manual flow's "paste pubkey to GitHub"
+  # pause happens here, not later). Never gated -- every feature clones repos.
   ensure_module_by_name ssh             || true
-  # editor's apply (extension install) runs at config time too. The legacy
-  # cmd_init had it at step 8/8, but cmd_setup_editor doesn't depend on
-  # any later step; keeping it here matches the front-load pattern.
-  ensure_module_by_name editor          || true
+  # editor's prompt fires here with the front-loaded batch; its apply is
+  # deferred to the end of cmd_init (apply_deferred_modules), since
+  # distrobox-export needs the bar-dev container created at step 2.
+  if module_relevant editor; then ensure_module_by_name editor || true; fi
   echo ""
 
   # Last stop in the front-loaded phase: roll up every decision + the work
@@ -1990,7 +2035,7 @@ cmd_init() {
   # Install BAR's .lux/ Lua dependency tree post-clone -- bar-only, so a
   # teiserver-only contributor never pays it. Idempotent (`lx sync` against
   # lux.lock); re-runnable any time via `just bar::lux-install`.
-  if features_include "$features" bar; then
+  if feature_selected bar; then
     ( cd "$DEVTOOLS_DIR" && just bar::lux-install ) \
       || warn "Lux install failed; run 'just bar::lux-install' once the tree settles."
     echo ""
@@ -1998,7 +2043,7 @@ cmd_init() {
 
   step "4/8  Building Docker images"
   echo ""
-  if features_include "$features" teiserver; then
+  if feature_selected teiserver; then
     install_dockerignore
     info "Building Docker images..."
     $COMPOSE build teiserver
@@ -2011,7 +2056,7 @@ cmd_init() {
 
   step "5/8  Engine build"
   echo ""
-  if features_include "$features" recoil; then
+  if feature_selected recoil; then
     if [ -d "$DEVTOOLS_DIR/RecoilEngine/docker-build-v2" ]; then
       local engine_arch engine_os="linux"
       case "$(uname -m)" in
@@ -2044,7 +2089,7 @@ cmd_init() {
     # silent skip -- that combination means the clone step failed.
     for spec in "recoil:RecoilEngine:engine" "chobby:BYAR-Chobby:chobby" "bar:Beyond-All-Reason:bar"; do
       IFS=: read -r feat dir name <<<"$spec"
-      features_include "$features" "$feat" || continue
+      feature_selected "$feat" || continue
       if [ -d "$DEVTOOLS_DIR/$dir" ]; then
         cmd_link "$name"
       else
@@ -2092,13 +2137,13 @@ cmd_init() {
   echo ""
   echo "  Your workspace is ready. Next steps:"
   echo ""
-  if features_include "$features" teiserver; then
+  if feature_selected teiserver; then
     echo -e "  ${CYAN}Teiserver${NC}"
     echo -e "    ${BOLD}just services::up${NC}             Start Teiserver + PostgreSQL"
     echo -e "    ${BOLD}just services::up spads${NC}       ...and start SPADS autohost"
     echo ""
   fi
-  if features_include "$features" bar; then
+  if feature_selected bar; then
     echo -e "  ${CYAN}BAR (game content)${NC}"
     echo -e "    ${BOLD}just bar::launch${NC}              Launch the engine against your local checkout"
     echo -e "    ${BOLD}just services::up lobby${NC}       Launch bar-lobby and connect"
@@ -2113,12 +2158,12 @@ cmd_init() {
     echo -e "    ${DIM}Edits land in Beyond-All-Reason/ and reflect live via the symlink.${NC}"
     echo ""
   fi
-  if features_include "$features" chobby && ! features_include "$features" bar; then
+  if feature_selected chobby && ! feature_selected bar; then
     echo -e "  ${CYAN}Chobby${NC}"
     echo -e "    ${BOLD}just services::up lobby${NC}       Launch bar-lobby (loads BYAR-Chobby)"
     echo ""
   fi
-  if features_include "$features" recoil; then
+  if feature_selected recoil; then
     echo -e "  ${CYAN}Recoil${NC}"
     if is_wsl; then
       echo -e "    ${BOLD}just engine::build windows${NC}    Rebuild the engine"
@@ -2127,7 +2172,7 @@ cmd_init() {
     fi
     echo ""
   fi
-  if features_include "$features" spads-source; then
+  if feature_selected spads-source; then
     echo -e "  ${CYAN}SPADS source${NC}"
     echo -e "    ${DIM}see SPADS/ and SpringLobbyInterface/ for autohost dev${NC}"
     echo ""

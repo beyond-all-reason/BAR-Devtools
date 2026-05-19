@@ -28,18 +28,23 @@ apply_<name>() {
     # call repeatedly.
 }
 
-register_module <name> <KEY> prompt_<name> apply_<name>
+register_module <name> <KEY> prompt_<name> apply_<name> [<when>] [<features>]
 ```
+
+`<when>` (`config` default | `deferred`) and `<features>` (a comma-list
+feature gate; empty = always relevant) are optional — see the two sections
+below.
 
 `scripts/setup/_lib.sh` is the engine. It exposes:
 
 - `register_module` — validates that `prompt_fn` / `apply_fn` are real defined functions at source time (catches typos before any user sees them) and appends to `SETUP_MODULES`.
-- `read_env_key <KEY>` / `write_env_key <KEY> <VAL>` — single source of truth for `.env` I/O. Don't hand-roll grep/sed for `.env`; use these.
+- `read_env_key <KEY>` / `write_env_key <KEY> <VAL>` — single source of truth for `.env` I/O. Don't hand-roll grep/sed for `.env`; use these. **They live in `scripts/common.sh`**, not `_lib.sh`: they're generic persistence helpers (CLAUDE.md: ".env is the persistence layer"), not registry internals. `common.sh` is sourced before `_lib.sh` everywhere, so the engine still resolves them.
+- `module_relevant <name>` — true if the module's `<features>` gate is empty or overlaps the live `BAR_FEATURES` selection (via `feature_selected`, also in `common.sh`). `cmd_init` wraps each gated module's `ensure_module_by_name` in it; `summarize_modules` / `apply_deferred_modules` skip the modules it rejects.
 - `ensure_module <entry>` — drives one module: read existing value; if empty (or `BAR_RESET_CONFIG=1`), call `prompt_<name>`; then call `apply_<name>`.
 - `ensure_module_by_name <name>` — same, looked up by registered name. Used by `just <module>::setup` recipes so they share lifecycle with `cmd_init`.
 - `ensure_all_modules` — iterate every module in registration order with auto-numbered `step` headers.
-- `doctor_modules` — read-only iteration; prints the registry as a table for `just doctor`.
-- `summarize_modules` — read-only iteration for `confirm_setup_plan`'s pre-flight rollup; prints a module's optional `summary_<name>` if defined, else the raw `KEY = value`.
+- `doctor_modules` — read-only iteration; prints the registry as a table for `just doctor`. Deliberately **not** gated by `module_relevant` — an `<unset>` row for a gated-out module is a valid diagnostic.
+- `summarize_modules` — read-only iteration for `confirm_setup_plan`'s pre-flight rollup; prints a module's optional `summary_<name>` if defined, else the raw `KEY = value`. Skips modules `module_relevant` rejects.
 
 `cmd_init`'s configuration phase becomes a flat sequence of `ensure_module_by_name <name>` calls. There is **no `read -rp` outside a module file** — that's what caused the re-ask leaks before this convention.
 
@@ -67,12 +72,35 @@ The fifth argument to `register_module` is `when`, defaulting to `config`. Pass 
 # created at cmd_init step 2/N. Tagging deferred so prompt fires at config
 # time (front-loaded) but apply waits until apply_deferred_modules is called
 # at the end of cmd_init.
-register_module editor BAR_EDITOR_SETUP prompt_editor apply_editor deferred
+register_module editor BAR_EDITOR_SETUP prompt_editor apply_editor deferred bar,recoil
 ```
 
 `ensure_module` for a deferred module runs only the prompt; `apply_deferred_modules` (called near the end of `cmd_init`, after distrobox/clones/builds) iterates and runs the deferred applies. The user still sees one prompt batch at the top — the apply just shifts in time.
 
 This is bash's stand-in for the `depends-on` graph a real config-management tool would express. Keep deferred to the genuinely-needs-later-state cases; don't tag everything deferred to "be safe".
+
+## Feature-gating: the 6th `register_module` arg
+
+A module relevant only to some features takes a comma-list `<features>` gate
+as the sixth argument. `module_relevant` is true when the gate is empty *or*
+overlaps the live `BAR_FEATURES`; `cmd_init` wraps the module's
+`ensure_module_by_name` in `if module_relevant <name>; then ...; fi`, and
+`summarize_modules` / `apply_deferred_modules` skip what it rejects. So a
+teiserver-only contributor is never asked about the Chobby channel,
+springsettings, the editor toolchain, or game-dir symlinks.
+
+The sixth arg sits *after* `<when>`, so a gated module must state `<when>`
+explicitly even when it's the `config` default:
+
+```bash
+register_module springsettings ALLOW_SPRINGSETTINGS_MOD \
+    prompt_springsettings apply_springsettings config bar,recoil
+```
+
+`features` and `ssh` are ungated (every selection clones repos and may need
+SSH). The gate lives at the `cmd_init` call site only — `just <module>::setup`
+still re-prompts any module directly, gate or no gate. Keep gates honest:
+list the features a module's decision actually affects, nothing more.
 
 ## Fail loudly inside apply_
 
@@ -117,7 +145,7 @@ Setup runs before `python3`, `pipx`, and `distrobox` are guaranteed to exist. A 
 
 1. Pick a number prefix that places it after any module whose `.env` value yours depends on, before any module that depends on yours.
 2. Drop a file at `scripts/setup/NN-<name>.sh` with `prompt_<name>` + `apply_<name>` + `register_module`.
-3. Wire it into `cmd_init` with `ensure_module_by_name <name> || true` (the `|| true` lets a module decline gracefully — e.g., `prompt_features` returning 1 if the user picked nothing).
+3. Wire it into `cmd_init` with `ensure_module_by_name <name> || true` (the `|| true` lets a module decline gracefully — e.g., `prompt_features` returning 1 if the user picked nothing). If the decision is feature-specific, give `register_module` a 6th `<features>` arg and wrap the call in `if module_relevant <name>; then ...; fi`.
 4. (Action module only) — make sure `apply_<name>` is idempotent: re-running on a 2nd `setup::init` invocation must not do destructive work. The pattern is: read current state, compare to desired, no-op if equal.
 5. (Selection module only) — wire the downstream consumer to read `BAR_<KEY>` via `read_env_key`, not from a local-variable holdover.
 6. Add a recipe `just <module>::setup` whose body is `ensure_module_by_name <name>` if standalone re-prompting is useful (`bar::dev-mode` is the precedent: it calls `apply_chobby_channel` directly because the recipe's whole job is "force the value" without re-prompting).

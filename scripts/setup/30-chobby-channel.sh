@@ -65,4 +65,6 @@ apply_chobby_channel() {
     ok "Chobby gameConfig set to $desired (chobby_config.json + IGL_data.lua)"
 }
 
-register_module chobby_channel BAR_CHOBBY_CHANNEL prompt_chobby_channel apply_chobby_channel
+# Gated to bar,chobby: the Chobby gameConfig channel only matters when the
+# game/lobby is in the selection (bar-lobby loads Chobby).
+register_module chobby_channel BAR_CHOBBY_CHANNEL prompt_chobby_channel apply_chobby_channel config bar,chobby

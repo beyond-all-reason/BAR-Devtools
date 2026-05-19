@@ -36,11 +36,46 @@ err()   { echo -e "${RED}[error]${NC} $*"; }
 step()  { echo -e "${CYAN}[step]${NC}  $*"; }
 
 # ---------------------------------------------------------------------------
+# .env persistence (CLAUDE.md: ".env is the persistence layer"). Generic
+# read/write helpers -- not module-registry internals -- so setup modules,
+# repos.sh, doctor, and the feature mechanism below all go through them.
+# common.sh is sourced before scripts/setup/_lib.sh everywhere, so the
+# registry engine picks these up too.
+# ---------------------------------------------------------------------------
+
+: "${SETUP_ENV_FILE:=$DEVTOOLS_DIR/.env}"
+
+# Echo the value of $1 from .env. Empty string if the file is missing or the
+# key is absent. Strips surrounding double quotes (some legacy writes quoted).
+read_env_key() {
+    local key="$1"
+    [ -f "$SETUP_ENV_FILE" ] || return 0
+    local val
+    val="$(grep -E "^${key}=" "$SETUP_ENV_FILE" 2>/dev/null | tail -n1 | cut -d= -f2-)"
+    val="${val%\"}"; val="${val#\"}"
+    printf '%s' "$val"
+}
+
+# Idempotent upsert of $1=$2 into .env. Touches the file if missing.
+write_env_key() {
+    local key="$1" val="$2"
+    touch "$SETUP_ENV_FILE"
+    if grep -q "^${key}=" "$SETUP_ENV_FILE" 2>/dev/null; then
+        # Use | as the sed separator so values with / pass through cleanly.
+        sed -i "s|^${key}=.*|${key}=${val}|" "$SETUP_ENV_FILE"
+    else
+        printf '%s=%s\n' "$key" "$val" >> "$SETUP_ENV_FILE"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Feature selection (single source of truth -- BAR_FEATURES in .env)
 # ---------------------------------------------------------------------------
 
-# True if the comma-separated feature list $1 contains tag $2. The one
-# canonical copy -- setup.sh and repos.sh both call this.
+# features_include <comma-list> <tag>
+# True if the comma-separated list $1 contains tag $2. Pure primitive, no
+# .env read -- used both against a repo's own REPO_FEATURES tags and as the
+# inner test of feature_selected. setup.sh and repos.sh both call this.
 features_include() {
     local IFS=','
     local f
@@ -50,20 +85,30 @@ features_include() {
     return 1
 }
 
+# feature_selected <feature-csv>
+# True if any of the comma-separated features is in the user's active
+# selection. THE way downstream code constrains on a feature -- callers never
+# re-fetch or thread the selection themselves. Reads BAR_FEATURES live from
+# .env (not the env var, which is stale inside cmd_init once the features
+# prompt has written a new value).
+feature_selected() {
+    local want="$1" sel f
+    sel="$(read_env_key BAR_FEATURES)"
+    local IFS=','
+    for f in $want; do
+        features_include "$sel" "$f" && return 0
+    done
+    return 1
+}
+
 # require_repo <feature-csv> <repo-dir> <human-name>
 # Guard for recipes that operate on a cloned repo. Succeeds if the repo is
 # materialized in the workspace; otherwise prints guidance that distinguishes
 # "feature never selected" from "selected but not cloned", and returns 1.
-# BAR_FEATURES reaches us as an env var via the Justfile's `set dotenv-load`.
 require_repo() {
     local feats="$1" dir="$2" name="$3"
     [ -d "$DEVTOOLS_DIR/$dir" ] && return 0
-    local f selected=0
-    local IFS=','
-    for f in $feats; do
-        features_include "${BAR_FEATURES:-}" "$f" && { selected=1; break; }
-    done
-    if [ "$selected" = 1 ]; then
+    if feature_selected "$feats"; then
         err "${name} is selected but not cloned."
         info "Run: just repos::clone ${feats%%,*}"
     else

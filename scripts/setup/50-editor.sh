@@ -27,4 +27,7 @@ summary_editor() {
 # AFTER the front-loaded config phase. Tagging deferred so prompt_editor
 # fires at config time (front-loaded with the other prompts) but
 # apply_editor runs at the end of cmd_init via apply_deferred_modules.
-register_module editor BAR_EDITOR_SETUP prompt_editor apply_editor deferred
+#
+# Gated to bar,recoil: editor setup exports the Lua / C++ toolchain --
+# teiserver is Elixir, so a teiserver-only contributor isn't prompted.
+register_module editor BAR_EDITOR_SETUP prompt_editor apply_editor deferred bar,recoil

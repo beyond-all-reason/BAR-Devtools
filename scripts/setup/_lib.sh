@@ -26,18 +26,21 @@
 # Registry
 # ---------------------------------------------------------------------------
 
-# Each entry: "name|env_key|prompt_fn|apply_fn|when"
+# Each entry: "name|env_key|prompt_fn|apply_fn|when|features"
 # `when` is "config" (default; apply runs immediately after prompt during
 # cmd_init's front-loaded configuration phase) or "deferred" (apply runs
 # at the END of cmd_init after distrobox / clones / builds are in place).
 # Use deferred for modules whose apply touches state created by later
 # cmd_init steps -- the canonical example is editor, whose
 # distrobox-export needs the bar-dev container up first.
+# `features` is an optional comma-list: the module is only prompted/applied/
+# summarized when at least one of those features is selected (empty = always
+# relevant). See module_relevant.
 declare -ag SETUP_MODULES=()
 declare -Ag SETUP_MODULE_INDEX=()  # name -> index in SETUP_MODULES
 
 register_module() {
-    local name="$1" key="$2" prompt_fn="$3" apply_fn="$4" when="${5:-config}"
+    local name="$1" key="$2" prompt_fn="$3" apply_fn="$4" when="${5:-config}" features="${6:-}"
     local f
     for f in "$prompt_fn" "$apply_fn"; do
         if ! declare -F "$f" >/dev/null; then
@@ -50,45 +53,41 @@ register_module() {
         *) echo "[register_module] $name: unknown when='$when' (config|deferred)" >&2; return 1 ;;
     esac
     SETUP_MODULE_INDEX["$name"]=${#SETUP_MODULES[@]}
-    SETUP_MODULES+=("$name|$key|$prompt_fn|$apply_fn|$when")
+    SETUP_MODULES+=("$name|$key|$prompt_fn|$apply_fn|$when|$features")
 }
 
 # Read a module entry by index. Sets SETUP_M_NAME / SETUP_M_KEY /
-# SETUP_M_PROMPT / SETUP_M_APPLY / SETUP_M_WHEN in the caller's scope.
+# SETUP_M_PROMPT / SETUP_M_APPLY / SETUP_M_WHEN / SETUP_M_FEATURES in the
+# caller's scope.
 _load_module_entry() {
     local entry="$1"
-    IFS='|' read -r SETUP_M_NAME SETUP_M_KEY SETUP_M_PROMPT SETUP_M_APPLY SETUP_M_WHEN <<<"$entry"
+    IFS='|' read -r SETUP_M_NAME SETUP_M_KEY SETUP_M_PROMPT SETUP_M_APPLY SETUP_M_WHEN SETUP_M_FEATURES <<<"$entry"
     : "${SETUP_M_WHEN:=config}"
 }
 
-# ---------------------------------------------------------------------------
-# .env helpers (single source of truth)
-# ---------------------------------------------------------------------------
-
-: "${SETUP_ENV_FILE:=$DEVTOOLS_DIR/.env}"
-
-# Echo the value of $1 from .env. Empty string if file is missing or key
-# absent. Strips surrounding double quotes (some legacy writes quoted them).
-read_env_key() {
-    local key="$1"
-    [ -f "$SETUP_ENV_FILE" ] || return 0
-    local val
-    val="$(grep -E "^${key}=" "$SETUP_ENV_FILE" 2>/dev/null | tail -n1 | cut -d= -f2-)"
-    val="${val%\"}"; val="${val#\"}"
-    printf '%s' "$val"
-}
-
-# Idempotent upsert of $1=$2 into .env. Touches the file if missing.
-write_env_key() {
-    local key="$1" val="$2"
-    touch "$SETUP_ENV_FILE"
-    if grep -q "^${key}=" "$SETUP_ENV_FILE" 2>/dev/null; then
-        # Use | as sed separator so paths with / pass through cleanly.
-        sed -i "s|^${key}=.*|${key}=${val}|" "$SETUP_ENV_FILE"
-    else
-        printf '%s=%s\n' "$key" "$val" >> "$SETUP_ENV_FILE"
+# module_relevant <name> -- true if the module has no feature gate, or if at
+# least one of its gate features is in the active selection. cmd_init step 0
+# wraps each gated module's ensure_module_by_name in this; summarize_modules
+# and apply_deferred_modules skip the modules it rejects. Parses the entry
+# into LOCALS so callers iterating the SETUP_M_* globals aren't clobbered.
+module_relevant() {
+    local idx="${SETUP_MODULE_INDEX[$1]:-}"
+    if [ -z "$idx" ]; then
+        err "module_relevant: no module registered as '$1'"
+        return 1
     fi
+    local _n _k _p _a _w _feats
+    IFS='|' read -r _n _k _p _a _w _feats <<<"${SETUP_MODULES[$idx]}"
+    [ -z "$_feats" ] && return 0
+    feature_selected "$_feats"
 }
+
+# ---------------------------------------------------------------------------
+# .env persistence (read_env_key / write_env_key / SETUP_ENV_FILE) lives in
+# scripts/common.sh now -- generic persistence helpers, not registry
+# internals, and common.sh is sourced before this file everywhere. The
+# registry engine below just calls them.
+# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # Lifecycle engine
@@ -128,10 +127,10 @@ apply_deferred_modules() {
     local entry
     for entry in "${SETUP_MODULES[@]}"; do
         _load_module_entry "$entry"
-        if [ "$SETUP_M_WHEN" = "deferred" ]; then
-            step "deferred apply: $SETUP_M_NAME"
-            "$SETUP_M_APPLY"
-        fi
+        [ "$SETUP_M_WHEN" = "deferred" ] || continue
+        module_relevant "$SETUP_M_NAME" || continue
+        step "deferred apply: $SETUP_M_NAME"
+        "$SETUP_M_APPLY"
     done
 }
 
@@ -191,6 +190,7 @@ summarize_modules() {
     local entry fn val
     for entry in "${SETUP_MODULES[@]}"; do
         _load_module_entry "$entry"
+        module_relevant "$SETUP_M_NAME" || continue
         fn="summary_${SETUP_M_NAME}"
         if declare -F "$fn" >/dev/null; then
             val="$("$fn")"

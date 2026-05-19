@@ -43,4 +43,6 @@ summary_link_on_build() {
     fi
 }
 
-register_module link_on_build BAR_LINK_ON_BUILD prompt_link_on_build apply_link_on_build
+# Gated to bar,recoil,chobby: link_on_build symlinks game content / the
+# engine into the game dir -- nothing to link on a teiserver-only setup.
+register_module link_on_build BAR_LINK_ON_BUILD prompt_link_on_build apply_link_on_build config bar,recoil,chobby

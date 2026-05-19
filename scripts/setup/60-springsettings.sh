@@ -18,4 +18,5 @@ summary_springsettings() {
     fi
 }
 
-register_module springsettings ALLOW_SPRINGSETTINGS_MOD prompt_springsettings apply_springsettings
+# Gated to bar,recoil: springsettings.cfg is an engine-launch concern.
+register_module springsettings ALLOW_SPRINGSETTINGS_MOD prompt_springsettings apply_springsettings config bar,recoil
