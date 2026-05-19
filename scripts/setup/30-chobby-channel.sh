@@ -38,9 +38,11 @@ prompt_chobby_channel() {
     info "  byar      -> latest rapid test build (read-only, dev mode off)"
     [ -n "$current" ] && info "Current chobby_config.json: $current"
 
-    local ans
-    read -rp "Switch Chobby to byar-dev? [Y/n] " ans
-    if [ -z "$ans" ] || [[ "$ans" =~ ^[Yy] ]]; then
+    # Default to the saved choice; byar-dev on first run (the recommended).
+    local def=y saved
+    saved="$(read_env_key BAR_CHOBBY_CHANNEL)"
+    [ -n "$saved" ] && [ "$saved" != "byar-dev" ] && def=n
+    if ask_yes_no "Switch Chobby to byar-dev?" "$def"; then
         write_env_key BAR_CHOBBY_CHANNEL "byar-dev"
     else
         # Record the user's intent (whatever the file currently says).

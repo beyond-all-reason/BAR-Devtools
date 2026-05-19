@@ -20,9 +20,9 @@ prompt_link_on_build() {
     fi
     info "Game directory detected: $game_dir"
     warn "Symlinking will replace any existing engine/chobby/bar dirs there."
-    local ans
-    read -rp "Symlink all selected components into the game dir after build? [y/N] " ans
-    if [[ "$ans" =~ ^[Yy]$ ]]; then
+    local def=n
+    [ "$(read_env_key BAR_LINK_ON_BUILD)" = "yes" ] && def=y
+    if ask_yes_no "Symlink all selected components into the game dir after build?" "$def"; then
         write_env_key BAR_LINK_ON_BUILD "yes"
     else
         write_env_key BAR_LINK_ON_BUILD "no"

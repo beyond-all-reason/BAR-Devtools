@@ -1523,6 +1523,20 @@ checkbox_list() {
   return 0
 }
 
+# Yes/no prompt with a seeded default. $1 = question, $2 = default ("y"|"n").
+# The [Y/n] / [y/N] hint reflects the default and empty input takes it, so a
+# `setup::reconfigure` is Enter-through: callers pass the saved .env value as
+# the default, and pressing Enter keeps it. Returns 0 for yes, 1 for no.
+ask_yes_no() {
+  local q="$1" def="$2" ans hint
+  [ "$def" = "y" ] && hint="[Y/n]" || hint="[y/N]"
+  read -r -p "$q $hint " ans
+  case "${ans:-$def}" in
+    y|Y|yes|YES) return 0 ;;
+    *)           return 1 ;;
+  esac
+}
+
 # Note: features lives in scripts/setup/20-features.sh now. The module
 # registers prompt_features / apply_features at source-load time, and
 # cmd_init drives it through `ensure_module_by_name features`.
@@ -1555,11 +1569,13 @@ prompt_springsettings_opt_in() {
   echo "  no-op. The keys we manage are listed in scripts/launch.sh under"
   echo "  _MANAGED_SPRINGSETTINGS; nothing else in the cfg is read or written."
   echo ""
-  read -r -p "Allow bar::launch to modify springsettings.cfg for its managed flags? [y/N] " ans
-  case "${ans:-}" in
-    y|Y|yes|YES) write_springsettings_optin_env 1 ;;
-    *)           write_springsettings_optin_env 0 ;;
-  esac
+  local def=n
+  [ "$(read_env_key ALLOW_SPRINGSETTINGS_MOD)" = "1" ] && def=y
+  if ask_yes_no "Allow bar::launch to modify springsettings.cfg for its managed flags?" "$def"; then
+    write_springsettings_optin_env 1
+  else
+    write_springsettings_optin_env 0
+  fi
 }
 
 # Detect whether GitHub already accepts an SSH key from the running agent.
@@ -1600,13 +1616,23 @@ prompt_ssh_setup_choice() {
   echo "    2) manual  Generate ~/.ssh/id_ed25519 + walk through GitHub"
   echo "    3) skip    Don't configure now (clone over HTTPS; re-run later)"
   echo ""
+  # Default the menu to the saved choice so a reconfigure is Enter-through.
+  # existing/skip/unset all land on 3 (the menu has no "existing" item --
+  # it's autodetect-only -- and "leave ssh alone" is closest to skip).
+  local cur defnum
+  cur="$(read_env_key BAR_SSH_SETUP)"
+  case "$cur" in
+    op)     defnum=1 ;;
+    manual) defnum=2 ;;
+    *)      defnum=3 ;;
+  esac
   local ans choice=""
   while [ -z "$choice" ]; do
-    read -r -p "Choice [1-3]: " ans
-    case "${ans:-}" in
+    read -r -p "Choice [1-3] (default ${defnum}): " ans
+    case "${ans:-$defnum}" in
       1|op)      choice="op" ;;
       2|manual)  choice="manual" ;;
-      3|skip|"") choice="skip" ;;
+      3|skip)    choice="skip" ;;
       *)         echo "  Invalid choice: ${ans}" ;;
     esac
   done
@@ -1727,12 +1753,13 @@ prompt_editor_setup_choice() {
   editor_collect_state
   _editor_show_preamble
 
-  local ans
-  read -r -p "Wire up editor integration after the build? [Y/n] " ans
-  case "${ans:-y}" in
-    y|Y|yes|YES) write_env_key BAR_EDITOR_SETUP yes ;;
-    *)           write_env_key BAR_EDITOR_SETUP no  ;;
-  esac
+  local def=y
+  [ "$(read_env_key BAR_EDITOR_SETUP)" = "no" ] && def=n
+  if ask_yes_no "Wire up editor integration after the build?" "$def"; then
+    write_env_key BAR_EDITOR_SETUP yes
+  else
+    write_env_key BAR_EDITOR_SETUP no
+  fi
 }
 
 # Read the persisted editor decisions from .env and run cmd_setup_editor if
