@@ -81,10 +81,7 @@ up *args:
     echo ""
 
     if [ "$start_lobby" -eq 1 ]; then
-        if [ ! -d "$LOBBY_DIR" ]; then
-            err "bar-lobby directory not found. Run 'just repos::clone' first."
-            exit 1
-        fi
+        require_repo bar,chobby bar-lobby "bar-lobby"
         if ! command -v node &>/dev/null; then
             err "Node.js is required for bar-lobby. Run 'just setup::deps'."
             exit 1
@@ -136,11 +133,7 @@ lobby:
     #!/usr/bin/env bash
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
-    if [ ! -d "$LOBBY_DIR" ]; then
-        err "bar-lobby directory not found at: $LOBBY_DIR"
-        err "Run 'just repos::clone' to clone repositories first."
-        exit 1
-    fi
+    require_repo bar,chobby bar-lobby "bar-lobby"
     if ! command -v node &>/dev/null; then
         err "Node.js is required for bar-lobby. Run 'just setup::deps'."
         exit 1

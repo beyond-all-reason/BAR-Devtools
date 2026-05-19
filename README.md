@@ -28,6 +28,8 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
 
 `setup::init` walks you through installing dependencies, cloning repositories, and building Docker images. You only need to run it once.
 
+To revisit those choices later -- change which features you work on, redo the SSH or editor setup -- run `just setup::reconfigure`. It re-prompts every saved `.env` decision, then re-clones for newly-selected features and prunes deselected ones (workspace symlinks are removed; in-tree clones are moved to `.backups/`, never deleted). Under the hood it just re-runs `setup::init` with the `BAR_RESET_CONFIG=1` environment variable, which forces each setup module to ask again instead of reusing `.env`.
+
 `services::up` starts PostgreSQL and Teiserver. On first run it seeds the database with test data and creates default accounts (~2-3 minutes). Subsequent starts are fast.
 
 Once running:

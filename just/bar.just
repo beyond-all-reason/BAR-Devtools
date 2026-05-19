@@ -11,11 +11,9 @@ INTEGRATION_COMPOSE := "podman compose -f " + BAR_DIR / "tools" / "headless_test
 [private]
 require-bar:
     #!/usr/bin/env bash
-    if [ ! -d "{{BAR_DIR}}" ]; then
-        echo "Error: Beyond-All-Reason is not cloned." >&2
-        echo "Run: just repos::clone bar" >&2
-        exit 1
-    fi
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    require_repo bar Beyond-All-Reason "Beyond All Reason"
 
 [private]
 require-emmylua-check:

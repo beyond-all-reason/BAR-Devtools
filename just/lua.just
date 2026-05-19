@@ -10,11 +10,7 @@ build-lde:
     #!/usr/bin/env bash
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
-    if [ ! -d "$LDE_DIR" ]; then
-        err "lua-doc-extractor not found at $LDE_DIR"
-        info "Clone it first: just repos::clone recoil"
-        exit 1
-    fi
+    require_repo recoil lua-doc-extractor "lua-doc-extractor"
     cd "$LDE_DIR"
     npm ci && npm run build
     ok "lua-doc-extractor built"

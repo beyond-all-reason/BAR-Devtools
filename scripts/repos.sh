@@ -239,16 +239,8 @@ fixup_remotes() {
   fi
 }
 
-# True if comma-separated feature list $1 contains tag $2.
-repo_has_feature() {
-  local list="$1" tag="$2"
-  local IFS=','
-  local f
-  for f in $list; do
-    [ "$f" = "$tag" ] && return 0
-  done
-  return 1
-}
+# features_include (the comma-list membership test) lives in common.sh,
+# which this file requires to be sourced first.
 
 clone_or_update_repo() {
   local dir="$1" url="$2" branch="$3" upstream_url="$4" local_path="${5:-}" target="$DEVTOOLS_DIR/$dir"
@@ -357,7 +349,7 @@ cmd_clone() {
     local feature="${REPO_FEATURES[$i]}"
     local local_path="${REPO_LOCAL_PATHS[$i]}"
 
-    if [ "$feature_filter" != "all" ] && ! repo_has_feature "$feature" "$feature_filter"; then
+    if [ "$feature_filter" != "all" ] && ! features_include "$feature" "$feature_filter"; then
       skipped=$((skipped + 1))
       continue
     fi

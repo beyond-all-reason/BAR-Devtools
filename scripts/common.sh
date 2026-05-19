@@ -35,6 +35,44 @@ warn()  { echo -e "${YELLOW}[warn]${NC}  $*"; }
 err()   { echo -e "${RED}[error]${NC} $*"; }
 step()  { echo -e "${CYAN}[step]${NC}  $*"; }
 
+# ---------------------------------------------------------------------------
+# Feature selection (single source of truth -- BAR_FEATURES in .env)
+# ---------------------------------------------------------------------------
+
+# True if the comma-separated feature list $1 contains tag $2. The one
+# canonical copy -- setup.sh and repos.sh both call this.
+features_include() {
+    local IFS=','
+    local f
+    for f in $1; do
+        [ "$f" = "$2" ] && return 0
+    done
+    return 1
+}
+
+# require_repo <feature-csv> <repo-dir> <human-name>
+# Guard for recipes that operate on a cloned repo. Succeeds if the repo is
+# materialized in the workspace; otherwise prints guidance that distinguishes
+# "feature never selected" from "selected but not cloned", and returns 1.
+# BAR_FEATURES reaches us as an env var via the Justfile's `set dotenv-load`.
+require_repo() {
+    local feats="$1" dir="$2" name="$3"
+    [ -d "$DEVTOOLS_DIR/$dir" ] && return 0
+    local f selected=0
+    local IFS=','
+    for f in $feats; do
+        features_include "${BAR_FEATURES:-}" "$f" && { selected=1; break; }
+    done
+    if [ "$selected" = 1 ]; then
+        err "${name} is selected but not cloned."
+        info "Run: just repos::clone ${feats%%,*}"
+    else
+        err "${name} isn't in your selected features (BAR_FEATURES)."
+        info "Add it: just setup::reconfigure  (or clone directly: just repos::clone ${feats%%,*})"
+    fi
+    return 1
+}
+
 is_wsl() {
     [ -n "${WSL_DISTRO_NAME:-}" ] || [ -f /proc/sys/fs/binfmt_misc/WSLInterop ]
 }

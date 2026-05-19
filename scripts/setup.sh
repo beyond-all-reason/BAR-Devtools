@@ -1430,22 +1430,15 @@ feature_repos() {
   local feature="$1"
   local i out=""
   for i in "${!REPO_DIRS[@]}"; do
-    if repo_has_feature "${REPO_FEATURES[$i]}" "$feature"; then
+    if features_include "${REPO_FEATURES[$i]}" "$feature"; then
       out="${out}${REPO_DIRS[$i]} "
     fi
   done
   echo "${out% }"
 }
 
-# True if the comma-separated feature list contains $2.
-features_include() {
-  local IFS=','
-  local f
-  for f in $1; do
-    [ "$f" = "$2" ] && return 0
-  done
-  return 1
-}
+# features_include / require_repo are defined in scripts/common.sh, which is
+# sourced before this file -- one canonical copy, shared with repos.sh.
 
 # Comma-separated features -> deduplicated space-separated repo dirs.
 features_to_repos() {
@@ -1891,10 +1884,28 @@ clone_for_features() {
     echo ""
   fi
 
-  local i cloned=0 updated=0 linked=0
+  local i cloned=0 updated=0 linked=0 pruned=0
   for i in "${!REPO_DIRS[@]}"; do
     local dir="${REPO_DIRS[$i]}"
-    [[ " $wanted " == *" $dir "* ]] || continue
+    if [[ " $wanted " != *" $dir "* ]]; then
+      # Deselected feature: drop the workspace entry so the tree matches
+      # BAR_FEATURES. A symlink is disposable (the external checkout it
+      # points at is left alone); a real in-workspace clone is moved to
+      # .backups/ -- never deleted.
+      local target="$DEVTOOLS_DIR/$dir"
+      if [ -L "$target" ]; then
+        info "  ${dir}: deselected -- removing workspace symlink ($(readlink "$target") kept)"
+        rm "$target"
+        pruned=$((pruned + 1))
+      elif [ -d "$target" ]; then
+        local backup="$DEVTOOLS_DIR/.backups/${dir}-$(date +%Y%m%d-%H%M%S)"
+        warn "  ${dir}: deselected -- moving workspace copy to ${backup}"
+        mkdir -p "$DEVTOOLS_DIR/.backups"
+        mv "$target" "$backup"
+        pruned=$((pruned + 1))
+      fi
+      continue
+    fi
 
     local local_path="${REPO_LOCAL_PATHS[$i]}"
     local upstream_url="${REPO_UPSTREAM_URLS[$i]}"
@@ -1913,6 +1924,7 @@ clone_for_features() {
   echo ""
   local summary="${cloned} cloned, ${updated} updated"
   [ "$linked" -gt 0 ] && summary+=", ${linked} linked"
+  [ "$pruned" -gt 0 ] && summary+=", ${pruned} pruned"
   ok "Repos: ${summary}"
 }
 
@@ -2042,13 +2054,19 @@ cmd_init() {
   if [ -z "$game_dir" ]; then
     info "No game directory detected. Set BAR_DATA_DIR to enable linking."
   elif [ "$do_link" = "yes" ]; then
-    local available=() name
-    features_include "$features" recoil && [ -d "$DEVTOOLS_DIR/RecoilEngine" ] && available+=("engine")
-    features_include "$features" chobby && [ -d "$DEVTOOLS_DIR/BYAR-Chobby" ]    && available+=("chobby")
-    features_include "$features" bar    && [ -d "$DEVTOOLS_DIR/Beyond-All-Reason" ] && available+=("bar")
+    local spec feat dir name
     BAR_DATA_DIR="$game_dir"
-    for name in "${available[@]}"; do
-      cmd_link "$name"
+    # Feature selection decides whether we link; repo presence decides
+    # whether we can. A selected-but-missing repo is a loud warning, not a
+    # silent skip -- that combination means the clone step failed.
+    for spec in "recoil:RecoilEngine:engine" "chobby:BYAR-Chobby:chobby" "bar:Beyond-All-Reason:bar"; do
+      IFS=: read -r feat dir name <<<"$spec"
+      features_include "$features" "$feat" || continue
+      if [ -d "$DEVTOOLS_DIR/$dir" ]; then
+        cmd_link "$name"
+      else
+        warn "  ${feat} selected but ${dir} not present -- skipping link (clone may have failed)"
+      fi
     done
 
     # WSL2: pre-warm the Watchman cold-copy seed during init's AFK time.
@@ -2155,7 +2173,7 @@ cmd_setup() {
   local missing_teiserver=0
   load_repos_conf
   for i in "${!REPO_DIRS[@]}"; do
-    if repo_has_feature "${REPO_FEATURES[$i]}" "teiserver" \
+    if features_include "${REPO_FEATURES[$i]}" "teiserver" \
        && [ ! -d "$DEVTOOLS_DIR/${REPO_DIRS[$i]}/.git" ]; then
       missing_teiserver=1
       break

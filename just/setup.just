@@ -15,6 +15,17 @@ init *args:
     source "$DEVTOOLS_DIR/scripts/setup.sh"
     cmd_init {{args}}
 
+# Re-run setup, re-prompting every saved .env decision (features, ssh, ...)
+reconfigure *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    source "$DEVTOOLS_DIR/scripts/repos.sh"
+    source "$DEVTOOLS_DIR/scripts/setup.sh"
+    # BAR_RESET_CONFIG makes ensure_module re-prompt instead of reusing .env.
+    export BAR_RESET_CONFIG=1
+    cmd_init {{args}}
+
 # Install system packages (git, podman/docker, distrobox)
 deps:
     #!/usr/bin/env bash

@@ -8,11 +8,9 @@ TEISERVER_DIR   := DEVTOOLS_DIR / "teiserver"
 [private]
 require-setup:
     #!/usr/bin/env bash
-    if [ ! -d "{{TEISERVER_DIR}}" ]; then
-        echo "Error: teiserver is not cloned." >&2
-        echo "Run: just setup::init" >&2
-        exit 1
-    fi
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    require_repo teiserver teiserver "Teiserver"
 
 # Initialize and migrate the test database
 setup-test-db: require-setup

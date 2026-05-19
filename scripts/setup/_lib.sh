@@ -111,6 +111,11 @@ ensure_module() {
         "$SETUP_M_PROMPT"
     else
         info "$SETUP_M_NAME: using $SETUP_M_KEY=$current from .env"
+        # Point users at the re-prompt path once, on the first skipped module.
+        if [ -z "${_RECONFIG_HINT_SHOWN:-}" ]; then
+            info "  (re-run 'just setup::reconfigure' to change saved answers)"
+            _RECONFIG_HINT_SHOWN=1
+        fi
     fi
     if [ "$SETUP_M_WHEN" = "config" ]; then
         "$SETUP_M_APPLY"
