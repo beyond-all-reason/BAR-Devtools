@@ -1,11 +1,6 @@
 #!/usr/bin/env bash
-# Manual SSH setup: generate a key (if absent), run an ssh-agent, walk the
-# user through pasting the public key into github.com/settings/keys, and
-# verify end-to-end.
-#
-# This is the universal fallback for contributors who don't use a password
-# manager. The agent here is plain openssh-agent, not a vault — keys live
-# at ~/.ssh/id_ed25519 with passphrase prompts on first add.
+# Manual SSH setup: generate a key, run a plain ssh-agent, register the public
+# key on GitHub, and verify. Fallback for contributors without a password manager.
 set -euo pipefail
 
 DEVTOOLS_DIR="${DEVTOOLS_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
@@ -17,7 +12,6 @@ source "$DEVTOOLS_DIR/scripts/ssh/lib.sh"
 KEY_PATH="$HOME/.ssh/id_ed25519"
 KEY_TYPE="ed25519"
 
-# --- Step 1: generate key if needed ---
 step "1/4 SSH key"
 mkdir -p "$HOME/.ssh"
 chmod 700 "$HOME/.ssh"
@@ -31,7 +25,6 @@ else
     ok "Key generated."
 fi
 
-# --- Step 2: ensure an ssh-agent is running and the key is loaded ---
 step "2/4 ssh-agent"
 if ! ssh-add -l >/dev/null 2>&1; then
     if [ -z "${SSH_AUTH_SOCK:-}" ]; then
@@ -65,7 +58,6 @@ BLOCK
 )"
 ok "Updated ${SHELLRC_TARGET/#$HOME/~} (block: manual-ssh-agent)."
 
-# --- Step 3: walk through registering the public key on GitHub ---
 step "3/4 Register the public key on GitHub"
 echo ""
 echo "    Open this page in a browser (logged in as the GitHub account you'll"
@@ -81,7 +73,6 @@ sed 's/^/        /' "${KEY_PATH}.pub"
 echo ""
 read -rp "    Press Enter once you've added the key... " _
 
-# --- Step 4: verify end-to-end ---
 step "4/4 Verify"
 op_ssh_verify
 echo ""

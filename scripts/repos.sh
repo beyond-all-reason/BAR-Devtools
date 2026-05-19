@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
-# Repository management helpers.
+# Repository management helpers. Source scripts/common.sh before this file.
 # Expects: DEVTOOLS_DIR, REPOS_CONF, REPOS_LOCAL (exported by Justfile)
-# Source scripts/common.sh before this file.
 
 declare -a REPO_DIRS=() REPO_URLS=() REPO_UPSTREAM_URLS=() REPO_BRANCHES=() REPO_FEATURES=() REPO_LOCAL_PATHS=()
 
-# Apply @protocol rewrite to a github.com URL.
 _apply_protocol() {
   local url="$1" protocol="$2"
   if [ "$protocol" = "ssh" ] && [[ "$url" =~ ^https://github\.com/(.+)$ ]]; then
@@ -31,7 +29,7 @@ load_repos_conf() {
       line="$(echo "$line" | xargs 2>/dev/null || true)"
       [ -z "$line" ] && continue
 
-      # Directive lines: @key value
+      # directive lines: @key value
       if [[ "$line" =~ ^@([a-z_]+)[[:space:]]+(.+)$ ]]; then
         local key="${BASH_REMATCH[1]}" val="${BASH_REMATCH[2]}"
         case "$key" in
@@ -47,13 +45,7 @@ load_repos_conf() {
       [ -z "$dir" ] && continue
       local_path="${local_path/#\~/$HOME}"
 
-      # repos.conf supplies the canonical URL (used for the `upstream` remote
-      # so tags reach the local clone even when origin is a fork). repos.local.conf
-      # is a per-field override: any column the user leaves blank falls back to
-      # whatever repos.conf set. Only `dir` is required (the join key); url /
-      # branch / feature / local_path all merge. A local override only needs to
-      # list the columns it actually wants to change -- typically just `url` for
-      # a fork or `local_path` for a sibling checkout.
+      # repos.conf URL is canonical; repos.local.conf overrides per blank column
       if [ "$is_base" = "1" ] && [ -n "$url" ]; then
         base_urls[$dir]="$url"
       fi
@@ -68,8 +60,6 @@ load_repos_conf() {
       local_path="${local_path:-$prev_local_path}"
       [ -z "$url" ] && continue
 
-      # Use a separator unlikely to appear in any field so the round-trip
-      # through `read` survives empty feature/local_path columns.
       seen[$dir]="$url|$branch|$feature|$local_path"
     done < "$file"
   }
@@ -86,14 +76,12 @@ load_repos_conf() {
     if [ -n "${base_urls[$dir]:-}" ]; then
       local base_url
       base_url="$(_apply_protocol "${base_urls[$dir]}" "$protocol")"
-      # Only treat the canonical as a separate `upstream` when it differs
-      # from origin -- otherwise a single remote already covers it.
+      # only a separate `upstream` when canonical differs from origin
       if [ "$base_url" != "$url" ]; then
         upstream_url="$base_url"
       fi
     fi
 
-    # @local_root: any repo without an explicit local_path gets $local_root/$dir.
     if [ -z "$local_path" ] && [ -n "$local_root" ]; then
       local_path="$local_root/$dir"
     fi
@@ -107,15 +95,7 @@ load_repos_conf() {
   done
 }
 
-# Remote model:
-#   * Canonical URL (repos.conf) is always `upstream`.
-#   * Fork URL (repos.local.conf override) is `origin`. Without an override,
-#     `origin` doesn't exist -- the only remote is `upstream`.
-# We never mutate remotes on existing clones implicitly; verify_remotes only
-# warns and points users at `just repos::fixup`. Fresh clones from this script
-# are created in the right shape from the start.
-
-# Warn (don't touch) when an existing repo's remotes don't match config.
+# warn (don't touch) when an existing repo's remotes don't match config
 verify_remotes() {
   local dir="$1" target="$2" url="$3" upstream_url="$4"
   [ -d "$target/.git" ] || return 0
@@ -126,13 +106,11 @@ verify_remotes() {
 
   local complaint=""
   if [ -n "$upstream_url" ]; then
-    # Fork in play: expect origin=$url, upstream=$upstream_url.
     if [ "$origin_url" != "$url" ] || [ "$upstream_remote_url" != "$upstream_url" ]; then
       complaint="expected origin=${url}, upstream=${upstream_url}"
     fi
   else
-    # No fork: expect a single remote `upstream` = canonical. Tolerate the
-    # legacy layout where origin (and only origin) points at canonical.
+    # tolerate the legacy layout where origin (and only origin) is canonical
     if [ -n "$upstream_remote_url" ] && [ "$upstream_remote_url" != "$url" ]; then
       complaint="expected upstream=${url}"
     elif [ -z "$upstream_remote_url" ] && [ -n "$origin_url" ] && [ "$origin_url" != "$url" ]; then
@@ -148,7 +126,6 @@ verify_remotes() {
   fi
 }
 
-# Fetch every existing remote so tags from both origin and upstream stay current.
 fetch_all_remotes() {
   local dir="$1" target="$2"
   local remote
@@ -159,12 +136,11 @@ fetch_all_remotes() {
   done < <(git -C "$target" remote)
 }
 
-# Clone $url into $target with the correct origin name and (if forked) wire
-# upstream + fetch tags. Used for fresh checkouts only.
+# fresh checkouts only
 do_clone() {
   local dir="$1" url="$2" branch="$3" upstream_url="$4" target="$5"
   local origin_name="origin"
-  # No fork override -> the canonical IS our only remote, name it `upstream`.
+  # no fork override -> canonical is our only remote, name it `upstream`
   [ -z "$upstream_url" ] && origin_name="upstream"
 
   info "  ${dir}: cloning ${url} as ${origin_name} (branch: ${branch})..."
@@ -181,9 +157,7 @@ do_clone() {
   fi
 }
 
-# Normalize an existing repo to the (origin=fork, upstream=canonical) model.
-# Only acts on layouts we recognize; warns and skips otherwise so we never
-# blow away custom remote setups.
+# normalize an existing repo's remotes; warns and skips unrecognized layouts
 fixup_remotes() {
   local dir="$1" target="$2" url="$3" upstream_url="$4"
   [ -d "$target/.git" ] || return 0
@@ -193,7 +167,6 @@ fixup_remotes() {
   upstream_remote_url="$(git -C "$target" remote get-url upstream 2>/dev/null || true)"
 
   if [ -n "$upstream_url" ]; then
-    # Target: origin=$url (fork), upstream=$upstream_url (canonical).
     if [ "$origin_url" = "$url" ] && [ "$upstream_remote_url" = "$upstream_url" ]; then
       ok "  ${dir}: already normalized"
       return 0
@@ -219,7 +192,6 @@ fixup_remotes() {
     git -C "$target" fetch upstream --tags --quiet 2>/dev/null \
       || warn "  ${dir}: upstream fetch failed (offline or auth?)"
   else
-    # Target: single remote `upstream` = canonical ($url).
     if [ "$upstream_remote_url" = "$url" ]; then
       ok "  ${dir}: already normalized"
       return 0
@@ -239,28 +211,20 @@ fixup_remotes() {
   fi
 }
 
-# features_include (the comma-list membership test) lives in common.sh,
-# which this file requires to be sourced first.
-
 clone_or_update_repo() {
   local dir="$1" url="$2" branch="$3" upstream_url="$4" local_path="${5:-}" target="$DEVTOOLS_DIR/$dir"
 
-  # --- config wants a symlink: workspace slot -> external checkout --------
+  # config wants a symlink: workspace slot -> external checkout
   if [ -n "$local_path" ]; then
-    # Create the canonical checkout's parent (e.g. ~/code for @local_root).
     mkdir -p "$(dirname "$local_path")"
 
-    # Reconcile a real directory occupying the workspace slot before we
-    # populate $local_path. (A symlink is handled after the clone step.)
     if [ ! -L "$target" ] && [ -d "$target" ]; then
       if [ -d "$target/.git" ] && [ ! -d "$local_path" ]; then
-        # Workspace copy IS the repo and the canonical slot is free:
-        # promote it rather than discard the user's branches/work.
+        # workspace copy is the repo and canonical slot is free: promote it
         info "  ${dir}: moving workspace checkout -> ${local_path}"
         mv "$target" "$local_path" || { err "  ${dir}: move failed"; return 1; }
       else
-        # Stale duplicate ($local_path already populated) or a non-repo
-        # directory: move it aside so we never delete user data.
+        # move aside so we never delete user data
         local backup="$DEVTOOLS_DIR/.backups/${dir}-$(date +%Y%m%d-%H%M%S)"
         warn "  ${dir}: workspace has a real directory where config wants a symlink"
         info "  ${dir}: backing it up -> ${backup}"
@@ -293,15 +257,13 @@ clone_or_update_repo() {
     return 0
   fi
 
-  # --- config wants an in-place clone: workspace slot IS the checkout -----
-  # Reverse drift: a symlink where config now wants a real in-place clone.
+  # config wants an in-place clone: workspace slot is the checkout
   if [ -L "$target" ]; then
     local dest
     dest="$(readlink "$target")"
     warn "  ${dir}: workspace is a symlink but config says clone-in-place"
     rm "$target"
     if [ -d "$dest/.git" ]; then
-      # Mirror the forward promote: keep the user's real repo, relocate it.
       info "  ${dir}: moving ${dest} into the workspace"
       mv "$dest" "$target" || { err "  ${dir}: move failed"; return 1; }
     fi
@@ -437,7 +399,6 @@ cmd_update() {
       branch="$(git -C "$target" branch --show-current 2>/dev/null)"
       info "${dir}: pulling ${branch}..."
       git -C "$target" pull --ff-only 2>&1 | sed 's/^/    /' || warn "  ${dir}: pull failed (conflicts?)"
-      # Keep tags from every configured remote current (upstream releases, etc.)
       fetch_all_remotes "$dir" "$target"
     fi
   done

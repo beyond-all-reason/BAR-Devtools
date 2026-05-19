@@ -1,26 +1,15 @@
 #!/usr/bin/env bash
-# WSL-side mirror daemon: watches WSL Devtools subtrees (Beyond-All-Reason,
-# BYAR-Chobby, RecoilEngine install/) on native inotify and writes through
-# /mnt/c into $BAR_DATA_DIR -- the spring data dir.
+# WSL host entry point for the mirror daemon. Enters the bar-sync container
+# to run scripts/sync.py.
 #
-# Subcommands:
-#   start [--wait-ready]   start daemon (cold-copies, then watches; idempotent)
-#   stop                   SIGTERM, wait, SIGKILL
-#   status                 PID + alive/dead
-#   cold-copy              one-shot seed of source pairs (no watcher); used by
-#                          setup::init to pre-warm Watchman state in AFK time
-#   mirror-engine          one-shot cold copy of the engine pair
-#   logs [-f|...]          tail the daemon log
+# Subcommands: start [--wait-ready] | stop | status | cold-copy
+#              | mirror-engine | logs [-f|...]
 
 set -euo pipefail
 
 : "${DEVTOOLS_DIR:?DEVTOOLS_DIR must be set (Justfile exports it)}"
 source "$DEVTOOLS_DIR/scripts/common.sh"
 
-# This entry-point script (start/stop/status/etc.) runs on the WSL host.
-# It enters the bar-sync container to run the actual python daemon -- see
-# docker/sync.Containerfile for what's in there. Must not run from inside
-# bar-dev (Windows interop + container-from-container is fragile).
 require_host
 
 if [ -z "${BAR_DATA_DIR:-}" ]; then
@@ -33,15 +22,8 @@ if ! grep -qi microsoft /proc/version 2>/dev/null; then
   exit 1
 fi
 
-# Confirm the sync container exists before any subcommand tries to enter it.
-# Cheaper than letting `distrobox enter` fail with a confusing message inside
-# a backgrounded nohup pipeline.
-#
-# Don't use `grep -q`: under `set -o pipefail` (set at the top of this file),
-# grep -q exits at the first match and SIGPIPEs `distrobox list` on the next
-# write, leaving the pipeline rc=141 and the negation flipping a successful
-# match into a failure. Capturing the listing into a variable first sidesteps
-# the pipe race entirely.
+# Capture the listing first: `grep -q` would SIGPIPE `distrobox list` under
+# pipefail, flipping a match into a failure.
 _require_sync_distrobox() {
   local listing
   listing="$(distrobox list 2>/dev/null || true)"
@@ -58,8 +40,8 @@ PID_FILE="$STATE_DIR/sync.pid"
 READY_FILE="$STATE_DIR/sync.ready"
 mkdir -p "$STATE_DIR"
 
-# `.sdd` suffix on the destinations is required: spring's archive scanner
-# only registers unpacked-dir archives when the dir name ends in .sdd.
+# Destinations need a `.sdd` suffix: spring only scans unpacked-dir archives
+# whose name ends in .sdd.
 _compute_source_pairs() {
   local pairs=()
   local missing=()
@@ -68,8 +50,7 @@ _compute_source_pairs() {
   local bar_dst="$BAR_DATA_DIR/games/Beyond-All-Reason.sdd"
   local chobby_dst="$BAR_DATA_DIR/games/BYAR-Chobby.sdd"
 
-  # Distinguish "never linked" (silent skip) from "linked but target
-  # vanished" (must shout: edits would go to a path the daemon doesn't watch).
+  # Never-linked = silent skip; broken symlink = error.
   _classify_pair() {
     local name="$1" src="$2" dst="$3"
     if [ -L "$src" ] && [ ! -e "$src" ]; then
@@ -103,8 +84,7 @@ _compute_source_pairs() {
   printf '%s\n' "${pairs[@]}"
 }
 
-# Engine pair stays out of the watcher: engine artifacts change at build
-# pace, not edit pace. Mirrored on demand from `just engine::build`'s hook.
+# Engine pair is mirrored on demand (from `just engine::build`), never watched.
 _compute_engine_pair() {
   local engine_src="$DEVTOOLS_DIR/RecoilEngine/build-amd64-windows/install"
   local engine_dst="$BAR_DATA_DIR/engine/local-build"
@@ -147,8 +127,8 @@ cmd_start() {
     shift
   fi
 
-  # Validate pairs BEFORE the already-running check: a stale daemon would
-  # otherwise mask broken-symlink errors and silently not sync the user's edits.
+  # Validate pairs before the already-running check so a stale daemon can't
+  # mask broken-symlink errors.
   local pair_lines
   if ! pair_lines="$(_compute_source_pairs)"; then
     return 1
@@ -156,9 +136,7 @@ cmd_start() {
 
   local existing_pid
   if existing_pid="$(_running_pid)"; then
-    # Detect pair-list drift: if a running daemon was started with different
-    # --pair args than the current config produces, restart so it picks up
-    # the new pairs instead of silently watching stale paths.
+    # Restart if a running daemon's --pair args drifted from current config.
     local cmdline live_pairs expected_pairs
     cmdline="$(tr '\0' ' ' < /proc/"$existing_pid"/cmdline 2>/dev/null)"
     live_pairs="$(echo "$cmdline" | awk 'BEGIN{RS=" "} /::/{print}' | sort -u)"
@@ -189,8 +167,6 @@ cmd_start() {
 
   _require_sync_distrobox || return 1
 
-  # Engine pair is mirrored on demand from cmd_mirror_engine; never watched
-  # (it would race the build hook).
   local pair_args=()
   local p
   while IFS= read -r p; do
@@ -202,9 +178,8 @@ cmd_start() {
   step "Starting sync daemon (cold-copy + watcher) inside ${DEVTOOLS_SYNC_DISTROBOX}"
   info "log: $LOG_FILE  (live: just bar::sync-logs)"
   : >"$LOG_FILE"
-  # The PID we save is the host-side `distrobox enter` shim; it forwards
-  # SIGTERM to the in-container python3 on stop. Container stays alive as
-  # long as that process is alive (distrobox/podman semantics).
+  # Saved PID is the host-side `distrobox enter` shim; it forwards SIGTERM
+  # to the in-container python3.
   nohup distrobox enter "${DEVTOOLS_SYNC_DISTROBOX}" -- \
       python3 "$DEVTOOLS_DIR/scripts/sync.py" \
       --log "$LOG_FILE" \
@@ -221,19 +196,13 @@ cmd_start() {
   fi
 }
 
-# Wait up to 300s for sync.py to touch READY_FILE (after cold-copy + watcher
-# scheduling). Cold-copy time scales with the size of the source trees; for
-# the full BAR + chobby + engine set on a slow disk this can sit in the
-# 60-180s range, so 300s is the conservative bound. While we wait we tail
-# the daemon log to stderr so the user sees cold-copy progress instead of
-# a screen that looks frozen. If the daemon dies before signalling ready,
-# surface that immediately.
+# Wait up to 300s for sync.py to touch READY_FILE; cold-copy can take 60-180s.
 _wait_for_ready() {
   local pid="${1:-}"
   if [ -z "$pid" ]; then pid="$(cat "$PID_FILE" 2>/dev/null || true)"; fi
 
   info "waiting for cold copy to finish (this can be 30-180s on first run)..."
-  # tail -F (capital) follows recreates/truncates that cmd_start did just before us.
+  # tail -F: follows the recreate/truncate cmd_start did just before us.
   tail -F -n 0 "$LOG_FILE" >&2 &
   local tail_pid=$!
   disown "$tail_pid" 2>/dev/null || true
@@ -284,12 +253,8 @@ cmd_stop() {
   ok "sync daemon stopped"
 }
 
-# One-shot cold-copy of the source pairs (no watcher). Pre-warms the
-# Watchman clock + per-pair state file so the next `cmd_start` skips the
-# rsync stat-walk and goes straight to the incremental-delta path.
-# Without this, a fresh BAR + chobby seed on slow drvfs has been observed
-# to exceed _wait_for_ready's 300s bound on the first `bar::launch`.
-# Engine pair stays excluded -- mirrored separately by cmd_mirror_engine.
+# One-shot seed of the source pairs; pre-warms Watchman state so the next
+# cmd_start goes straight to the incremental path.
 cmd_cold_copy() {
   local pair_lines
   if ! pair_lines="$(_compute_source_pairs)"; then
@@ -308,8 +273,6 @@ cmd_cold_copy() {
   info "log: $LOG_FILE  (live: just bar::sync-logs)"
   : >"$LOG_FILE"
 
-  # Stream log to stderr so the user sees rsync/watchman progress instead
-  # of a frozen screen during the seed; mirrors _wait_for_ready's pattern.
   tail -F -n 0 "$LOG_FILE" >&2 &
   local tail_pid=$!
   disown "$tail_pid" 2>/dev/null || true
@@ -339,10 +302,8 @@ cmd_mirror_engine() {
     return 0
   fi
 
-  # Defensive preflight: engine.just runs the same check earlier, but
-  # `sync.sh mirror-engine` is also reachable directly. A live spring.exe
-  # share-locks the engine DLLs; rsync through drvfs would EACCES per file
-  # and leave a half-mirrored install.
+  # A live spring.exe share-locks the engine DLLs; rsync would EACCES and
+  # leave a half-mirrored install.
   local holders
   if ! holders="$(_engine_holders)"; then
     err "Cannot mirror engine -- the following process(es) are running and hold the engine binaries:"

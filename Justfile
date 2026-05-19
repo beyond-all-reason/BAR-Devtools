@@ -14,7 +14,7 @@ mod ssh      'just/ssh.just'
 default:
     @just --list --list-submodules
 
-# Diagnose your dev environment (read-only, no side effects)
+# Diagnose your dev environment (read-only)
 doctor:
     just setup::doctor
 

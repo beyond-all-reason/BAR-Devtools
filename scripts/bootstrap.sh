@@ -1,22 +1,9 @@
 #!/usr/bin/env bash
-# One-shot prerequisite installer.
+# Installs `just` (>= MIN_JUST_VERSION) to ~/.local/bin. Run before the first
+# `just setup::init`. Debian/Ubuntu LTS ships a `just` too old for `mod` and
+# `[confirm(...)]` syntax, so we use the upstream installer. Idempotent.
 #
-# Run this BEFORE the first `just setup::init`. It installs `just` itself
-# (>= MIN_JUST_VERSION below) to ~/.local/bin and ensures that directory is
-# on PATH for future shells. Idempotent: re-running on a system with a
-# satisfactory `just` already on PATH is a no-op except for the PATH line
-# (which is itself idempotent — guarded by a literal grep).
-#
-# Why this script exists at all: every Debian/Ubuntu LTS ships an old `just`
-# (1.21.0 on Noble) that doesn't parse `mod` syntax (added 1.31) or
-# `[confirm("…")]` (added 1.27). `apt install just` produces silent failures
-# at `just --list`. The upstream installer at https://just.systems is the
-# only reliable path, and it's friendlier to wrap it once here than to ask
-# every contributor to copy a multi-line snippet from the README.
-#
-# Run from a fresh shell:
 #   curl -fsSL https://raw.githubusercontent.com/<repo>/<branch>/scripts/bootstrap.sh | bash
-# or, if you've already cloned:
 #   bash scripts/bootstrap.sh
 
 set -euo pipefail
@@ -30,8 +17,7 @@ ok()   { echo "${GREEN}[ok]${NC}    $*"; }
 warn() { echo "${YELLOW}[warn]${NC}  $*"; }
 err()  { echo "${RED}[error]${NC} $*" >&2; }
 
-# Compare semver strings. Returns 0 iff $1 >= $2. Pure bash so we don't add
-# yet another prereq before installing the actual prereq.
+# returns 0 iff $1 >= $2
 version_ge() {
   local a="$1" b="$2" IFS=.
   local -a A=($a) B=($b)
@@ -45,7 +31,6 @@ version_ge() {
 
 current_just_version() {
   command -v just >/dev/null 2>&1 || return 1
-  # `just --version` prints e.g. "just 1.40.0".
   just --version 2>/dev/null | awk '{print $2}'
 }
 
@@ -61,8 +46,6 @@ ensure_local_bin_on_path() {
     printf '\n%s\n' "$line" >> "$rc"
     info "Added ~/.local/bin to PATH in $rc"
   fi
-  # Make it active for the rest of THIS script too. Future shells pick it
-  # up from $rc.
   case ":${PATH}:" in
     *":$bin:"*) ;;
     *) export PATH="$bin:$PATH" ;;
@@ -96,7 +79,6 @@ main() {
       warn "found just $current, need >= $MIN_JUST_VERSION — upgrading"
     fi
     install_just
-    # Re-resolve from PATH so we see the freshly-installed binary.
     hash -r 2>/dev/null || true
     current="$(current_just_version)" || {
       err "just still not on PATH after install. Open a new shell and re-run, or"

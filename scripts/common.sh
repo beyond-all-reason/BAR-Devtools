@@ -1,25 +1,13 @@
 #!/usr/bin/env bash
 # Shared helpers for BAR-Devtools scripts.
-# Source this file; it only defines functions and variables.
 
-# bar-dev is the canonical name; .env (loaded by Justfile's dotenv-load) wins
-# if the user has set their own. Defaulting here -- not just in
-# cmd_setup_distrobox -- is what lets cmd_init reference $DEVTOOLS_DISTROBOX
-# under `set -u` on a fresh install before any seed-write to .env has run.
 : "${DEVTOOLS_DISTROBOX:=bar-dev}"
 export DEVTOOLS_DISTROBOX
 
-# WSL-only sister container that owns the filesystem mirror daemon (sync.py).
-# Kept separate from bar-dev because Linux-native contributors never run sync
-# and shouldn't pull watchman + pywatchman just to lint Lua. See
-# docker/sync.Containerfile and scripts/sync.sh.
+# WSL-only sister container hosting the sync daemon (scripts/sync.sh).
 : "${DEVTOOLS_SYNC_DISTROBOX:=bar-sync}"
 export DEVTOOLS_SYNC_DISTROBOX
 
-# $'...' ANSI-C quoting embeds real ESC (0x1b) bytes so the variables work
-# in `cat <<EOF`, `printf "%s"`, and `echo` without -e. Keeping `echo -e`
-# in the helpers below is still fine — there's nothing left for -e to
-# interpret in these strings, but the flag is harmless.
 RED=$'\033[0;31m'
 GREEN=$'\033[0;32m'
 YELLOW=$'\033[1;33m'
@@ -35,18 +23,9 @@ warn()  { echo -e "${YELLOW}[warn]${NC}  $*"; }
 err()   { echo -e "${RED}[error]${NC} $*"; }
 step()  { echo -e "${CYAN}[step]${NC}  $*"; }
 
-# ---------------------------------------------------------------------------
-# .env persistence (CLAUDE.md: ".env is the persistence layer"). Generic
-# read/write helpers -- not module-registry internals -- so setup modules,
-# repos.sh, doctor, and the feature mechanism below all go through them.
-# common.sh is sourced before scripts/setup/_lib.sh everywhere, so the
-# registry engine picks these up too.
-# ---------------------------------------------------------------------------
-
 : "${SETUP_ENV_FILE:=$DEVTOOLS_DIR/.env}"
 
-# Echo the value of $1 from .env. Empty string if the file is missing or the
-# key is absent. Strips surrounding double quotes (some legacy writes quoted).
+# echo value of key $1 from .env, stripping surrounding quotes
 read_env_key() {
     local key="$1"
     [ -f "$SETUP_ENV_FILE" ] || return 0
@@ -56,26 +35,18 @@ read_env_key() {
     printf '%s' "$val"
 }
 
-# Idempotent upsert of $1=$2 into .env. Touches the file if missing.
+# upsert $1=$2 into .env
 write_env_key() {
     local key="$1" val="$2"
     touch "$SETUP_ENV_FILE"
     if grep -q "^${key}=" "$SETUP_ENV_FILE" 2>/dev/null; then
-        # Use | as the sed separator so values with / pass through cleanly.
         sed -i "s|^${key}=.*|${key}=${val}|" "$SETUP_ENV_FILE"
     else
         printf '%s=%s\n' "$key" "$val" >> "$SETUP_ENV_FILE"
     fi
 }
 
-# ---------------------------------------------------------------------------
-# Feature selection (single source of truth -- BAR_FEATURES in .env)
-# ---------------------------------------------------------------------------
-
-# features_include <comma-list> <tag>
-# True if the comma-separated list $1 contains tag $2. Pure primitive, no
-# .env read -- used both against a repo's own REPO_FEATURES tags and as the
-# inner test of feature_selected. setup.sh and repos.sh both call this.
+# true if csv list $1 contains tag $2
 features_include() {
     local IFS=','
     local f
@@ -85,12 +56,7 @@ features_include() {
     return 1
 }
 
-# feature_selected <feature-csv>
-# True if any of the comma-separated features is in the user's active
-# selection. THE way downstream code constrains on a feature -- callers never
-# re-fetch or thread the selection themselves. Reads BAR_FEATURES live from
-# .env (not the env var, which is stale inside cmd_init once the features
-# prompt has written a new value).
+# true if any of $1 (csv) is in the active BAR_FEATURES (read live from .env)
 feature_selected() {
     local want="$1" sel f
     sel="$(read_env_key BAR_FEATURES)"
@@ -101,10 +67,7 @@ feature_selected() {
     return 1
 }
 
-# require_repo <feature-csv> <repo-dir> <human-name>
-# Guard for recipes that operate on a cloned repo. Succeeds if the repo is
-# materialized in the workspace; otherwise prints guidance that distinguishes
-# "feature never selected" from "selected but not cloned", and returns 1.
+# guard for recipes needing a cloned repo: <feature-csv> <repo-dir> <human-name>
 require_repo() {
     local feats="$1" dir="$2" name="$3"
     [ -d "$DEVTOOLS_DIR/$dir" ] && return 0
@@ -122,18 +85,8 @@ is_wsl() {
     [ -n "${WSL_DISTRO_NAME:-}" ] || [ -f /proc/sys/fs/binfmt_misc/WSLInterop ]
 }
 
-# Echo running engine processes that have the *local-build* binaries open --
-# i.e. processes that `engine::build` is about to overwrite. A live local
-# engine has those files mmap'd (Linux) / share-locked (Windows), so the
-# install step would corrupt it or fail with EACCES via drvfs.
-#
-# Path-scoped on purpose: the user may be playtesting with `--engine alpha`
-# or any non-local version, and rebuilding the local engine in that case is
-# perfectly safe. We only refuse when the running spring is actually using
-# our build target.
-#
-# Game dir comes from $1, falling back to $BAR_DATA_DIR. Returns 1 (with
-# names on stdout) iff any local-build engine is alive.
+# echo running engine processes that have the local-build binaries open
+# (engine::build would corrupt them); game dir from $1 or $BAR_DATA_DIR
 _engine_holders() {
     local game_dir="${1:-${BAR_DATA_DIR:-}}"
     [ -n "$game_dir" ] || return 0
@@ -145,9 +98,6 @@ _engine_holders() {
         command -v powershell.exe &>/dev/null || return 0
         local win_local
         win_local="$(wslpath -w "$local_build" 2>/dev/null)" || return 0
-        # Win32_Process.ExecutablePath is the canonical "where did this
-        # process boot from" field; case-insensitive prefix match because
-        # NTFS paths are case-insensitive.
         local matches
         matches="$(powershell.exe -NoProfile -NonInteractive -Command "
             Get-CimInstance Win32_Process -Filter \"Name='spring.exe' OR Name='Beyond-All-Reason.exe'\" 2>\$null |
@@ -156,10 +106,7 @@ _engine_holders() {
         " 2>/dev/null | tr -d '\r' | sort -u | grep -v '^$' || true)"
         [ -n "$matches" ] && mapfile -t holders <<<"$matches"
     else
-        # /proc/PID/exe is a magic symlink whose readlink gives the fully
-        # resolved executable path, so we compare against the resolved
-        # local-build path too (link::create symlinks it into the source
-        # tree).
+        # /proc/PID/exe resolves through symlinks, so compare resolved paths
         local local_real proc pid exe
         local_real="$(readlink -f "$local_build" 2>/dev/null || echo "$local_build")"
         for proc in spring spring-headless; do
@@ -200,23 +147,12 @@ clean_dir() {
     return 1
 }
 
-# Re-execute the calling script inside a distrobox if DEVTOOLS_DISTROBOX is set.
-# Just writes shebang scripts to temp files under /run/user/... which isn't
-# shared with distrobox, so we feed the script via stdin (< "$0") before exec.
-# True if we're already inside a container -- either because we spawned it
-# (_DEVTOOLS_IN_DISTROBOX) or because the user opened it interactively
-# (/run/.containerenv from podman, /.dockerenv from docker). Used by both
-# enter_distrobox and distrobox_exec_interactive so "what counts as
-# in-container" lives in one place.
+# true if we're inside a container (spawned by us, or entered interactively)
 _in_container() {
     [ -n "${_DEVTOOLS_IN_DISTROBOX:-}" ] || [ -f /run/.containerenv ] || [ -f /.dockerenv ]
 }
 
-# Inverse of enter_distrobox: refuse to run if we're inside a container.
-# Use at the top of recipes that need the host's docker / podman daemon
-# (services::*, engine::build, etc.) so contributors who exec'd into
-# bar-dev get a clear "wrong layer" message instead of a cryptic
-# "docker: command not found" 127.
+# refuse to run inside a container; for recipes needing the host podman daemon
 require_host() {
     if _in_container; then
         err "This recipe runs on the host (needs podman) -- not from inside bar-dev."
@@ -225,9 +161,8 @@ require_host() {
     fi
 }
 
-# Auto-enter the configured distrobox and re-exec the rest of the calling
-# script inside it. No-op when DEVTOOLS_DISTROBOX is unset or we're already
-# in a container. Used at the top of recipe shell snippets.
+# re-exec the calling script inside DEVTOOLS_DISTROBOX (fed via stdin, since
+# Just's temp scripts under /run/user aren't visible to the container)
 enter_distrobox() {
     if [ -n "${DEVTOOLS_DISTROBOX:-}" ] && ! _in_container; then
         info "Entering distrobox '$DEVTOOLS_DISTROBOX'..."
@@ -236,16 +171,8 @@ enter_distrobox() {
     fi
 }
 
-# Run a single interactive command inside the distrobox with a real PTY.
-# Use this for REPLs / TUIs / shells where the inner command needs an
-# attached terminal (busted shell, lua repl, ncurses tools). Differs from
-# enter_distrobox: doesn't re-exec the calling script, just dispatches the
-# given command and exits.
-#
-# script(1) is the PTY wrapper. distrobox-enter from a non-tty shell would
-# otherwise hand the inner cmd a pipe and interactive prompts misbehave.
-# `script -qec` parses its command argument via /bin/sh, so we re-quote
-# every arg with printf %q to survive that round-trip.
+# run a single interactive command inside the distrobox with a real PTY.
+# script(1) is the PTY wrapper; it parses its arg via /bin/sh, hence printf %q.
 distrobox_exec_interactive() {
     if _in_container; then
         exec "$@"

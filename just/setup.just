@@ -22,7 +22,6 @@ reconfigure *args:
     source "$DEVTOOLS_DIR/scripts/common.sh"
     source "$DEVTOOLS_DIR/scripts/repos.sh"
     source "$DEVTOOLS_DIR/scripts/setup.sh"
-    # BAR_RESET_CONFIG makes ensure_module re-prompt instead of reusing .env.
     export BAR_RESET_CONFIG=1
     cmd_init {{args}}
 
@@ -42,11 +41,7 @@ distrobox *args:
     source "$DEVTOOLS_DIR/scripts/setup.sh"
     cmd_setup_distrobox {{args}}
 
-# Wire your editor up for BAR development. Idempotent — re-runnable any time.
-# `setup::init` calls this at the end too (gated on the Step 0/N opt-in), so
-# the standalone recipe exists for "I changed my mind / something drifted."
-# Direct invocation = explicit yes; wipe any prior answers so the sub-prompts
-# fire fresh, then delegate to the shared shell helpers in scripts/setup.sh.
+# Wire your editor up for BAR development (idempotent)
 editor:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -78,8 +73,6 @@ doctor:
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
     source "$DEVTOOLS_DIR/scripts/repos.sh"
-    # setup.sh defines (and on its tail loads) the module registry; doctor
-    # iterates it to show "what cmd_init recorded".
     source "$DEVTOOLS_DIR/scripts/setup.sh"
     source "$DEVTOOLS_DIR/scripts/doctor.sh"
     cmd_doctor

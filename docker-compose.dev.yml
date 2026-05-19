@@ -41,11 +41,7 @@ services:
       - ./docker/teiserver-entrypoint.sh:/entrypoint.sh:ro,z
       - ./docker/setup-spads-bot.exs:/setup-spads-bot.exs:ro,z
       - devtools_state:/app/.devtools
-      # Mount the Teiserver source over the image's baked-in copy so edits on
-      # the host reach the running container. Phoenix's code reloader and
-      # live_reload (inotify-tools is in the dev image) then recompile and
-      # refresh the browser automatically -- no rebuild needed. _build and
-      # deps stay in the image; only source is overlaid.
+      # Overlay host source for Phoenix live reload; _build and deps stay baked in.
       - ./teiserver/lib:/app/lib:ro,z
       - ./teiserver/assets:/app/assets:ro,z
     healthcheck:

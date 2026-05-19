@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Diagnostic checks for BAR-Devtools. Read-only — never modifies anything.
+# Read-only diagnostic checks for BAR-Devtools.
 # Expects: DEVTOOLS_DIR, COMPOSE, REPOS_CONF, REPOS_LOCAL (exported by Justfile)
 
 pass_count=0
@@ -131,8 +131,7 @@ check_doctor_repos() {
       _pass "${dir} (${feature})"
     else
       missing+=("${dir} (${feature})")
-      # Accumulate distinct feature tags from every missing repo so the
-      # hint can point at the exact `just repos::clone <feature>` calls.
+      # collect distinct feature tags for the `just repos::clone` hint
       local IFS=','
       local f
       for f in $feature; do
@@ -253,9 +252,6 @@ check_doctor_services() {
 
 
 check_doctor_modules() {
-  # Read-only iteration over the setup module registry. Shows what
-  # cmd_init recorded so contributors can see what re-running setup::init
-  # would skip.
   if [ "${#SETUP_MODULES[@]}" -eq 0 ]; then
     return 0
   fi

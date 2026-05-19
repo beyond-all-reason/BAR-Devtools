@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
-# Shared helpers for scripts/ssh/*.sh.
-# Source this file after scripts/common.sh; it only defines functions/variables.
-#
-# These helpers are deliberately self-contained so the SSH wizard can run on a
-# fresh box before the rest of BAR-Devtools (setup.sh) is applicable.
+# Shared helpers for scripts/ssh/*.sh. Source after scripts/common.sh.
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -37,11 +33,7 @@ pause() {
     read -rp "       Press Enter when done... " _
 }
 
-# True if 1Password's SSH agent is already reachable AND has keys loaded.
-# Used by setup-{wsl,linux}-ssh.sh to skip the "Toggle both checkboxes in
-# 1Password's Developer settings" pause on re-runs: if ssh-add -l succeeds
-# against either of the conventional socket paths, the GUI toggle has
-# already been done and the user doesn't need to confirm anything.
+# True if 1Password's SSH agent is reachable and has keys loaded.
 op_ssh_already_active() {
     local sock
     for sock in "$HOME/.1password/agent.sock" "$HOME/.ssh/agent.sock"; do
@@ -51,8 +43,7 @@ op_ssh_already_active() {
     return 1
 }
 
-# Echo the path to the user's interactive shell rc file. Mirrors the $SHELL
-# check in scripts/bootstrap.sh so both wizards target the same file.
+# Echo the path to the user's interactive shell rc file.
 shellrc_path() {
     case "${SHELL:-}" in
         *zsh) echo "$HOME/.zshrc" ;;
@@ -61,12 +52,8 @@ shellrc_path() {
 }
 
 # shellrc_apply <marker> <content>
-# Idempotently install <content> between
-#   # >>> <marker> >>>
-#   # <<< <marker> <<<
-# markers in the user's shell rc file (bash or zsh). Replaces the block in
-# place if it already exists. Sets SHELLRC_TARGET to the path touched so
-# callers can print accurate "Updated <path>" messages.
+# Idempotently install <content> in a marked block in the shell rc file.
+# Sets SHELLRC_TARGET to the path touched.
 shellrc_apply() {
     local marker="$1"; shift
     local content="$*"
@@ -95,16 +82,10 @@ shellrc_apply() {
     mv "$tmp" "$rc"
 }
 
-# Verify the agent is usable end-to-end. Distinguishes the three failure
-# modes contributors actually hit (no agent reachable / agent up but no
-# keys / keys present but github.com rejects them) and prints the exact
-# next step instead of letting the failure surface during their first
-# `git push`. SSH_AUTH_SOCK must be set in the calling shell.
+# Verify the agent end-to-end. SSH_AUTH_SOCK must be set in the calling shell.
 op_ssh_verify() {
     local listing rc
-    # `if cmd; then ...; fi` for the substitution so set -e doesn't abort on
-    # ssh-add's non-zero exits (1 = no keys, 2 = no agent) -- those are the
-    # cases the rc==1/rc==2 branches below exist to diagnose.
+    # ssh-add exits 1 = no keys, 2 = no agent; capture without tripping set -e.
     if listing="$(ssh-add -l 2>&1)"; then rc=0; else rc=$?; fi
 
     if [ $rc -eq 2 ]; then
@@ -127,15 +108,11 @@ op_ssh_verify() {
     echo ""
 
     step "    Probing github.com for end-to-end auth"
-    # github.com's SSH greeting ALWAYS exits 1 even on a successful auth
-    # (it doesn't run a shell). Trailing `|| true` stops `set -e` from
-    # aborting the function on the substitution — without it, the if/else
-    # below never runs and the caller falsely reports op-setup as failed.
+    # github.com's SSH greeting always exits 1 (no shell); `|| true` keeps set -e calm.
     local gh_out
     gh_out="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
                   -o ConnectTimeout=5 -T git@github.com 2>&1 || true)"
-    # Success signal is the "Hi <user>! You've successfully authenticated"
-    # message in stderr, not the exit code.
+    # Success signal is the "successfully authenticated" message, not the exit code.
     if printf '%s' "$gh_out" | grep -q "successfully authenticated"; then
         ok "github.com authenticated as $(printf '%s' "$gh_out" | sed -n 's/^Hi \([^!]*\)!.*/\1/p')."
         op_ssh_pin_protocol_ssh
@@ -149,10 +126,7 @@ op_ssh_verify() {
     fi
 }
 
-# Pin repos.local.conf to '@protocol ssh' once we've proven SSH works.
-# Future `just repos::clone` / `just setup::init` runs will rewrite
-# github.com URLs to SSH so clones/pushes use the bridged agent instead
-# of HTTPS (which is slow over Plan 9 from WSL and prompts for a token).
+# Pin repos.local.conf to '@protocol ssh' once SSH is proven working.
 # Idempotent: skips if the user already set any @protocol directive.
 op_ssh_pin_protocol_ssh() {
     local conf="${DEVTOOLS_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}/repos.local.conf"
@@ -168,11 +142,10 @@ op_ssh_pin_protocol_ssh() {
     ok "Pinned @protocol ssh in $conf — clones/pushes will use the bridged agent."
 }
 
-# WSL-only. Echoes the Windows %USERPROFILE% as a WSL path (e.g. /mnt/c/Users/keith).
+# WSL-only. Echoes the Windows %USERPROFILE% as a WSL path.
 win_userprofile() {
     local raw
-    # || true so set -e + pipefail doesn't abort here when cmd.exe interop
-    # is missing -- the empty-$raw branch below is the intended diagnostic.
+    # || true: handle missing cmd.exe interop via the empty-$raw branch below.
     raw="$(cmd.exe /c 'echo %USERPROFILE%' 2>/dev/null | tr -d '\r\n')" || true
     [ -n "$raw" ] || { err "could not read Windows %USERPROFILE%"; return 1; }
     wslpath -u "$raw"

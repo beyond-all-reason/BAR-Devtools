@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
 # Native-Linux 1Password SSH agent + CLI bootstrap.
-#
-# 1Password's Linux client exposes its agent at ~/.1password/agent.sock when
-# "Use the SSH agent" is enabled in Settings → Developer. No bridge needed.
 set -euo pipefail
 
 DEVTOOLS_DIR="${DEVTOOLS_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
@@ -80,7 +77,7 @@ install_op_cli() {
     fi
     case "$OP_SSH_ENV" in
         bazzite)
-            # Flatpak desktop bundle doesn't include `op`; install standalone binary.
+            # Flatpak desktop bundle doesn't include `op`.
             local arch url tmp
             arch="$(uname -m)"
             case "$arch" in
@@ -104,7 +101,6 @@ install_op_cli() {
     esac
 }
 
-# --- Step 1: 1Password Desktop ---
 step "1/5 Install 1Password Desktop"
 if is_op_installed; then
     ok "1Password Desktop already installed."
@@ -112,11 +108,9 @@ else
     install_op_desktop
 fi
 
-# --- Step 2: op CLI ---
 step "2/5 Install 1Password CLI"
 install_op_cli
 
-# --- Step 3: Toggle SSH agent + CLI integration ---
 step "3/5 Enable SSH agent + CLI integration"
 if op_ssh_already_active; then
     ok "1Password SSH agent already serving keys -- skipping toggle prompt."
@@ -135,7 +129,6 @@ EOF
     pause "Toggle both Developer checkboxes and bump idle-lock to 4 hours"
 fi
 
-# --- Step 4: shell rc snippet ---
 SHELL_RC="$(shellrc_path)"
 step "4/5 Append SSH_AUTH_SOCK to ${SHELL_RC/#$HOME/~}"
 read -r -d '' SHELLRC_BODY <<'BLOCK' || true
@@ -146,7 +139,6 @@ BLOCK
 shellrc_apply "1password-ssh-agent" "$SHELLRC_BODY"
 ok "Updated ${SHELLRC_TARGET/#$HOME/~} (block: 1password-ssh-agent)"
 
-# --- Step 5: test ---
 step "5/5 Test the agent"
 SOCK="$HOME/.1password/agent.sock"
 if [ ! -S "$SOCK" ]; then

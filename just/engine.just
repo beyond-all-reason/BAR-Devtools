@@ -2,9 +2,7 @@ set export
 
 DEVTOOLS_DIR := justfile_directory()
 
-# Build Recoil engine via docker-build-v2.
-# On WSL2 the post-build hook mirrors install/ into $BAR_DATA_DIR/engine/
-# local-build/ -- the engine pair is mirrored on demand, not watched.
+# Build Recoil engine via docker-build-v2
 build *args:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -23,12 +21,8 @@ build *args:
         echo "    just engine::build --help"
         exit 1
     fi
-    # Refuse early if a *local-build* engine is running. A live local
-    # engine has our build target's binaries mmap'd (Linux) / DLLs
-    # share-locked (Windows); the install step would corrupt it or fail
-    # mid-copy. Path-scoped: launching with a non-local engine (alpha,
-    # stable) doesn't trip this -- you can keep playtesting while you
-    # rebuild locally.
+    # Refuse early if a local-build engine is running -- the install step
+    # would corrupt its mmap'd / share-locked binaries.
     case " {{args}} " in
       *" --help "*|*" -h "*) ;;
       *)
@@ -43,9 +37,7 @@ build *args:
         ;;
     esac
     bash "$build_script" {{args}}
-    # Skip the mirror for `--help` (build.sh prints help and exits 0 without
-    # touching install/). Anything else that completes successfully should
-    # have refreshed install/, so mirror it through.
+    # Skip the mirror for `--help`; otherwise mirror the refreshed install/.
     case " {{args}} " in
       *" --help "*|*" -h "*) ;;
       *)

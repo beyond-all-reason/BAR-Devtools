@@ -1,37 +1,8 @@
-# bar-sync: minimal WSL-only container for the filesystem mirror daemon.
-#
-# Why this is its own container instead of riding in bar-dev:
-# bar-dev is a cross-platform dev environment (lux, stylua, emmylua, lua libs)
-# that Linux-native contributors also enter. The sync daemon, by contrast, is
-# a WSL-only concern -- it bridges /home/daniel/code (ext4) -> /mnt/c (drvfs)
-# so spring.exe on Windows can read what the user just edited in Linux. Linux
-# natives never run sync.py at all.
-#
-# Putting sync deps in bar-dev would force every Linux contributor to pull
-# watchman + pywatchman they'll never use. Splitting keeps each container's
-# purpose clean: bar-dev for "I'm developing BAR," bar-sync for "I'm bridging
-# the WSL/Windows boundary."
-#
-# Watchman install is duplicated from docker/dev.Containerfile (Meta's RPM
-# pin matters). Bump in lockstep when Meta cuts a new release.
-#
-# Base pinned to fedora:42 (asymmetric with bar-dev's fedora:43) because Meta
-# only publishes fc42 watchman RPMs and those link libdwarf.so.0, which fc43
-# dropped/renamed -- dnf can't satisfy the dep on fc43, the build dies. This
-# container is single-purpose (watchman + rsync + pywatchman) so tracking
-# Fedora's latest matters less than matching the available RPM. Revisit when
-# Meta starts shipping an fc43 build.
+# bar-sync: WSL-only container for the filesystem mirror daemon.
+# Pinned to fc42: Meta only publishes fc42 watchman RPMs, and they link
+# libdwarf.so.0 which fc43 dropped.
 FROM registry.fedoraproject.org/fedora:42
 
-# python3 is in the base image; we need pywatchman for the subscription API
-# and rsync for the actual file copy. inotify-tools is handy for live debug
-# (watchman uses inotify under the hood, so the limit / kernel events show
-# up the same way they would for inotify-tools).
-#
-# pywatchman isn't packaged in Fedora's repos and isn't in Meta's watchman
-# RPM either, so we pip-install it system-wide. This container has exactly
-# one job, so PEP 668's "externally-managed" marker doesn't add safety here
-# -- override it once at build time and we're done.
 RUN dnf install -y --setopt=install_weak_deps=False \
         python3 python3-pip python3-devel \
         gcc \
@@ -42,7 +13,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
     && dnf remove -y gcc python3-devel \
     && dnf clean all
 
-# Watchman (kept in lockstep with docker/dev.Containerfile).
+# Keep in lockstep with docker/dev.Containerfile.
 ARG WATCHMAN_VERSION=v2026.05.04.00
 RUN ARCH=$(uname -m) \
     && [ "$ARCH" = "x86_64" ] \

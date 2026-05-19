@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# Setup, dependency installation, and prerequisite checks.
-# Expects: DEVTOOLS_DIR, COMPOSE, REPOS_CONF (exported by Justfile)
-# Source scripts/common.sh and scripts/repos.sh before this file.
+# Expects DEVTOOLS_DIR, COMPOSE, REPOS_CONF (exported by Justfile); source common.sh + repos.sh first.
 
 detect_distro() {
   if command -v pacman &>/dev/null; then
@@ -15,8 +13,6 @@ detect_distro() {
   fi
 }
 
-# Pure-bash semver compare: returns 0 iff $1 >= $2. Mirrors scripts/bootstrap.sh
-# so cmd_init can reject stale `just` (e.g. apt's 1.21) with a clear pointer.
 _version_ge() {
   local IFS=.
   local -a A=($1) B=($2)
@@ -59,15 +55,7 @@ pkg_name() {
   local generic="$1"
   local distro
   distro="$(detect_distro)"
-  # We install podman, not docker. Rationale (vs docker-ce):
-  #   - rootless by default: no `usermod -aG docker` + WSL shutdown step.
-  #   - in-tree on Debian/Fedora/Arch: no third-party apt repo to pin.
-  #   - distrobox already prefers podman; same backend everywhere.
-  # Compose: Fedora/Arch's docker-compose package is v5+ (works with podman
-  # natively). Debian's apt only has v2.40 which has the bake/buildkit
-  # incompatibility with podman -- on Debian we install v5 from upstream
-  # GitHub releases via install_compose_upstream(), not from apt, so there
-  # is no debian:container-compose entry below.
+  # No debian:container-compose entry -- Debian's apt compose is too old; see install_compose_upstream.
   case "${distro}:${generic}" in
     arch:container-runtime)    echo "podman" ;;
     arch:container-compose)    echo "docker-compose" ;;
@@ -97,22 +85,17 @@ check_podman() {
     err "podman is not installed."
     return 1
   fi
-  # Rootless podman has no daemon -- `podman info` either works or it
-  # doesn't, with no enable/group dance to coach the user through.
   if ! podman info &>/dev/null; then
     err "podman is installed but 'podman info' failed (storage init issue?)."
     info "  Try a fresh init:  podman system reset  (destroys local images)"
     return 1
   fi
-  # `podman compose` is a dispatcher; it'll happily delegate to the buggy
-  # python podman-compose if that's all it finds. Require the Go binary
-  # specifically. See install_compose_upstream() for why we want v5+.
+  # podman compose delegates to the buggy python podman-compose unless the Go binary is present.
   if ! command -v docker-compose &>/dev/null; then
     err "docker-compose not installed (podman compose dispatcher needs it as provider)."
     info "  Run: just setup::deps"
     return 1
   fi
-  # docker-compose dials the rootless podman API socket; it has to be active.
   local sock="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"
   if [ ! -S "$sock" ]; then
     err "podman socket not active at $sock (docker-compose can't reach the daemon)."
@@ -172,8 +155,7 @@ install_dockerignore() {
   fi
 }
 
-# Idempotent WSL2 environment prep: enable systemd, mark / as a shared mount.
-# Required for podman-backed distrobox to work. No-op outside WSL2.
+# WSL2: enable systemd, mark / as a shared mount (needed for podman distrobox). No-op elsewhere.
 ensure_wsl_setup() {
   grep -qi microsoft /proc/version 2>/dev/null || return 0
 
@@ -206,7 +188,6 @@ ensure_wsl_setup() {
     sudo sed -i '/^\[boot\]/a command="mount --make-rshared /"' "$wsl_conf"
   fi
 
-  # If systemd isn't PID 1, the user must restart WSL before we can proceed.
   if [ "$(ps -p 1 -o comm= 2>/dev/null)" != "systemd" ] || [ "$needs_shutdown" -eq 1 ]; then
     echo ""
     warn "WSL must restart to pick up systemd."
@@ -215,7 +196,6 @@ ensure_wsl_setup() {
     exit 0
   fi
 
-  # systemd is up; ensure / is shared right now (avoids forcing a shutdown just for this).
   local rootprop
   rootprop="$(findmnt -no PROPAGATION / 2>/dev/null || echo unknown)"
   if [ "$rootprop" != "shared" ]; then
@@ -232,22 +212,17 @@ ensure_wsl_setup() {
   echo ""
 }
 
-# True if $1 looks like a real Windows Python (not the Microsoft Store
-# placeholder under WindowsApps that opens the Store when invoked).
+# True if $1 is a real Windows Python, not the Microsoft Store stub under WindowsApps.
 _is_real_windows_python() {
   local p="$1"
   [ -n "$p" ] || return 1
-  # Reject the Store stub and the WindowsApps reparse-point path.
   case "$p" in
     *WindowsApps*python.exe|*WindowsApps*py.exe) return 1 ;;
   esac
   return 0
 }
 
-# Install Python on the Windows host via winget. Phase 3 of the bar::launch
-# sync pipeline (and the probe_wsl_sync.py helper) need py.exe / python.exe on
-# Windows. Idempotent: skips if a real Python is already on the Windows PATH,
-# and is a no-op outside WSL.
+# Install Python on the Windows host via winget. WSL-only; skips if a real Windows Python exists.
 ensure_windows_python() {
   is_wsl || return 0
 
@@ -304,10 +279,7 @@ ensure_windows_python() {
   fi
 }
 
-# Install distrobox from upstream main. Apt's distrobox on Ubuntu LTS (1.7.0)
-# predates PR #1965 (merged 2026-01-17, first in tag 1.8.2.3) which dropped the
-# 'chpasswd -e' usage that fails against shadow-utils 4.13+'s hash validation.
-# Idempotent: skips only if /usr/local/bin/distrobox is >= 1.8.2.3.
+# Install distrobox from upstream; need >= 1.8.2.3 for the chpasswd fix against shadow-utils 4.13+.
 install_distrobox_upstream() {
   local current
   current="$(/usr/local/bin/distrobox --version 2>/dev/null | awk '{print $NF}')"
@@ -323,7 +295,6 @@ install_distrobox_upstream() {
   ok "distrobox installed: $(/usr/local/bin/distrobox --version 2>/dev/null | awk '{print $NF}')"
 }
 
-# Pure-bash version comparison: returns 0 if $1 >= $2, else 1.
 _ver_ge() {
   local IFS=.
   local -a a=($1) b=($2)
@@ -337,17 +308,8 @@ _ver_ge() {
   return 0
 }
 
-# Docker Compose v5.x from upstream releases. Used when the distro package
-# is too old. Compose v2.x (Ubuntu 24.04 ships 2.40.3) defaults to bake +
-# requires BuildKit, which podman doesn't implement -- builds fail with
-# "Cannot connect to the Docker daemon" against podman's compat socket.
-# Compose v5 (Dec 2025) dropped the internal BuildKit builder and degrades
-# gracefully when the daemon advertises Builder-Version=1 (no BuildKit),
-# which is what podman does. Fedora/Arch ship v5+ in-tree; Debian doesn't.
-# Installs to /usr/local/lib/docker/cli-plugins (where `podman compose`
-# discovers external providers) + symlinks /usr/local/bin/docker-compose
-# (so legacy `docker-compose` invocations and our `command -v` checks work).
-# Idempotent: skips if v5+ is already on PATH (regardless of source).
+# Docker Compose v5+ from upstream releases. Compose v2.x defaults to bake/BuildKit, which podman
+# can't drive; v5 degrades gracefully. Skips if v5+ is already on PATH.
 install_compose_upstream() {
   local min_version="5.0.0"
   local pin_version="5.1.3"
@@ -382,12 +344,7 @@ install_compose_upstream() {
 }
 
 cmd_install_deps() {
-  # Refuse to run inside bar-dev: `sudo dnf install systemd-udev` etc.
-  # need a real systemd to drive the post-install scriptlets, and
-  # rootless podman containers don't expose host dbus -- the transaction
-  # aborts with "Failed to send reload request: Permission denied"
-  # halfway through. Better to bounce contributors out cleanly than to
-  # half-install host packages into a container's filesystem.
+  # Host-only: package post-install scriptlets need a real systemd, absent in rootless containers.
   require_host
 
   echo -e "${BOLD}=== Install System Dependencies ===${NC}"
@@ -407,12 +364,6 @@ cmd_install_deps() {
   info "Detected distro: ${BOLD}${distro}${NC}"
   echo ""
 
-  # No third-party repo dance: podman ships in stock apt / dnf / pacman repos
-  # on every distro we support. (docker-ce required adding Docker's own
-  # keyring + sources file; podman doesn't.) Compose: Fedora/Arch ship v5+
-  # in-tree; Debian's apt version is v2.40 (too old, see install_compose_upstream
-  # for why), so we install upstream there.
-
   local missing=()
 
   if ! command -v git &>/dev/null; then
@@ -421,9 +372,7 @@ cmd_install_deps() {
   if ! command -v podman &>/dev/null; then
     missing+=("container-runtime")
   fi
-  # Compose check: only delegate to apt/dnf/pacman on non-Debian. Debian
-  # always uses install_compose_upstream below (apt's docker-compose-v2 is
-  # too old to work with podman -- bake/buildkit incompatibility).
+  # Debian gets compose from install_compose_upstream below, never from apt.
   if [ "$distro" != "debian" ] && ! command -v docker-compose &>/dev/null; then
     missing+=("container-compose")
   fi
@@ -431,8 +380,7 @@ cmd_install_deps() {
     missing+=("distrobox")
   fi
 
-  # On Debian, distrobox is always installed from upstream (apt's version is broken
-  # against shadow-utils 4.13+). Drop it from the apt list.
+  # Debian gets distrobox from upstream; drop it from the apt list.
   local apt_missing=()
   for tool in "${missing[@]}"; do
     if [ "$distro" = "debian" ] && [ "$tool" = "distrobox" ]; then continue; fi
@@ -452,8 +400,6 @@ cmd_install_deps() {
     echo ""
   fi
 
-  # Upstream-tarball installs (idempotent: each function self-skips if the
-  # right version is already on PATH).
   if [ "$distro" = "debian" ]; then
     install_distrobox_upstream
     echo ""
@@ -461,23 +407,13 @@ cmd_install_deps() {
   install_compose_upstream
   echo ""
 
-  # Enable the rootless podman API socket so docker-compose (and anything
-  # else that speaks the docker API) can reach the daemon. Rootless still
-  # means no group dance -- this is just a per-user systemd socket.
   ensure_podman_socket
   echo ""
 
   ok "Dependencies installed successfully."
 }
 
-# Rootless podman exposes a docker-compatible REST API at
-# $XDG_RUNTIME_DIR/podman/podman.sock, but only when podman.socket is
-# active. docker-compose v5 dials this path; without it you get
-# "no such file or directory" build failures. The socket is shipped as
-# a systemd --user unit but isn't enabled by default. Also enable linger
-# so the user systemd instance (and the socket) survives shell logout --
-# critical on WSL2 where systemd-user dies with the last login session
-# otherwise. Idempotent.
+# Enable podman.socket + loginctl linger so the user systemd socket survives logout (WSL2 needs this).
 ensure_podman_socket() {
   if ! systemctl --user is-enabled podman.socket &>/dev/null; then
     info "Enabling user systemd podman.socket..."
@@ -502,8 +438,7 @@ ensure_podman_socket() {
   fi
 }
 
-# Resolve the bar_debug_launcher checkout. repos.local.conf may point it at an
-# external path; fall back to the in-tree default.
+# Resolve the bar_debug_launcher checkout, honoring a repos.local.conf override.
 bar_launch_repo_path() {
   load_repos_conf
   local i
@@ -520,18 +455,12 @@ bar_launch_repo_path() {
   echo "$DEVTOOLS_DIR/bar_debug_launcher"
 }
 
-# True on rpm-ostree / Fedora Atomic / Bazzite / Silverblue. dnf installs
-# fail on these; the package layer is read-only at runtime.
+# True on rpm-ostree systems, where the package layer is read-only at runtime.
 _is_ostree() {
   command -v rpm-ostree &>/dev/null && [ -e /run/ostree-booted ]
 }
 
-# Install pipx if missing. pipx is the upstream-recommended way to install
-# Python CLI tools in their own isolated venvs; we use it instead of hand-
-# rolling a venv so bar_debug_launcher's pyproject.toml stays the single
-# source of truth for its deps. On atomic distros (rpm-ostree) we can't
-# layer packages without a reboot, so bootstrap pipx via `pip install --user`
-# instead.
+# Install pipx if missing. On rpm-ostree, bootstrap it via `pip install --user`.
 _ensure_pipx() {
   if command -v pipx &>/dev/null; then return 0; fi
 
@@ -541,13 +470,10 @@ _ensure_pipx() {
       err "python3 not found on PATH"
       return 1
     fi
-    # PEP 668 / EXTERNALLY-MANAGED is set on most modern distros' system
-    # Pythons, so we pass --break-system-packages. This only affects the
-    # user site-packages (~/.local), never the OS-managed Python.
+    # --break-system-packages: PEP 668 EXTERNALLY-MANAGED; only touches ~/.local site-packages.
     python3 -m pip install --user --break-system-packages --quiet pipx \
       || { err "pip install --user pipx failed"; return 1; }
     python3 -m pipx ensurepath >/dev/null 2>&1 || true
-    # Make pipx visible in this shell without requiring a re-login.
     export PATH="$HOME/.local/bin:$PATH"
     hash -r
     command -v pipx &>/dev/null && return 0
@@ -578,13 +504,7 @@ _ensure_pipx() {
   command -v pipx &>/dev/null
 }
 
-# Find a Python ≥ 3.10 that can actually `import tkinter`. The launcher's GUI
-# imports tkinter at module top, and pyenv installs without tk-devel headers
-# silently ship a tkinter package whose _tkinter C extension is missing --
-# pipx happily creates a venv against such a Python and the import explodes
-# at first launch. We probe candidates explicitly (including absolute paths
-# under /usr/bin) so a pyenv shim can't shadow the distro's tkinter-capable
-# Python.
+# Find a Python >= 3.10 that can `import tkinter`. Probes /usr/bin paths so a pyenv shim can't shadow it.
 _pick_tkinter_python() {
   local cand
   for cand in \
@@ -602,9 +522,7 @@ PY
   return 1
 }
 
-# Editable-install the launcher with pipx, which reads bar_debug_launcher's
-# pyproject.toml for deps and exposes the `bar-launch` entry point on PATH.
-# Idempotent: --force re-syncs if a previous install exists.
+# Editable-install the launcher with pipx, exposing the `bar-launch` entry point on PATH.
 ensure_bar_launch_installed() {
   local repo_path="$1"
   if [ ! -f "$repo_path/pyproject.toml" ]; then
@@ -627,17 +545,12 @@ ensure_bar_launch_installed() {
   fi
 
   step "Installing bar_debug_launcher via pipx (editable, --python $target_py)"
-  # `pipx install --force --python ...` silently ignores --python when an
-  # existing venv is reused, so uninstall first to guarantee the new Python
-  # actually sticks. Editable installs are cheap to rebuild.
+  # Uninstall first: `pipx install --force` ignores --python when reusing an existing venv.
   pipx uninstall bar-launch >/dev/null 2>&1 || true
   pipx uninstall bar_launch >/dev/null 2>&1 || true
   pipx install --editable --python "$target_py" "$repo_path"
 
-  # Marker timestamps the install so launch.sh can detect manifest changes
-  # (new pip deps in pyproject.toml) and trigger a reinstall on next launch.
-  # Editable .py edits don't need this -- pipx symlinks the source, so they
-  # take effect immediately.
+  # Marker lets launch.sh detect pyproject.toml manifest changes and trigger a reinstall.
   mkdir -p "${XDG_STATE_HOME:-$HOME/.local/state}/bar-devtools"
   touch "${XDG_STATE_HOME:-$HOME/.local/state}/bar-devtools/bar-launch-installed"
 
@@ -660,8 +573,7 @@ cmd_setup_bar_launch() {
   ensure_bar_appimage_path_set
 }
 
-# Find a Beyond-All-Reason*.AppImage in $1, case-insensitive. Echoes path or
-# nothing. Mirrors bar_launch.core's _APPIMAGE_RE.
+# Echo a Beyond-All-Reason*.AppImage found in $1 (case-insensitive), or nothing.
 _find_appimage_in_dir() {
   local dir="$1"
   [ -d "$dir" ] || return 0
@@ -675,10 +587,7 @@ _find_appimage_in_dir() {
               -iname 'beyondallreason*.appimage' \) 2>/dev/null | sort -r)
 }
 
-# Resolve $BAR_APPIMAGE_PATH for the AppImage launcher boot path. Preserves
-# existing values; auto-discovers ~/Applications first; falls back to a prompt.
-# Non-interactive shells skip the prompt and just warn -- bar-launch's GUI
-# still works for engine-direct boots, only --boot launcher needs this.
+# Resolve BAR_APPIMAGE_PATH: keep existing, else auto-discover ~/Applications, else prompt.
 ensure_bar_appimage_path_set() {
   local env_file="$DEVTOOLS_DIR/.env"
   touch "$env_file"
@@ -688,7 +597,6 @@ ensure_bar_appimage_path_set() {
     return 0
   fi
 
-  # Auto-discover the canonical AppImageLauncher location.
   local found
   found="$(_find_appimage_in_dir "$HOME/Applications")"
   if [ -n "$found" ]; then
@@ -697,7 +605,6 @@ ensure_bar_appimage_path_set() {
     return 0
   fi
 
-  # Couldn't auto-discover. Prompt the user with the most-common locations.
   if ! [ -t 0 ]; then
     warn "Beyond-All-Reason AppImage not found in ~/Applications and no TTY for prompting."
     info "If you want '--boot launcher' to work, add to BAR-Devtools/.env:"
@@ -723,7 +630,6 @@ ensure_bar_appimage_path_set() {
     return 0
   fi
 
-  # Expand ~ and validate.
   local expanded="${response/#\~/$HOME}"
   if [ -f "$expanded" ]; then
     echo "BAR_APPIMAGE_PATH=$expanded" >> "$env_file"
@@ -732,8 +638,7 @@ ensure_bar_appimage_path_set() {
     local resolved
     resolved="$(_find_appimage_in_dir "$expanded")"
     if [ -n "$resolved" ]; then
-      # Persist the directory: if you upgrade the AppImage in-place, you
-      # don't have to re-edit .env; bar_launch.core scans the dir.
+      # Persist the directory, not the file, so in-place AppImage upgrades don't need a .env edit.
       echo "BAR_APPIMAGE_PATH=$expanded" >> "$env_file"
       ok "Added BAR_APPIMAGE_PATH=$expanded to .env (resolves to $resolved)"
     else
@@ -749,10 +654,7 @@ ensure_bar_appimage_path_set() {
   fi
 }
 
-# BAR_DATA_DIR: the engine's data dir -- where spring reads cache/, games/,
-# engine/, and writes infolog.txt. On WSL2 this is a Windows-side path the
-# sync daemon mirrors our WSL Devtools sources into (sync.sh + sync.py); on
-# Linux, a real dir we symlink into. Persisted in .env on WSL2.
+# BAR_DATA_DIR: the engine's data dir. WSL2 mirrors sources into it; Linux symlinks into it.
 
 bar_data_dir_get() {
   local env_file="$DEVTOOLS_DIR/.env"
@@ -786,9 +688,7 @@ _to_wsl_path() {
   fi
 }
 
-# Default: the BAR launcher's own data dir. We deliberately co-locate with
-# it instead of using a separate scratch + junction -- spring's archive
-# scanner doesn't traverse reparse points into game subdirs.
+# Default to the BAR launcher's own data dir: spring's archive scanner won't traverse junctions.
 _default_bar_data_dir() {
   is_wsl || return 0
   command -v cmd.exe &>/dev/null || return 0
@@ -809,24 +709,19 @@ _default_bar_data_dir() {
   fi
 }
 
-# Idempotently set `<key> = <value>` in a springsettings.cfg. If the key is
-# already present (any whitespace / casing), replace its value; otherwise
-# append. The engine treats unknown keys as warnings and rewrites the cfg
-# on graceful shutdown -- so callers should re-apply on every launch rather
-# than relying on prior writes surviving.
+# Idempotently set `<key> = <value>` in a springsettings.cfg. The engine rewrites the cfg on
+# shutdown, so callers should re-apply on every launch.
 springsettings_set() {
   local cfg="${1:-}" key="${2:-}" value="${3:-}"
   if [ -z "$cfg" ] || [ -z "$key" ]; then
     return 1
   fi
-  # Auto-create cfg if missing (engine creates a default on first run; if we
-  # write before first run it'll merge ours with its defaults).
   if [ ! -f "$cfg" ]; then
     : > "$cfg" 2>/dev/null || { warn "Couldn't create $cfg"; return 1; }
   fi
   if grep -qE "^[[:space:]]*${key}[[:space:]]*=" "$cfg" 2>/dev/null; then
     local tmp="$cfg.tmp.$$"
-    # Use # as sed delimiter so values with / don't bite us. Anchor on ^...$.
+    # # as sed delimiter so values with / don't bite us.
     sed -E "s#^[[:space:]]*${key}[[:space:]]*=.*\$#${key} = ${value}#" \
       "$cfg" > "$tmp" 2>/dev/null \
       && mv "$tmp" "$cfg" \
@@ -837,20 +732,14 @@ springsettings_set() {
   fi
 }
 
-# Drop an empty devmode.txt at the engine's data dir to enable Recoil's
-# developer mode (unsigned LuaUI/gadgets, /cheat, hot-reload, loosened VFS
-# write rules). Presence is what matters; content is ignored. Idempotent --
-# never overwrites an existing file, and stays silent unless it creates one,
-# so launch-time invocations don't spam the log.
+# Drop an empty devmode.txt at the engine's data dir to enable Recoil's developer mode.
 ensure_devmode_marker() {
   local data_dir="${1:-}"
   [ -n "$data_dir" ] || return 0
   [ -d "$data_dir" ] || return 0
   local marker="$data_dir/devmode.txt"
   [ -e "$marker" ] && return 0
-  # `2>/dev/null` on a single redirect only catches the command's stderr,
-  # not the redirect-setup failure ("Permission denied" lands on bash's
-  # stderr first). Wrap the redirect in `{}` so the suppressor sees both.
+  # {} around the redirect so 2>/dev/null also catches a redirect-setup failure.
   if { : > "$marker"; } 2>/dev/null; then
     info "Created $marker (Recoil dev mode marker)"
   else
@@ -858,8 +747,7 @@ ensure_devmode_marker() {
   fi
 }
 
-# Persist the WSL path form -- the rest of the bash plumbing reads it
-# directly. The Windows-side shim bakes in the converted Windows path.
+# Persist BAR_DATA_DIR in WSL path form; the Windows shim converts it. WSL-only.
 ensure_bar_data_dir() {
   is_wsl || return 0
 
@@ -941,9 +829,7 @@ ensure_bar_data_dir() {
   export BAR_DATA_DIR="$current"
 }
 
-# Persist BAR_LAUNCH_PYTHON=<py.exe path> to .env. Called after
-# ensure_windows_python finds a real interpreter so the shim and venv
-# bootstrap have a stable handle to it. WSL-only.
+# Persist BAR_LAUNCH_PYTHON=<py.exe path> to .env. WSL-only.
 ensure_bar_launch_python_persisted() {
   is_wsl || return 0
   local env_file="$DEVTOOLS_DIR/.env"
@@ -964,15 +850,12 @@ ensure_bar_launch_python_persisted() {
 
   local win_py
   win_py="$(_to_windows_path "$py_path")"
-  # Single-quote: backslashes in C:\... would otherwise be interpreted as
-  # escape sequences by just's dotenv parser.
+  # Single-quote: just's dotenv parser would treat backslashes in C:\... as escapes.
   echo "BAR_LAUNCH_PYTHON='$win_py'" >> "$env_file"
   ok "Added BAR_LAUNCH_PYTHON=$win_py to .env"
 }
 
-# A Windows venv (not a WSL one): Recoil runs as a native Windows process
-# and the launcher spawns it via subprocess. Keeping the launcher itself
-# Windows-side avoids a WSL→Windows hop on every engine spawn.
+# Build a Windows venv (not WSL): the launcher spawns the native Windows engine, avoiding a WSL hop.
 ensure_bar_launch_venv_windows() {
   is_wsl || return 0
 
@@ -1015,8 +898,6 @@ ensure_bar_launch_venv_windows() {
   fi
 
   step "Installing bar_debug_launcher into Windows venv"
-  # Editable install via UNC path: pip writes a .pth into the venv, import
-  # crosses Plan9 once on launcher startup -- fine for a once-per-session tool.
   local repo_unc
   repo_unc="$(_to_windows_path "$repo_path")"
   "$venv_python_wsl" -m pip install --upgrade pip --quiet \
@@ -1028,8 +909,7 @@ ensure_bar_launch_venv_windows() {
   export BAR_LAUNCH_VENV="$venv_wsl"
 }
 
-# Generate <BAR_DATA_DIR>/bin/bar-launch.cmd with absolute Windows paths
-# baked in. Regenerate via `just bar::regen-shim` if .env values change.
+# Generate <BAR_DATA_DIR>/bin/bar-launch.cmd with absolute Windows paths baked in.
 regenerate_bar_launch_cmd_shim() {
   is_wsl || return 0
 
@@ -1063,10 +943,7 @@ EOF
   ok "Generated $shim_wsl"
 }
 
-# Pre-flight rollup: after the front-loaded config phase, before any system
-# change, show every decision the user made plus the work cmd_init is about
-# to do, then gate on a single Y/n. Supersedes the old WSL-only
-# _setup_consent_splash -- one combined consent point, every platform.
+# Show every decision + the work ahead, then gate on a single Y/n.
 confirm_setup_plan() {
   local features="$1" game_dir="$2" do_link="$3"
 
@@ -1080,11 +957,7 @@ confirm_setup_plan() {
 
   echo "  System (host):"
   echo "    install any missing packages -- git, podman, distrobox (needs sudo)"
-  # Probe whether the dev container already exists so the rollup says
-  # "already built" instead of implying a 3-5 min build on every run. Plain
-  # `grep -F ... >/dev/null` -- NOT `grep -q`: under `set -o pipefail`, -q's
-  # early exit SIGPIPEs `distrobox list` and flips the result (the trap the
-  # old _setup_consent_splash and sync.sh already document).
+  # grep -F not -q: under pipefail, -q's early exit SIGPIPEs `distrobox list` and flips the result.
   local dbx_built=0 dbx_listing
   if command -v distrobox >/dev/null 2>&1; then
     dbx_listing="$(distrobox list 2>/dev/null || true)"
@@ -1103,10 +976,7 @@ confirm_setup_plan() {
   fi
   echo ""
 
-  # Repo rollup: bucket the selected repos into already-present vs new clones.
-  # "present" mirrors clone_for_features's clone-vs-update test -- a repo with
-  # a local_path override is present iff that path exists, else present iff
-  # the in-workspace dir has a .git. Name only the new clones (noisy bad).
+  # Bucket selected repos into present vs new (same test as clone_for_features).
   load_repos_conf
   local wanted i dir lp r_present=0 r_new=0 new_dirs=()
   wanted="$(features_to_repos "$features")"
@@ -1158,26 +1028,16 @@ confirm_setup_plan() {
     info "Cancelled -- nothing has been changed."
     exit 0
   fi
-  # Pre-cache sudo so the long unattended run below doesn't block on a prompt.
   sudo -v 2>/dev/null || warn "Could not pre-cache sudo; later steps may prompt for your password."
   echo ""
 }
 
-# Verify the WSL-side sync daemon's *kernel-level* deps are in place. The
-# daemon itself runs inside bar-sync (docker/sync.Containerfile) and that
-# container carries python3 / pywatchman / watchman / rsync. The only host
-# concern is fs.inotify.max_user_watches: it's a kernel sysctl, propagates
-# into the container's namespace, and the BAR tree (~100k+ files including
-# .git/, .lux/, vendored Lua) blows past the 8192 default.
-# Idempotent and safe to re-run; quiet when already configured.
+# Bump fs.inotify.max_user_watches on the host kernel; the BAR tree blows past the default.
 ensure_sync_daemon_deps_wsl() {
   is_wsl || return 0
 
   step "Checking WSL sync kernel limits"
 
-  # 524288 is the canonical bump everyone (watchdog, dropbox, jetbrains)
-  # converges on. Set on the host kernel; visible from inside bar-sync
-  # because container namespaces inherit /proc/sys/fs/inotify/* unmodified.
   local cur_limit min_limit=131072
   cur_limit="$(cat /proc/sys/fs/inotify/max_user_watches 2>/dev/null || echo 0)"
   if [ "$cur_limit" -ge "$min_limit" ]; then
@@ -1197,22 +1057,7 @@ ensure_sync_daemon_deps_wsl() {
   return 1
 }
 
-# Export the dev-toolchain binaries from the bar-dev container to the host
-# PATH via distrobox-export wrappers. These tools are container-lifecycle
-# concerns -- they exist because dev.Containerfile installed them, and they
-# disappear when the container is rebuilt. Keeping the export with the
-# container's setup (not editor-setup) ensures non-editor recipes
-# (`just bar::check`, `bar::lint`, `bar::fmt`, `bar::units`) still work
-# even if the user declined editor integration.
-#
-# Idempotent. Loud-fail per binary so a partially-built container surfaces
-# clearly instead of silently leaving wrappers missing for the editor /
-# recipes that need them.
-# Container paths of binaries exposed to the host via distrobox-export
-# wrappers. Re-running export against a freshly-rebuilt container
-# overwrites any stale wrappers in place, so this list also implicitly
-# defines what gets refreshed when paths in the image move (e.g. lx
-# moving from /usr/bin to /usr/local/bin after the cargo-binstall switch).
+# Container paths of dev binaries exported to the host PATH via distrobox-export.
 DEV_BINARIES=(
   /usr/local/bin/emmylua_ls
   /usr/local/bin/emmylua_check
@@ -1249,13 +1094,9 @@ export_dev_binaries() {
 DEV_IMAGE="bar-dev"
 
 cmd_setup_distrobox() {
-  # `podman build` and `distrobox create` need to talk to the host's
-  # podman daemon -- neither tool is even installed inside bar-dev, so
-  # the failure would otherwise be a cryptic 127.
   require_host
 
-  # --rebuild forces the container recreate even when the dev image is
-  # unchanged (e.g. drift the image ID alone can't detect).
+  # --rebuild forces a recreate even when the dev image is unchanged.
   local force_rebuild=0 arg
   for arg in "$@"; do
     if [ "$arg" = "--rebuild" ]; then force_rebuild=1; fi
@@ -1271,8 +1112,6 @@ cmd_setup_distrobox() {
 
   ensure_wsl_setup
 
-  # Persist the chosen container name to .env so the user can see/edit it.
-  # The default itself lives in common.sh; this just makes it discoverable.
   local env_file="$DEVTOOLS_DIR/.env"
   touch "$env_file"
   if ! grep -q "^DEVTOOLS_DISTROBOX=" "$env_file" 2>/dev/null; then
@@ -1285,9 +1124,7 @@ cmd_setup_distrobox() {
   ok "Image built: $DEV_IMAGE"
   echo ""
 
-  # Fingerprint the built image: the container only needs recreating when the
-  # image actually changed. An empty id (inspect failed) falls back to the
-  # old always-recreate behavior.
+  # Recreate the container only when the image id changed; empty id => always recreate.
   local dev_image_id stamp_file image_changed=0
   dev_image_id="$(podman image inspect --format '{{.Id}}' "$DEV_IMAGE" 2>/dev/null || true)"
   stamp_file="$DEVTOOLS_DIR/.devtools/dev-image.id"
@@ -1296,9 +1133,6 @@ cmd_setup_distrobox() {
     image_changed=1
   fi
 
-  # Recreate the container on that signal, or when it isn't there yet.
-  # An unchanged image's container is byte-identical -- recreating it just
-  # re-pays distrobox's first-enter init and discards container-local state.
   local box_exists=0 dbx_list need_recreate=0
   dbx_list="$(distrobox list 2>/dev/null || true)"
   if printf '%s\n' "$dbx_list" | grep -F "| $DEVTOOLS_DISTROBOX " >/dev/null 2>&1; then
@@ -1315,9 +1149,6 @@ cmd_setup_distrobox() {
       || true
   fi
 
-  # Stamp the built image so the next run can tell whether it changed. The
-  # per-repo lux cache (.lux/) is the bar layer's concern -- `bar::lux-install`
-  # populates it; distrobox setup never touches it.
   mkdir -p "$(dirname "$stamp_file")"
   if [ -n "$dev_image_id" ]; then
     printf '%s\n' "$dev_image_id" > "$stamp_file"
@@ -1325,8 +1156,7 @@ cmd_setup_distrobox() {
 
   if [ "$need_recreate" = "1" ]; then
     step "Creating distrobox '$DEVTOOLS_DISTROBOX'..."
-    # podman tags built images under localhost/<name>; distrobox needs the
-    # fully qualified ref so it doesn't try to pull from a registry.
+    # localhost/ prefix so distrobox uses the local image instead of pulling from a registry.
     distrobox create --name "$DEVTOOLS_DISTROBOX" --image "localhost/$DEV_IMAGE" --yes
     ok "Distrobox created: $DEVTOOLS_DISTROBOX"
   else
@@ -1334,21 +1164,8 @@ cmd_setup_distrobox() {
   fi
   echo ""
 
-  # Refresh host wrappers: re-exporting overwrites any stale wrapper from a
-  # previous container that hardcodes an old binary path (e.g. /usr/bin/lx
-  # after lx moved to /usr/local/bin). Recipes and the editor find lx /
-  # stylua / emmylua / clangd on the host PATH through these wrappers.
   export_dev_binaries || warn "Some dev binaries failed to export; recipes / editor that depend on them will need 'just setup::distrobox' rerun."
   echo ""
-
-  # No `lx install-lua` step: lux uses the container's system Lua 5.1
-  # (compat-lua, on PATH as `lua`) directly -- that build has dlopen, so
-  # busted's C rocks load. `install-lua` builds lux's own dlopen-less Lua,
-  # which then needs patching back out. Mirrors BAR's test_unit.yml CI.
-  #
-  # Beyond-All-Reason/.lux/ (BAR's Lua dependency cache) is likewise NOT
-  # touched here -- populating it is a post-clone, bar-only step run by
-  # cmd_init via `just bar::lux-install`.
 
   if is_wsl; then
     cmd_setup_sync_distrobox || warn "bar-sync container build failed; 'just bar::launch' will not be able to mirror edits to /mnt/c."
@@ -1362,22 +1179,12 @@ cmd_setup_distrobox() {
   echo "  To rebuild after changes:   just setup::distrobox"
 }
 
-# WSL-only sister to cmd_setup_distrobox: build + create the bar-sync
-# container that owns the filesystem mirror daemon. See common.sh's
-# DEVTOOLS_SYNC_DISTROBOX comment and docker/sync.Containerfile for the
-# split rationale.
+# WSL-only: build + create the bar-sync container hosting the filesystem mirror daemon.
 SYNC_IMAGE="bar-sync"
 cmd_setup_sync_distrobox() {
   is_wsl || return 0
 
-  # NB: this function is called as `cmd_setup_sync_distrobox || warn ...` from
-  # cmd_setup_distrobox, which disables `set -e` for the entire body (bash
-  # errexit suppression rule for functions on the LHS of ||). Every failure-
-  # sensitive command below therefore needs an explicit `|| { err; return 1; }`
-  # -- otherwise a failed `podman build` falls through to `distrobox create`,
-  # which tries to pull the missing image from a registry and dies with a
-  # confusing "connection refused to localhost:443" instead of the real RPM /
-  # build error.
+  # Called on the LHS of `||`, so set -e is off here -- every failure needs an explicit `|| return 1`.
   step "Building sync container image ($SYNC_IMAGE)..."
   if ! podman build -t "$SYNC_IMAGE" -f "$DEVTOOLS_DIR/docker/sync.Containerfile" "$DEVTOOLS_DIR"; then
     err "podman build failed for $SYNC_IMAGE -- see output above for the real cause."
@@ -1397,9 +1204,7 @@ cmd_setup_sync_distrobox() {
   fi
   ok "Distrobox created: $DEVTOOLS_SYNC_DISTROBOX"
 
-  # Smoke-test: confirm pywatchman + watchman both load inside the container
-  # before sync.sh tries to use them. Failing here is much clearer than a
-  # cryptic ImportError from a backgrounded daemon later.
+  # Smoke-test pywatchman + watchman before sync.sh relies on them.
   if ! distrobox enter "$DEVTOOLS_SYNC_DISTROBOX" -- python3 -c \
        'import pywatchman; pywatchman.client(timeout=5).query("version")' \
        >/dev/null 2>&1; then
@@ -1409,9 +1214,7 @@ cmd_setup_sync_distrobox() {
   ok "pywatchman + watchman ready in $DEVTOOLS_SYNC_DISTROBOX"
 }
 
-# Feature -> repo dirs it pulls in. Reads from the loaded repos.conf so the
-# feature column is the single source of truth — no hand-maintained mapping
-# in this file. Caller must have run load_repos_conf already.
+# Feature -> repo dirs it pulls in (from the loaded repos.conf). Caller must run load_repos_conf first.
 feature_repos() {
   local feature="$1"
   local i out=""
@@ -1423,17 +1226,11 @@ feature_repos() {
   echo "${out% }"
 }
 
-# features_include / require_repo are defined in scripts/common.sh, which is
-# sourced before this file -- one canonical copy, shared with repos.sh.
-
 # Comma-separated features -> deduplicated space-separated repo dirs.
 features_to_repos() {
   local f r
   local -a flist=()
   declare -A seen=()
-  # Split the feature list on commas via `read` (IFS scoped to that one
-  # command) so the inner loop keeps the default IFS it needs to
-  # word-split feature_repos' space-separated output.
   IFS=',' read -ra flist <<< "$1"
   for f in "${flist[@]}"; do
     for r in $(feature_repos "$f"); do
@@ -1443,9 +1240,7 @@ features_to_repos() {
   echo "${!seen[@]}"
 }
 
-# Interactive checkbox list. Args after the title are "key|label|default" where
-# default is 1 (checked) or 0 (unchecked). On confirm, sets CHECKBOX_RESULT to
-# the comma-separated keys of the selected items. Returns 1 on quit.
+# Interactive checkbox list; items are "key|label|default". Sets CHECKBOX_RESULT, returns 1 on quit.
 checkbox_list() {
   local title="$1"; shift
   local -a keys=() labels=() state=()
@@ -1506,10 +1301,7 @@ checkbox_list() {
   return 0
 }
 
-# Yes/no prompt with a seeded default. $1 = question, $2 = default ("y"|"n").
-# The [Y/n] / [y/N] hint reflects the default and empty input takes it, so a
-# `setup::reconfigure` is Enter-through: callers pass the saved .env value as
-# the default, and pressing Enter keeps it. Returns 0 for yes, 1 for no.
+# yes/no prompt; $2 = default on empty input. 0=yes 1=no.
 ask_yes_no() {
   local q="$1" def="$2" ans hint
   [ "$def" = "y" ] && hint="[Y/n]" || hint="[y/N]"
@@ -1519,10 +1311,6 @@ ask_yes_no() {
     *)           return 1 ;;
   esac
 }
-
-# Note: features lives in scripts/setup/20-features.sh now. The module
-# registers prompt_features / apply_features at source-load time, and
-# cmd_init drives it through `ensure_module_by_name features`.
 
 # Persist ALLOW_SPRINGSETTINGS_MOD=<0|1> to .env.
 write_springsettings_optin_env() {
@@ -1538,11 +1326,7 @@ write_springsettings_optin_env() {
   fi
 }
 
-# Ask the user once whether bar::launch is allowed to modify the engine's
-# springsettings.cfg in service of its own --debug-* flags. Default no:
-# the cfg is the user's territory and most contributors will never use
-# the debug flags. ensure_module gates the re-ask (skips when the key is in
-# .env, unless BAR_RESET_CONFIG is set) -- no second guard here.
+# Ask once whether bar::launch may modify the engine's springsettings.cfg. Default no.
 prompt_springsettings_opt_in() {
   echo ""
   echo -e "${BOLD}springsettings.cfg modification opt-in${NC}"
@@ -1561,9 +1345,7 @@ prompt_springsettings_opt_in() {
   fi
 }
 
-# Detect whether GitHub already accepts an SSH key from the running agent.
-# Returns 0 if `ssh -T git@github.com` finds a configured key, 1 otherwise.
-# BatchMode=yes prevents the password/yes prompts that would otherwise hang.
+# 0 if `ssh -T git@github.com` already authenticates. BatchMode prevents a hang on prompts.
 _github_ssh_works() {
   command -v ssh >/dev/null 2>&1 || return 1
   local out
@@ -1572,15 +1354,8 @@ _github_ssh_works() {
   printf '%s' "$out" | grep -q "successfully authenticated"
 }
 
-# Step-0 prompt: pick how the user wants SSH to GitHub configured. ensure_module
-# gates the re-ask via .env / BAR_RESET_CONFIG. Within the prompt we still skip
-# the menu when an agent already authenticates (no point nagging users who
-# arrived with a working setup) -- except under BAR_RESET_CONFIG, where a
-# reconfigure means "ask me anyway". The actual setup runs later via
-# run_ssh_setup_choice so the user can answer here and walk away.
+# Step-0 prompt: pick how SSH to GitHub gets configured. Skips when an agent already authenticates.
 prompt_ssh_setup_choice() {
-  # No "already set" guard -- ensure_module owns that gate; a second check
-  # here ignores BAR_RESET_CONFIG and wedges `setup::reconfigure`.
   if [ -z "${BAR_RESET_CONFIG:-}" ] && _github_ssh_works; then
     info "ssh -T git@github.com already authenticates -- skipping ssh setup prompt"
     write_env_key BAR_SSH_SETUP existing
@@ -1599,9 +1374,7 @@ prompt_ssh_setup_choice() {
   echo "    2) manual  Generate ~/.ssh/id_ed25519 + walk through GitHub"
   echo "    3) skip    Don't configure now (clone over HTTPS; re-run later)"
   echo ""
-  # Default the menu to the saved choice so a reconfigure is Enter-through.
-  # existing/skip/unset all land on 3 (the menu has no "existing" item --
-  # it's autodetect-only -- and "leave ssh alone" is closest to skip).
+  # Default to the saved choice; existing/skip/unset all land on 3.
   local cur defnum
   cur="$(read_env_key BAR_SSH_SETUP)"
   case "$cur" in
@@ -1623,9 +1396,7 @@ prompt_ssh_setup_choice() {
   ok "Recorded BAR_SSH_SETUP=$choice in .env"
 }
 
-# Run the SSH setup the user picked at step 0. Idempotent: re-running
-# setup::init after a successful manual/op flow is a no-op (the setup
-# scripts themselves detect "already configured").
+# Run the SSH setup the user picked at step 0.
 run_ssh_setup_choice() {
   local env_file="$DEVTOOLS_DIR/.env"
   local choice
@@ -1635,11 +1406,7 @@ run_ssh_setup_choice() {
     manual)          bash "$DEVTOOLS_DIR/scripts/ssh/setup-manual-ssh.sh" || warn "ssh::manual-setup failed; you can re-run it with 'just ssh::manual-setup'." ;;
     existing|skip|*) : ;;
   esac
-  # The ssh setup scripts append SSH_AUTH_SOCK to the user's rc, but the
-  # currently running setup::init shell doesn't pick that up -- so a later
-  # `git clone git@github.com:...` in this same process fails with
-  # "Permission denied (publickey)". Export the socket here based on the
-  # paths the wsl/linux scripts wire up.
+  # Export SSH_AUTH_SOCK now so a `git clone` later in this same process can see it.
   for _sock in "$HOME/.1password/agent.sock" "$HOME/.ssh/agent.sock"; do
     if [ -S "$_sock" ]; then
       export SSH_AUTH_SOCK="$_sock"
@@ -1649,18 +1416,12 @@ run_ssh_setup_choice() {
   unset _sock
 }
 
-# Editor integration: collects state for the front-load prompt and the
-# unattended runner. Sets globals (intentionally global, mirrors how the
-# other prompt_* helpers communicate state):
-#   EDITOR_HAVE_CODE          1 if `code` CLI is on PATH
-#   EDITOR_INSTALLED_EXTS     newline-separated list (from `code --list-extensions`)
-#   EDITOR_MISSING_EXTS       space-separated subset of recommended extensions absent
-#   EDITOR_HAS_SUMNEKO        1 if sumneko.lua is currently installed
 _EDITOR_RECOMMENDED=(
   "tangzx.emmylua|EmmyLua (Lua language server)"
   "JohnnyMorganz.stylua|StyLua (Lua formatter)"
   "llvm-vs-code-extensions.vscode-clangd|clangd (C/C++ for engine work)"
 )
+# Sets EDITOR_HAVE_CODE / EDITOR_INSTALLED_EXTS / EDITOR_MISSING_EXTS / EDITOR_HAS_SUMNEKO.
 editor_collect_state() {
   EDITOR_HAVE_CODE=0
   EDITOR_INSTALLED_EXTS=""
@@ -1678,9 +1439,7 @@ editor_collect_state() {
   EDITOR_MISSING_EXTS="${miss# }"
 }
 
-# Render the recommended-extensions list. Caller already ran
-# editor_collect_state and printed any heading it wants. Pulled out so the
-# Step 0/N prompt and the standalone editor recipe stay byte-identical here.
+# Render the recommended-extensions list. Caller runs editor_collect_state first.
 _editor_render_state() {
   local entry ext label
   for entry in "${_EDITOR_RECOMMENDED[@]}"; do
@@ -1693,16 +1452,13 @@ _editor_render_state() {
       printf "  ${DIM}?${NC} %-40s %s\n"                        "$ext" "$label"
     fi
   done
-  # if/then/fi (not `[ ... ] && printf`) so the function returns 0 when
-  # sumneko isn't installed -- otherwise set -e in the caller exits here.
+  # if/then/fi (not `&&`) so the function returns 0 under set -e when sumneko is absent.
   if [ "${EDITOR_HAS_SUMNEKO:-0}" = "1" ]; then
     printf "  ${YELLOW}!${NC} %-40s ${DIM}(installed; conflicts with tangzx.emmylua)${NC}\n" "sumneko.lua"
   fi
 }
 
-# Full "what this is and what it'll do" preamble, shared between the Step
-# 0/N prompt (cmd_init) and the standalone editor recipe. Both touch this
-# text — keeping it in one place means the prompt and recipe always agree.
+# Editor-integration preamble, shared by the Step 0/N prompt and the standalone editor recipe.
 _editor_show_preamble() {
   echo ""
   echo -e "${BOLD}Editor integration${NC}"
@@ -1722,17 +1478,8 @@ _editor_show_preamble() {
   echo ""
 }
 
-# Top-level editor opt-in. Front-loaded into cmd_init's Step 0/N batch.
-# Persists BAR_EDITOR_SETUP=yes|no. ensure_module decides whether to call
-# this -- skips when .env has the key, unless BAR_RESET_CONFIG is set.
-#
-# One prompt, not three: the preamble's ✓/✗ list already previews exactly
-# what `yes` will do (install the ✗ items, remove a flagged sumneko.lua),
-# so a separate "install missing exts?" / "uninstall sumneko?" pair would
-# just be the user re-stating what they already saw on screen.
+# Editor opt-in prompt. Persists BAR_EDITOR_SETUP=yes|no.
 prompt_editor_setup_choice() {
-  # No "already set" guard -- ensure_module owns that gate; a second check
-  # here ignores BAR_RESET_CONFIG and wedges `setup::reconfigure`.
   editor_collect_state
   _editor_show_preamble
 
@@ -1745,8 +1492,7 @@ prompt_editor_setup_choice() {
   fi
 }
 
-# Read the persisted editor decisions from .env and run cmd_setup_editor if
-# opted in. cmd_init's last unattended step before SSH setup.
+# Run cmd_setup_editor if BAR_EDITOR_SETUP says yes.
 run_editor_setup_choice() {
   local env_file="$DEVTOOLS_DIR/.env"
   local choice
@@ -1757,21 +1503,14 @@ run_editor_setup_choice() {
   esac
 }
 
-# Unattended editor wiring. Always installs the recommended extensions and
-# removes a conflicting sumneko.lua if present -- the Step 0/N preamble
-# previewed exactly this, so an explicit yes covers both. Both paths short-
-# circuit when there's nothing to do (no missing exts / no sumneko).
+# Unattended editor wiring: installs recommended extensions, removes a conflicting sumneko.lua.
 cmd_setup_editor() {
   if [ -z "${DEVTOOLS_DISTROBOX:-}" ]; then
     err "DEVTOOLS_DISTROBOX not set. Run: just setup::distrobox"
     return 1
   fi
 
-  # Dev binaries (emmylua_ls, clangd, stylua, lx, ...) are exported as
-  # part of `setup::distrobox` -- they're container-lifecycle, not
-  # editor-lifecycle, and recipes outside editor-setup (bar::check,
-  # bar::lint, bar::fmt) need them too. Bail loudly here if they're
-  # missing rather than half-doing the editor setup.
+  # Dev binaries are exported by setup::distrobox; bail loudly if they're missing.
   local local_bin="$HOME/.local/bin" bin missing_bins=()
   for bin in emmylua_ls emmylua_check clangd stylua lx; do
     [ -x "$local_bin/$bin" ] || missing_bins+=("$bin")
@@ -1784,10 +1523,7 @@ cmd_setup_editor() {
 
   if [ -f "$DEVTOOLS_DIR/RecoilEngine/CMakeLists.txt" ]; then
     step "Generating compile_commands.json for clangd..."
-    # Without pipefail the `| tail -3` swallows cmake's non-zero exit
-    # (tail always succeeds), and we'd happily print "ready" against a
-    # missing or stale build/compile_commands.json. set -e + pipefail
-    # inside makes cmake's failure propagate.
+    # set -eo pipefail inside so `| tail -3` doesn't swallow a cmake failure.
     if ! distrobox enter "$DEVTOOLS_DISTROBOX" -- bash -c "
       set -eo pipefail
       cd '$DEVTOOLS_DIR/RecoilEngine' \
@@ -1836,9 +1572,7 @@ cmd_setup_editor() {
   done
   echo ""
 
-  # Per-checkout .vscode/settings.json (gitignored in both repos). The
-  # engine template bakes in $HOME so clangd.path doesn't depend on
-  # VS Code Server's PATH inheriting ~/.local/bin (it doesn't, reliably).
+  # Per-checkout .vscode/settings.json; the engine template bakes in $HOME for clangd.path.
   _write_vscode_settings() {
     local repo="$1" template="$2"
     local dest="$DEVTOOLS_DIR/$repo/.vscode/settings.json"
@@ -1890,10 +1624,7 @@ clone_for_features() {
   for i in "${!REPO_DIRS[@]}"; do
     local dir="${REPO_DIRS[$i]}"
     if [[ " $wanted " != *" $dir "* ]]; then
-      # Deselected feature: drop the workspace entry so the tree matches
-      # BAR_FEATURES. A symlink is disposable (the external checkout it
-      # points at is left alone); a real in-workspace clone is moved to
-      # .backups/ -- never deleted.
+      # Deselected: drop a workspace symlink, or move a real clone to .backups/ (never delete).
       local target="$DEVTOOLS_DIR/$dir"
       if [ -L "$target" ]; then
         info "  ${dir}: deselected -- removing workspace symlink ($(readlink "$target") kept)"
@@ -1931,10 +1662,6 @@ clone_for_features() {
 }
 
 cmd_init() {
-  # Umbrella first-time setup runs cmd_install_deps + cmd_setup_distrobox
-  # (and a half-dozen host-side things in between). Catch the
-  # in-container mistake here so we don't run several minutes of prompts
-  # before tripping the inner guard.
   require_host
 
   echo -e "${BOLD}==========================================${NC}"
@@ -1942,16 +1669,12 @@ cmd_init() {
   echo -e "${BOLD}==========================================${NC}"
   echo ""
 
-  # If they got this far they obviously have *some* `just`, but apt-shipped
-  # 1.21 silently mis-parses our module syntax. Surface the version mismatch
-  # before the long-running steps start.
+  # apt-shipped just 1.21 silently mis-parses our module syntax.
   _check_just_min_version "1.31.0"
 
   ensure_wsl_setup
 
-  # ===== Front-load all interactive decisions =====
-  # Everything below is one big batch of prompts so the user can answer
-  # them up front and walk away while the long-running steps roll.
+  # Front-load all interactive decisions so the user can answer and walk away.
   if [ ! -f "$REPOS_CONF" ]; then
     err "repos.conf not found at: $REPOS_CONF"
     exit 1
@@ -1971,15 +1694,8 @@ cmd_init() {
     return 0
   fi
 
-  # The remaining modules are feature-gated: module_relevant consults the
-  # just-selected BAR_FEATURES and skips a module whose feature isn't in the
-  # selection -- a teiserver-only contributor is never asked about the Chobby
-  # channel, springsettings, the editor toolchain, or game-dir symlinks. The
-  # gate sits at the call site, so `just setup::<module>` still re-prompts any
-  # module directly.
-
-  # Symlink decision is captured now; actual linking happens in step 6,
-  # once the repos exist on disk. Persisted as BAR_LINK_ON_BUILD.
+  # Remaining modules are feature-gated via module_relevant.
+  # Symlink decision is captured now; actual linking happens in step 6.
   local game_dir do_link
   if module_relevant link_on_build; then
     ensure_module_by_name link_on_build
@@ -1989,18 +1705,11 @@ cmd_init() {
 
   if module_relevant chobby_channel; then ensure_module_by_name chobby_channel || true; fi
   if module_relevant springsettings; then ensure_module_by_name springsettings || true; fi
-  # ssh's apply runs the chosen setup-*.sh script -- still at config time, so
-  # the rest of cmd_init is unattended (manual flow's "paste pubkey to GitHub"
-  # pause happens here, not later). Never gated -- every feature clones repos.
   ensure_module_by_name ssh             || true
-  # editor's prompt fires here with the front-loaded batch; its apply is
-  # deferred to the end of cmd_init (apply_deferred_modules), since
-  # distrobox-export needs the bar-dev container created at step 2.
+  # editor's apply is deferred to step 8 -- distrobox-export needs the container from step 2.
   if module_relevant editor; then ensure_module_by_name editor || true; fi
   echo ""
 
-  # Last stop in the front-loaded phase: roll up every decision + the work
-  # ahead, get one Y/n, then everything below runs unattended.
   confirm_setup_plan "$features" "$game_dir" "$do_link"
 
   step "1/8  Checking & installing dependencies"
@@ -2011,9 +1720,6 @@ cmd_init() {
     cmd_install_deps || { err "Dependency installation failed. Fix and retry."; exit 1; }
   fi
   ensure_windows_python
-  # Sync daemon's runtime deps (watchman, pywatchman, rsync) live inside
-  # bar-sync now (built in step 2 below). Host only needs the inotify sysctl
-  # bumped, which propagates into the container.
   ensure_sync_daemon_deps_wsl
   echo ""
 
@@ -2027,9 +1733,6 @@ cmd_init() {
   clone_for_features "$features"
   echo ""
 
-  # Install BAR's .lux/ Lua dependency tree post-clone -- bar-only, so a
-  # teiserver-only contributor never pays it. Idempotent (`lx sync` against
-  # lux.lock); re-runnable any time via `just bar::lux-install`.
   if feature_selected bar; then
     ( cd "$DEVTOOLS_DIR" && just bar::lux-install ) \
       || warn "Lux install failed; run 'just bar::lux-install' once the tree settles."
@@ -2061,8 +1764,7 @@ cmd_init() {
       esac
       is_wsl && engine_os="windows"
       info "Building Recoil engine (${engine_arch}-${engine_os}, this may take a while)..."
-      # Via `just engine::build` (not build.sh) so the post-success
-      # `sync.sh mirror-engine` hook seeds $BAR_DATA_DIR/engine/local-build.
+      # Via `just engine::build` so the post-success sync.sh mirror-engine hook fires.
       ( cd "$DEVTOOLS_DIR" && just engine::build --arch "$engine_arch" "$engine_os" )
     else
       warn "Recoil selected but RecoilEngine/docker-build-v2 missing -- clone may have failed."
@@ -2079,9 +1781,6 @@ cmd_init() {
   elif [ "$do_link" = "yes" ]; then
     local spec feat dir name
     BAR_DATA_DIR="$game_dir"
-    # Feature selection decides whether we link; repo presence decides
-    # whether we can. A selected-but-missing repo is a loud warning, not a
-    # silent skip -- that combination means the clone step failed.
     for spec in "recoil:RecoilEngine:engine" "chobby:BYAR-Chobby:chobby" "bar:Beyond-All-Reason:bar"; do
       IFS=: read -r feat dir name <<<"$spec"
       feature_selected "$feat" || continue
@@ -2092,12 +1791,7 @@ cmd_init() {
       fi
     done
 
-    # WSL2: pre-warm the Watchman cold-copy seed during init's AFK time.
-    # The first `bar::launch` then hits the incremental-delta path
-    # (seconds) instead of timing out on a full rsync of the source trees
-    # through /mnt/c. _wait_for_ready in sync.sh has a 300s bound and a
-    # fresh BAR + chobby seed has been observed to exceed it. Fail-soft:
-    # the first bar::launch falls back to a full seed if this trips.
+    # WSL2: pre-warm the cold-copy seed so the first bar::launch hits the fast incremental path.
     if is_wsl; then
       echo ""
       info "Pre-warming sync state (cold-copy of source pairs to $BAR_DATA_DIR)"
@@ -2112,9 +1806,6 @@ cmd_init() {
   step "7/8  bar-launch venv (just bar::launch)"
   echo ""
   if is_wsl; then
-    # On WSL2 the launcher runs as a Windows-side Python process so it
-    # talks to the Windows engine binary directly. The Linux pipx venv
-    # would force WSL→Windows IPC for every engine spawn.
     ensure_bar_launch_venv_windows && regenerate_bar_launch_cmd_shim
   else
     cmd_setup_bar_launch
@@ -2182,17 +1873,13 @@ cmd_init() {
 }
 
 cmd_setup() {
-  # `setup::check` -- verifies podman + builds the teiserver compose
-  # stack; both need the host's container daemon.
   require_host
 
   echo -e "${BOLD}=== BAR Dev Environment Setup ===${NC}"
   echo ""
   check_prerequisites || exit 1
 
-  # cmd_setup is the docker-compose teiserver stack init. It needs the
-  # teiserver feature repos (teiserver, spads_config_bar, …); auto-clone
-  # them if any are missing.
+  # Auto-clone the teiserver feature repos if any are missing.
   local missing_teiserver=0
   load_repos_conf
   for i in "${!REPO_DIRS[@]}"; do
@@ -2229,10 +1916,7 @@ detect_game_dir() {
     return 0
   fi
 
-  # On WSL2 the dev-mode data dir is the sync target: that's where the
-  # engine reads cache/, demos/, the synced games/, and the local engine
-  # build from. Prefer it over the upstream Windows installer's data dir,
-  # which has no Devtools content in it.
+  # WSL2: the sync-target data dir, not the upstream installer's (which has no Devtools content).
   if is_wsl; then
     local data_dir
     data_dir="$(bar_data_dir_get)"
@@ -2278,9 +1962,7 @@ cmd_link() {
     info "Game directory: ${game_dir}"
     echo ""
 
-    # game subdirs end in .sdd so spring's archive scanner registers them
-    # (without the suffix, scan() walks the dir but never registers it as
-    # a known archive, and --menu lookups fail content_error).
+    # .sdd suffix required: spring's archive scanner won't register a dir without it.
     local -A link_map=(
       [engine]="$game_dir/engine/local-build"
       [chobby]="$game_dir/games/BYAR-Chobby.sdd"
@@ -2351,14 +2033,7 @@ cmd_link() {
     exit 1
   fi
 
-  # WSL2: link::create is a no-op for the symlink itself. The sync daemon
-  # (scripts/sync.sh + scripts/sync.py) is the analogue of the symlink: it
-  # mirrors source_path on WSL ext4 to link_path on Windows NTFS. We just
-  # need the target subdir present so the engine doesn't choke on an empty
-  # games/ dir; the cold-copy + watchman clock seed runs either at
-  # setup::init's pre-warm step or on the next `bash scripts/sync.sh
-  # cold-copy` / `just bar::launch`. Doing a raw rsync here would be a
-  # slow duplicate -- it doesn't record the watchman clock sync.py needs.
+  # WSL2: no symlink -- the sync daemon mirrors source_path to link_path. Just create the target dir.
   if is_wsl; then
     if [ ! -d "$source_path" ]; then
       err "Source not present at $source_path -- can't register sync target."
@@ -2385,14 +2060,7 @@ cmd_link() {
   ok "Linked $target: $link_path -> $source_path"
 }
 
-# ---------------------------------------------------------------------------
-# Module registry: source the engine + load every scripts/setup/NN-*.sh
-# module file. Each module registers itself via register_module so cmd_init
-# can drive them uniformly through ensure_all_modules / ensure_module_by_name.
-#
-# This MUST run after every setup.sh helper is defined (modules call into
-# checkbox_list, info/warn/ok, repo helpers, etc.).
-# ---------------------------------------------------------------------------
+# Load the setup module registry. MUST run after every setup.sh helper is defined.
 # shellcheck source=scripts/setup/_lib.sh
 source "$DEVTOOLS_DIR/scripts/setup/_lib.sh"
 _load_setup_modules

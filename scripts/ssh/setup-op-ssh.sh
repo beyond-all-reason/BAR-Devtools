@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# 1Password SSH agent + CLI bootstrap.
-# Detects environment and dispatches to the WSL or native-Linux wizard.
+# 1Password SSH agent + CLI bootstrap; dispatches to the WSL or native-Linux wizard.
 set -euo pipefail
 
 DEVTOOLS_DIR="${DEVTOOLS_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"

@@ -1,17 +1,10 @@
 #!/usr/bin/env bash
 # shellcheck source=scripts/setup/_lib.sh
 # Module: features.
-#
-# Picks which BAR components the contributor will work on. Persisted as
-# BAR_FEATURES (comma-separated keys: bar,recoil,teiserver,chobby,...).
-# Downstream steps in cmd_init (clone, build, link, ...) read BAR_FEATURES
-# via read_env_key to decide what to do.
 
 prompt_features() {
     CHECKBOX_RESULT=""
-    # Pre-check the boxes from the saved selection so a reconfigure starts
-    # where you left off; first run (no BAR_FEATURES) defaults to everything
-    # except spads-source. The `for` order must match the checkbox_list args.
+    # `for` order must match the checkbox_list args below
     local cur f init=()
     cur="$(read_env_key BAR_FEATURES)"
     for f in bar recoil teiserver chobby spads-source; do
@@ -41,9 +34,6 @@ prompt_features() {
     ok "Selected: $CHECKBOX_RESULT"
 }
 
-# Selection-only module: the downstream clone/build/link steps in cmd_init
-# read BAR_FEATURES via read_env_key when they need it. No materialization
-# here.
 apply_features() {
     :
 }

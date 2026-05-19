@@ -1,12 +1,6 @@
 #!/usr/bin/env bash
 # WSL <-> Windows 1Password SSH agent bridge.
-#
-# Pipeline:
-#   ssh-add  ->  $SSH_AUTH_SOCK (unix socket in WSL)
-#                socat (WSL) listens on the socket
-#                ->  spawns npiperelay.exe (Windows)
-#                    npiperelay forwards to \\.\pipe\openssh-ssh-agent
-#                    1Password Desktop owns that named pipe
+# Chain: $SSH_AUTH_SOCK -> socat (WSL) -> npiperelay.exe -> 1Password's named pipe.
 set -euo pipefail
 
 DEVTOOLS_DIR="${DEVTOOLS_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
@@ -37,19 +31,16 @@ winget_install() {
     ok "$name installed."
 }
 
-# --- Step 1: 1Password Desktop on Windows ---
 step "1/7 Install 1Password Desktop on Windows"
 if ! winget_install "AgileBits.1Password" "1Password Desktop"; then
     pause "Download and install 1Password from https://1password.com/downloads/windows/"
 fi
 
-# --- Step 2: 1Password CLI on Windows ---
 step "2/7 Install 1Password CLI on Windows"
 if ! winget_install "AgileBits.1Password.CLI" "1Password CLI"; then
     pause "Download and install the 1Password CLI from https://developer.1password.com/docs/cli/get-started/"
 fi
 
-# --- Step 3: Toggle the SSH agent + CLI integration in 1Password Desktop ---
 step "3/7 Enable SSH agent + CLI integration"
 if op_ssh_already_active; then
     ok "1Password SSH agent already serving keys -- skipping toggle prompt."
@@ -68,7 +59,6 @@ EOF
     pause "Toggle both Developer checkboxes and bump idle-lock to 4 hours"
 fi
 
-# --- Step 4: socat in WSL ---
 step "4/7 Install socat in WSL"
 if have socat; then
     ok "socat already installed."
@@ -78,7 +68,6 @@ else
     sudo apt-get install -y socat
 fi
 
-# --- Step 5: npiperelay.exe on Windows side ---
 step "5/7 Install npiperelay.exe on the Windows side"
 WIN_HOME="$(win_userprofile)"
 NPR_DIR="${WIN_HOME}/AppData/Local/npiperelay"
@@ -102,7 +91,6 @@ fi
 mkdir -p "$HOME/.local/bin"
 ln -sf "$NPR_EXE" "$HOME/.local/bin/npiperelay.exe"
 
-# --- Step 6: shell rc snippet ---
 SHELL_RC="$(shellrc_path)"
 step "6/7 Append bridge snippet to ${SHELL_RC/#$HOME/~}"
 read -r -d '' SHELLRC_BODY <<'BLOCK' || true
@@ -117,7 +105,6 @@ BLOCK
 shellrc_apply "1password-ssh-agent" "$SHELLRC_BODY"
 ok "Updated ${SHELLRC_TARGET/#$HOME/~} (block: 1password-ssh-agent)"
 
-# --- Step 7: live test ---
 step "7/7 Test the bridge"
 export SSH_AUTH_SOCK="$HOME/.ssh/agent.sock"
 rm -f "$SSH_AUTH_SOCK"

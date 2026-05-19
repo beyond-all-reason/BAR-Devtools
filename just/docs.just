@@ -37,9 +37,7 @@ build:
     require_host
     {{COMPOSE}} build recoil-docs
 
-#   TODO: Same workaround as lua::reset. doc/site/data/* are pipeline outputs tracked in git, so
-#         local docs generation dirties the tree. Prefer these as build-only artifacts (CI publishes
-#         them) rather than tracked outputs developers must constantly revert.
+# TODO: doc/site/data/* are pipeline outputs tracked in git; prefer build-only artifacts.
 
 # Reset generated doc data files
 reset:

@@ -5,8 +5,6 @@ COMPOSE_FILE        := DEVTOOLS_DIR / "docker-compose.dev.yml"
 COMPOSE             := "podman compose -f " + COMPOSE_FILE
 BAR_DIR             := DEVTOOLS_DIR / "Beyond-All-Reason"
 INTEGRATION_COMPOSE := "podman compose -f " + BAR_DIR / "tools" / "headless_testing" / "docker-compose.yml"
-# Batch check uses `emmylua_check` (Rust EmmyLua analyzer). Install via dev container image or
-# https://github.com/EmmyLuaLs/emmylua-analyzer-rust/releases — `emmylua_ls` is LSP-only (no --check).
 
 [private]
 require-bar:
@@ -23,25 +21,15 @@ require-emmylua-check:
         exit 1
     fi
 
-# Launch BAR for development. GUI by default; pass --headless (or --no-gui)
-# plus --play/--source/--boot to run without the Tk window. All flags forward
-# verbatim to `bar-launch`; see `just bar::launch --help` for the full set.
+# Launch BAR for development (GUI by default; --headless to skip the Tk window)
 launch *FLAGS:
     @bash "$DEVTOOLS_DIR/scripts/launch.sh" {{FLAGS}}
 
-# Stop BAR processes (spring, launcher, bar_launch python) and the WSL
-# sync daemon. Idempotent. Run before `just engine::build` to avoid
-# Windows file locks on the engine DLLs.
+# Stop BAR processes and the WSL sync daemon (run before engine::build on WSL)
 stop:
     @BAR_LAUNCH_MODE=stop bash "$DEVTOOLS_DIR/scripts/launch.sh"
 
-# Switch Chobby's gameConfig channel to `byar-dev`. This makes Chobby's
-# skirmish dropdown default to your local `Beyond-All-Reason.sdd` checkout
-# (instead of a rapid-downloaded test build), which in turn flips BAR's
-# isDevMode on (the gadgets.lua check is "Game.gameVersion contains
-# $VERSION", which only the local .sdd has). Persisted in
-# <data-dir>/chobby_config.json.
-# Switch Chobby to byar-dev so the local .sdd loads (idempotent).
+# Switch Chobby to byar-dev so the local .sdd loads (idempotent)
 dev-mode:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -52,16 +40,12 @@ dev-mode:
       err "Could not resolve BAR data dir. Set BAR_DATA_DIR or run 'just setup::init' first."
       exit 1
     fi
-    # Lobby-side: chobby's gameConfig channel -> local .sdd is default in skirmish.
     write_env_key BAR_CHOBBY_CHANNEL "byar-dev"
     apply_chobby_channel
-    # Engine-side: empty devmode.txt unlocks /cheat, unsigned LuaUI/gadgets,
-    # hot-reload, loose VFS. Idempotent (silent if it already exists).
     ensure_devmode_marker "$game_dir"
     info "Relaunch Chobby (or run 'just bar::launch') to pick up the change."
 
-# Regenerate the Windows-side launcher shim from current .env values.
-# WSL2-only.
+# Regenerate the Windows-side launcher shim from current .env values (WSL2-only)
 regen-shim:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -73,8 +57,7 @@ regen-shim:
     fi
     regenerate_bar_launch_cmd_shim
 
-# Tail the WSL sync daemon log. WSL2-only.
-# Use `just bar::sync-logs -- -n 200` to forward extra tail flags.
+# Tail the WSL sync daemon log (WSL2-only)
 sync-logs *TAIL_FLAGS:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -97,13 +80,7 @@ sync-logs *TAIL_FLAGS:
     [ "${1:-}" = "--" ] && shift
     exec tail -F "$@" "$logfile"
 
-# Tail the engine's infolog from the most recent BAR run.
-# Use `just bar::log -- -n 200` to forward extra tail flags.
-#
-# WSL2 note: passes `---disable-inotify -s 0.5` so tail stat-polls instead of
-# relying on inotify. Plan 9 doesn't forward inotify events from Windows
-# writers on /mnt/c, so the default inotify backend would be silent during
-# engine writes. Polling at 2Hz is rounding-error vs. engine log volume.
+# Tail the engine's infolog from the most recent BAR run
 log *TAIL_FLAGS:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -116,6 +93,7 @@ log *TAIL_FLAGS:
         exit 1
       fi
       logfile="$BAR_DATA_DIR/infolog.txt"
+      # Plan 9 doesn't forward inotify from Windows writers on /mnt/c; poll instead.
       tail_extra=(---disable-inotify -s 0.5)
     else
       game_dir="$(detect_game_dir 2>/dev/null)" || {
@@ -133,12 +111,11 @@ log *TAIL_FLAGS:
     [ "${1:-}" = "--" ] && shift
     exec tail -F "${tail_extra[@]}" "$@" "$logfile"
 
-# Alias: `bar::logs` (plural). just's `alias` directive doesn't work
-# inside modules, so we delegate explicitly.
+# Alias for `bar::log` (just's `alias` directive doesn't work inside modules)
 logs *TAIL_FLAGS:
     @just bar::log {{TAIL_FLAGS}}
 
-# Type-check BAR Lua code (EmmyLua analyzer CLI — `-c .emmyrc.json` avoids LuaLS-only keys in `.luarc.json`)
+# Type-check BAR Lua code (EmmyLua analyzer CLI)
 check *args: require-bar require-emmylua-check
     #!/usr/bin/env bash
     set -euo pipefail
@@ -172,10 +149,7 @@ units *args: require-bar
     enter_distrobox
     (cd "$BAR_DIR" && lx --lua-version 5.1 test {{args}})
 
-# Install BAR's Lua dependencies into .lux/ (idempotent; runs `lx sync`
-# against lux.lock). setup::init runs this post-clone; re-run it yourself
-# whenever the tree drifts. --clean wipes .lux/ first -- use it if a
-# dev-image change left stale compiled artifacts ("GLIBC ... not found").
+# Install BAR's Lua dependencies into .lux/ (--clean wipes .lux/ first)
 lux-install *args: require-bar
     #!/usr/bin/env bash
     set -euo pipefail
@@ -189,12 +163,7 @@ lux-install *args: require-bar
     done
     (cd "$BAR_DIR" && lx --lua-version 5.1 sync)
 
-# Drop into an interactive shell with busted on PATH (for unit-test work).
-# Named units-shell, not test-shell, because `bar::test` runs both units AND
-# integrations -- this REPL is specifically the unit-test environment.
-# For non-test package work (lx add, lx install, etc.) use `bar::lx-shell`.
-# Assumes .lux/ is already populated -- setup::init runs `bar::lux-install`;
-# run it yourself if you skipped setup.
+# Drop into an interactive shell with busted on PATH (for unit-test work)
 units-shell: require-bar
     #!/usr/bin/env bash
     set -e
@@ -215,11 +184,7 @@ units-shell: require-bar
     echo ""
     distrobox_exec_interactive lx --lua-version 5.1 shell --test --no-loader
 
-# Drop into an interactive lux shell scoped to BAR's lux.toml. Use this for
-# package work (`lx add foo`, `lx install`, `lx sync`, ad-hoc inspection)
-# rather than wrapping each subcommand in its own recipe -- this is the one
-# door into lux. For the unit-test environment with busted on PATH, use
-# `bar::units-shell` instead.
+# Drop into an interactive lux shell scoped to BAR's lux.toml (for package work)
 lx-shell: require-bar
     #!/usr/bin/env bash
     set -e
@@ -242,10 +207,7 @@ integrations *args: require-bar
         exit 1
     fi
 
-    # If the local Recoil build exists under the devtools workspace
-    # (cloned via `just repos::clone recoil` + built via `just engine::build
-    # linux`), stack an override so the container uses it instead of the
-    # stock engine download.
+    # Prefer a local Recoil build over the stock engine download if one exists.
     compose="{{INTEGRATION_COMPOSE}}"
     local_engine="$DEVTOOLS_DIR/RecoilEngine/build-amd64-linux/install"
     if [ -x "$local_engine/spring-headless" ]; then
