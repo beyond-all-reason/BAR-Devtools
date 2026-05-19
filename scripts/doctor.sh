@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Diagnostic checks for BAR-Devtools. Read-only — never modifies anything.
+# Read-only diagnostic checks for BAR-Devtools.
 # Expects: DEVTOOLS_DIR, COMPOSE, REPOS_CONF, REPOS_LOCAL (exported by Justfile)
 
 pass_count=0
@@ -21,18 +21,20 @@ check_doctor_deps() {
     _pass "git $(git --version | awk '{print $3}')"
   fi
 
-  if ! command -v docker &>/dev/null; then
-    _fail "Docker not installed"
+  if ! command -v podman &>/dev/null; then
+    _fail "podman not installed"
     echo "       Run: just setup::deps"
-  elif ! docker info &>/dev/null; then
-    _fail "Docker daemon not running or permission denied"
-    echo "       Start:  sudo systemctl start docker"
-    echo "       Perms:  sudo usermod -aG docker \$USER  (then re-login)"
-  elif ! docker compose version &>/dev/null; then
-    _fail "Docker Compose V2 not installed"
+  elif ! podman info &>/dev/null; then
+    _fail "'podman info' failed (storage init issue?)"
+    echo "       Try: podman system reset  (destroys local images)"
+  elif ! command -v docker-compose &>/dev/null; then
+    _fail "Go docker-compose not installed (podman compose dispatcher needs it as provider)"
     echo "       Run: just setup::deps"
+  elif [ ! -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock" ]; then
+    _fail "podman API socket not active (docker-compose can't reach the daemon)"
+    echo "       Run: systemctl --user enable --now podman.socket  (or just setup::deps)"
   else
-    _pass "Docker $(docker --version | awk '{print $3}' | tr -d ',') + Compose V2"
+    _pass "podman $(podman --version | awk '{print $3}') + docker-compose $(docker-compose version --short 2>/dev/null) + socket"
   fi
 
   if ! command -v distrobox &>/dev/null; then
@@ -57,16 +59,11 @@ check_doctor_env() {
     echo "       Not required, but recipes needing distrobox won't auto-enter without it."
   fi
 
-  if [ -n "${DEVTOOLS_DISTROBOX:-}" ]; then
-    if command -v distrobox &>/dev/null && distrobox list 2>/dev/null | grep -q "$DEVTOOLS_DISTROBOX"; then
-      _pass "DEVTOOLS_DISTROBOX=$DEVTOOLS_DISTROBOX (exists)"
-    else
-      _fail "DEVTOOLS_DISTROBOX=$DEVTOOLS_DISTROBOX (container not found)"
-      echo "       Rebuild: just setup::distrobox"
-    fi
-  elif command -v distrobox &>/dev/null; then
-    _warn "DEVTOOLS_DISTROBOX not set — distrobox recipes will fail"
-    echo "       Run: just setup::distrobox"
+  if command -v distrobox &>/dev/null && distrobox list 2>/dev/null | grep -q "$DEVTOOLS_DISTROBOX"; then
+    _pass "DEVTOOLS_DISTROBOX=$DEVTOOLS_DISTROBOX (exists)"
+  else
+    _fail "DEVTOOLS_DISTROBOX=$DEVTOOLS_DISTROBOX (container not found)"
+    echo "       Rebuild: just setup::distrobox"
   fi
 
   echo ""
@@ -121,27 +118,42 @@ check_doctor_repos() {
     return
   fi
 
-  local i missing_extras=()
+  local i missing_features_set=""
+  local -a missing=()
   for i in "${!REPO_DIRS[@]}"; do
     local dir="${REPO_DIRS[$i]}"
-    local group="${REPO_GROUPS[$i]}"
+    local feature="${REPO_FEATURES[$i]:--}"
     local target="$DEVTOOLS_DIR/$dir"
 
     if [ -L "$target" ] && [ -d "$target" ]; then
-      _pass "${dir} (${group}) — linked"
+      _pass "${dir} (${feature}) — linked"
     elif [ -d "$target/.git" ]; then
-      _pass "${dir} (${group})"
-    elif [ "$group" = "core" ]; then
-      _fail "${dir} (${group}) — not cloned"
-      echo "       Run: just repos::clone core"
+      _pass "${dir} (${feature})"
     else
-      missing_extras+=("$dir")
+      missing+=("${dir} (${feature})")
+      # collect distinct feature tags for the `just repos::clone` hint
+      local IFS=','
+      local f
+      for f in $feature; do
+        [ -z "$f" ] && continue
+        case ",$missing_features_set," in
+          *",$f,"*) ;;
+          *)        missing_features_set="${missing_features_set:+$missing_features_set,}$f" ;;
+        esac
+      done
     fi
   done
 
-  if [ "${#missing_extras[@]}" -gt 0 ]; then
-    _warn "${#missing_extras[@]} extra repos not cloned: ${missing_extras[*]}"
-    echo "       Run: just repos::clone extra"
+  if [ "${#missing[@]}" -gt 0 ]; then
+    _warn "${#missing[@]} repos not cloned: ${missing[*]}"
+    if [ -n "$missing_features_set" ]; then
+      local IFS=','
+      local f
+      for f in $missing_features_set; do
+        echo "       Run: just repos::clone $f"
+      done
+    fi
+    echo "       (Or 'just setup::init' for the interactive picker.)"
   fi
 
   echo ""
@@ -149,10 +161,10 @@ check_doctor_repos() {
 
 
 check_doctor_images() {
-  echo -e "${BOLD}Docker images${NC}"
+  echo -e "${BOLD}Container images${NC}"
 
-  if ! command -v docker &>/dev/null || ! docker info &>/dev/null; then
-    _warn "Skipping — Docker not available"
+  if ! command -v podman &>/dev/null || ! podman info &>/dev/null; then
+    _warn "Skipping — podman not available"
     echo ""
     return
   fi
@@ -160,17 +172,17 @@ check_doctor_images() {
   local project_name teiserver_image
   project_name="$(basename "$DEVTOOLS_DIR" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]_-')"
   teiserver_image="${project_name}-teiserver:latest"
-  if docker image inspect "$teiserver_image" &>/dev/null; then
+  if podman image inspect "$teiserver_image" &>/dev/null; then
     _pass "Teiserver image built"
   elif [ ! -d "$DEVTOOLS_DIR/teiserver" ]; then
     _fail "Teiserver image not built (teiserver repo not cloned)"
-    echo "       Run: just repos::clone core && just services::build"
+    echo "       Run: just repos::clone teiserver && just services::build"
   else
     _fail "Teiserver image not built"
     echo "       Run: just services::build"
   fi
 
-  if docker image inspect "badosu/spads:latest" &>/dev/null; then
+  if podman image inspect "badosu/spads:latest" &>/dev/null; then
     _pass "SPADS image available"
   else
     _warn "SPADS image not pulled (optional)"
@@ -184,13 +196,13 @@ check_doctor_images() {
 check_doctor_services() {
   echo -e "${BOLD}Running services${NC}"
 
-  if ! command -v docker &>/dev/null || ! docker info &>/dev/null; then
-    _warn "Skipping — Docker not available"
+  if ! command -v podman &>/dev/null || ! podman info &>/dev/null; then
+    _warn "Skipping — podman not available"
     echo ""
     return
   fi
 
-  local compose="docker compose -f $DEVTOOLS_DIR/docker-compose.dev.yml"
+  local compose="podman compose -f $DEVTOOLS_DIR/docker-compose.dev.yml"
   local any_running=0
 
   for svc in postgres teiserver; do
@@ -239,12 +251,22 @@ check_doctor_services() {
 }
 
 
+check_doctor_modules() {
+  if [ "${#SETUP_MODULES[@]}" -eq 0 ]; then
+    return 0
+  fi
+  echo -e "${BOLD}Setup modules${NC}"
+  doctor_modules
+  echo ""
+}
+
 cmd_doctor() {
   echo -e "${BOLD}=== BAR Devtools Doctor ===${NC}"
   echo ""
 
   check_doctor_deps
   check_doctor_env
+  check_doctor_modules
   check_doctor_ports
   check_doctor_repos
   check_doctor_images

@@ -2,7 +2,7 @@ set export
 
 DEVTOOLS_DIR := justfile_directory()
 COMPOSE_FILE := DEVTOOLS_DIR / "docker-compose.dev.yml"
-COMPOSE      := "docker compose -f " + COMPOSE_FILE
+COMPOSE      := "podman compose -f " + COMPOSE_FILE
 LOBBY_DIR    := DEVTOOLS_DIR / "bar-lobby"
 
 # Start dev services. Options: lobby, spads
@@ -10,6 +10,7 @@ up *args:
     #!/usr/bin/env bash
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
+    require_host
     source "$DEVTOOLS_DIR/scripts/setup.sh"
     install_dockerignore
 
@@ -80,10 +81,7 @@ up *args:
     echo ""
 
     if [ "$start_lobby" -eq 1 ]; then
-        if [ ! -d "$LOBBY_DIR" ]; then
-            err "bar-lobby directory not found. Run 'just repos::clone' first."
-            exit 1
-        fi
+        require_repo bar,chobby bar-lobby "bar-lobby"
         if ! command -v node &>/dev/null; then
             err "Node.js is required for bar-lobby. Run 'just setup::deps'."
             exit 1
@@ -102,18 +100,28 @@ up *args:
 
 # Stop all services
 down:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    require_host
     $COMPOSE --profile spads down
 
 # Show running services
 status:
     #!/usr/bin/env bash
-    echo -e "\033[1m=== Service Status ===\033[0m"
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    require_host
+    echo -e "${BOLD}=== Service Status ===${NC}"
     echo ""
     $COMPOSE --profile spads ps -a
 
 # Tail service logs
 logs service="":
     #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    require_host
     if [ -z "{{service}}" ]; then
         $COMPOSE --profile spads logs -f --tail=100
     else
@@ -125,11 +133,7 @@ lobby:
     #!/usr/bin/env bash
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
-    if [ ! -d "$LOBBY_DIR" ]; then
-        err "bar-lobby directory not found at: $LOBBY_DIR"
-        err "Run 'just repos::clone' to clone repositories first."
-        exit 1
-    fi
+    require_repo bar,chobby bar-lobby "bar-lobby"
     if ! command -v node &>/dev/null; then
         err "Node.js is required for bar-lobby. Run 'just setup::deps'."
         exit 1
@@ -147,6 +151,10 @@ lobby:
 
 # Open a shell in a container
 shell service="teiserver":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    require_host
     $COMPOSE --profile spads exec {{service}} bash
 
 # Build Docker images
@@ -154,6 +162,7 @@ build:
     #!/usr/bin/env bash
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
+    require_host
     source "$DEVTOOLS_DIR/scripts/setup.sh"
     install_dockerignore
     info "Building Docker images..."
@@ -171,6 +180,7 @@ reset:
     #!/usr/bin/env bash
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
+    require_host
     info "Stopping services and removing volumes..."
     $COMPOSE --profile spads down -v
     info "Rebuilding images from scratch..."

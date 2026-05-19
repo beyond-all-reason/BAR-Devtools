@@ -7,23 +7,28 @@ Everything server-side runs in Docker. The game client runs natively.
 ## Quick Start
 
 ```bash
-# Install just
-pacman -S just        # Arch
-dnf install just      # Fedora
-apt install just      # Debian/Ubuntu
-```
-
-```bash
-# Run setup
 git clone https://github.com/beyond-all-reason/BAR-Devtools.git
 cd BAR-Devtools
-just setup::init
-just services::up
-# recommended
-just setup::editor    # export clangd + generate compile_commands.json
+bash scripts/bootstrap.sh         # installs `just` >= 1.31 to ~/.local/bin
+exec "$SHELL" -l                  # reload PATH
+
+just setup::init                  # full first-time setup (clones, builds, editor wiring — all prompts up front)
+just services::up                 # start Postgres + Teiserver
+```
+
+`setup::init` front-loads every interactive question (features, SSH choice, springsettings opt-in, editor integration) into one batch at the top, then runs unattended. If you opt in to editor integration during the prompt, the language servers / formatters are wired up at the end of init — you don't run a second command.
+
+`scripts/bootstrap.sh` exists because `apt install just` on Ubuntu LTS produces 1.21 (frozen), which can't parse this repo's module syntax. The script wraps the upstream installer at <https://just.systems> and is idempotent — safe to re-run. If you'd rather not pipe a script, the equivalent is:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
+  | bash -s -- --to ~/.local/bin
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
 ```
 
 `setup::init` walks you through installing dependencies, cloning repositories, and building Docker images. You only need to run it once.
+
+To revisit those choices later -- change which features you work on, redo the SSH or editor setup -- run `just setup::reconfigure`. It re-prompts every saved `.env` decision, then re-clones for newly-selected features and prunes deselected ones (workspace symlinks are removed; in-tree clones are moved to `.backups/`, never deleted). Under the hood it just re-runs `setup::init` with the `BAR_RESET_CONFIG=1` environment variable, which forces each setup module to ask again instead of reusing `.env`.
 
 `services::up` starts PostgreSQL and Teiserver. On first run it seeds the database with test data and creates default accounts (~2-3 minutes). Subsequent starts are fast.
 
@@ -61,23 +66,15 @@ To set up a new distrobox standalone:
 just setup::distrobox
 ```
 
-### Editor integration (VS Code / Cursor)
+### Editor integration
 
-Language servers and formatters live inside the distrobox. One command exports them to your host and generates `compile_commands.json` for engine C++ support:
+`setup::init` wires up your editor automatically if you say yes at the Step 0/N prompt — language servers and formatters get exported from the distrobox to `~/.local/bin`, and `compile_commands.json` is generated against RecoilEngine for clangd. To re-run it standalone (if you skipped during init, or want to refresh after a Containerfile change):
 
 ```bash
 just setup::editor
 ```
 
-This exports `emmylua_ls`, `clangd`, and `stylua` as wrapper scripts in `~/.local/bin` (via `distrobox-export`), and runs `cmake` against RecoilEngine to produce `compile_commands.json` for clangd. Your editor finds the wrappers on PATH and everything works as if installed natively.
-
-### Git hooks
-
-Install a pre-commit hook that runs `stylua` (formatting) and `luacheck` (linting) on every commit:
-
-```bash
-just setup::hooks
-```
+Exports `emmylua_ls`, `emmylua_check`, `clangd`, `stylua`, and `lx` as wrapper scripts in `~/.local/bin` (via `distrobox-export`). Your editor finds the wrappers on PATH and everything works as if installed natively.
 
 **Recommended extensions:**
 
@@ -85,17 +82,11 @@ just setup::hooks
 * [StyLua](https://marketplace.visualstudio.com/items?itemName=JohnnyMorganz.stylua) (Lua formatter)
 * [clangd](https://marketplace.visualstudio.com/items?itemName=llvm-vs-code-extensions.vscode-clangd) (C/C++ for engine work)
 
-**Settings** (JSON):
-
-```json
-{
-  "emmylua.ls.executablePath": "~/.local/bin/emmylua_ls",
-  "[lua]": {
-    "editor.defaultFormatter": "JohnnyMorganz.stylua",
-    "editor.formatOnSave": true
-  }
-}
-```
+`just setup::editor` writes a workspace `.vscode/settings.json` into the BAR
+repo (gitignored, per-checkout) that configures `JohnnyMorganz.stylua` as the
+Lua formatter. Both VS Code and Cursor read this automatically. If the file
+already exists, setup shows a diff against the recommended defaults and
+leaves yours intact. Run `just bar::fmt` to format manually.
 
 #### VS Code Test Switcher (optional)
 
@@ -122,6 +113,23 @@ The [test-switcher](https://marketplace.visualstudio.com/items?itemName=bmalehor
 ]
 ```
 
+#### IntelliJ IDEA
+
+`setup::editor` exports the toolchain but does not configure IntelliJ — the auto-written `.vscode/settings.json` is VS Code only. Two manual steps cover the equivalent:
+
+* **Lua** — install the **EmmyLua** plugin from the JetBrains Marketplace (the analog of the EmmyLua extension above).
+* **Formatting** — to match the stylua format-on-save that VS Code users get from `.vscode/settings.json`, add a **File Watcher** (*Settings → Tools → File Watchers*) on Lua files: set **Program** to the *absolute* path of `~/.local/bin/stylua` (a GUI-launched IDE does not inherit your shell `PATH`) and **Arguments** to `$FilePath$`.
+
+If JetBrains use spreads, `setup::editor` could generate an `.idea/watcherTasks.xml` for this the way it already writes `.vscode/settings.json`.
+
+### Git hooks
+
+Install a pre-commit hook that runs `stylua` (formatting) and `luacheck` (linting) on every commit:
+
+```bash
+just setup::hooks
+```
+
 ### Windows (WSL2)
 
 Install [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install), then inside your WSL distro install podman and follow the Linux instructions above:
@@ -133,6 +141,30 @@ sudo apt install -y podman distrobox
 
 Everything -- services, testing, formatting, engine IDE integration -- works unchanged inside WSL2. The `dev.Containerfile` documents every dependency; if you prefer native Windows (MSYS2/mingw), use it as a reference.
 
+#### Optional: prompt that doesn't make you sad
+
+The default bash prompt in a fresh WSL distro is `user@host:~$` — no git info, no exit-status hint, no color discipline. If you're going to spend hours in this terminal, install **[starship](https://starship.rs/)** on the host:
+
+```bash
+curl -sS https://starship.rs/install.sh | sh
+echo 'eval "$(starship init bash)"' >> ~/.bashrc   # or zsh, fish, etc.
+```
+
+The dev distrobox image (`docker/dev.Containerfile`) **ships starship pre-enabled** via `/etc/profile.d/starship.sh`. `distrobox enter bar-dev` gives you a starship prompt with zero host setup. If you have your own `PS1` in `~/.bashrc` it still wins (the user rc files load after `/etc/profile.d/*`).
+
+Starship's default config uses Nerd Font glyphs (git branch, language icons), which render as `?` boxes without one installed. Two ways to fix:
+
+- **Install a [Nerd Font](https://www.nerdfonts.com/font-downloads)** on Windows (e.g. JetBrainsMono Nerd Font), then in Windows Terminal: *Settings → your WSL profile → Appearance → Font face*. Keeps the pretty defaults.
+- **Or strip glyphs from starship**: `starship preset plain-text-symbols -o ~/.config/starship.toml`. Pure ASCII, no font install.
+
+#### Password-manager SSH agent integrations (optional)
+
+If you store SSH keys in a password manager and want the agent to live there instead of in `~/.ssh`, the `ssh::` module has per-vendor recipes. Currently implemented:
+
+- **1Password** — `just ssh::op-setup`. Bridges the Windows 1Password agent into WSL via `socat` + `npiperelay`, or points `SSH_AUTH_SOCK` at `~/.1password/agent.sock` on native Linux (incl. Bazzite via Flatpak). Idempotent.
+
+Other managers (Bitwarden, KeePassXC, etc.) can be added under `scripts/ssh/` following the same pattern — see `scripts/ssh/lib.sh` for the shared helpers (`bashrc_apply`, `detect_env`, `pause`).
+
 ## Common Workflows
 
 Run `just` with no arguments for the full recipe list.
@@ -143,9 +175,11 @@ Run `just` with no arguments for the full recipe list.
 just bar::fmt           # format with stylua
 just bar::lint          # lint with luacheck
 just bar::units         # run busted unit tests
-just bar::test-shell    # interactive busted shell,
+just bar::units-shell   # interactive busted shell,
                         #   run `busted -t focus` to test specs tagged "#focus"
                         #   for example: `it "should do something #focus", function()`
+just bar::lx-shell      # interactive lx shell for package work
+                        #   (`lx add <pkg>`, `lx sync`, `lx install`, etc.)
 ```
 
 ### Teiserver development
@@ -162,12 +196,60 @@ just tei::test-shell            # interactive bash shell with MIX_ENV=test
 
 If you've pulled new teiserver code with migrations, re-run `just tei::setup-test-db` to apply them.
 
+`services::up` mounts `teiserver/lib` and `teiserver/assets` into the running
+container, so editing the web UI (controllers, LiveViews, templates, CSS) takes
+effect live -- Phoenix recompiles and the browser at http://localhost:4000
+refreshes on save, no rebuild or restart. Changes to `mix.exs`, `config/`, or
+deps still need `just services::build` (or `services::up`, which rebuilds).
+
 ### Engine development
 
 ```bash
 just engine::build linux        # build Recoil via docker-build-v2
 just link::create engine        # symlink into game directory
 ```
+
+### Launching the game (dev mode)
+
+`just bar::launch` hands off to [bar_debug_launcher](https://github.com/beyond-all-reason/bar_debug_launcher) with your local `Beyond-All-Reason/`, `BYAR-Chobby/`, and `RecoilEngine/` checkouts wired in via `just link::create`. The Tk GUI opens by default; pass flags for headless use:
+
+```bash
+just bar::launch                                      # GUI
+just bar::launch --no-gui --play chobby --source local
+just bar::launch --no-gui --play bar --source local --map "Quicksilver"
+just bar::launch --print-cmd --play bar --source latest
+```
+
+`--source local` requires the relevant `link::create` to have run; `--source latest` resolves to `rapid://...:test` and downloads on demand.
+
+The launcher boots the engine directly by default. To go through the AppImage launcher (handles splash + auto-update, mirrors how real users start the game), pass `--boot launcher` and point us at the AppImage:
+
+```bash
+export BAR_APPIMAGE_PATH=~/Applications/Beyond-All-Reason.AppImage
+just bar::launch --no-gui --play chobby --source latest --boot launcher
+```
+
+`~/Applications/` is [AppImageLauncher](https://github.com/TheAssassin/AppImageLauncher)'s canonical install path. Any AppImage matching `beyond-all-reason*.AppImage` (case-insensitive) is auto-discovered if `BAR_APPIMAGE_PATH` points at a directory.
+
+`just setup::init` runs `pipx install --editable` against the bar_debug_launcher checkout, so its `pyproject.toml` is the single source of truth for deps and edits to the launcher source reflect live. If you skipped that step, `just bar::launch` will tell you to run setup. The GUI imports `tkinter` -- on a pyenv install built without tk-devel, install your distro's tk package (`python3-tkinter` on Fedora, `python3-tk` on Debian, `tk` on Arch) and rebuild Python.
+
+#### Launching from WSL2
+
+On WSL2 the engine has to run as a native Windows process for usable performance (WSLg / Plan9 game-load measured ~7m30s vs ~24s native), so `just bar::launch` looks different:
+
+1. `just setup::init` (on WSL) prompts for a `BAR_DATA_DIR` -- the spring data directory the engine reads from (default: the BAR launcher's own data dir, `%LOCALAPPDATA%\Programs\Beyond-All-Reason\data`). Persisted to `.env`.
+2. Setup also installs Python on Windows via winget (if missing), creates a venv at `%BAR_DATA_DIR%\.venv`, installs `bar_debug_launcher` into it, and writes a `bin\bar-launch.cmd` shim with absolute paths baked in.
+3. `just bar::launch` then: cold-copies `Beyond-All-Reason/` and `BYAR-Chobby/` (and the engine if built) from WSL ext4 onto NTFS (`%BAR_DATA_DIR%\games\...`, `engine\local-build\`); shells out to `cmd.exe /c bar-launch.cmd <flags>`. `just engine::build windows` cold-copies the rebuilt engine artifacts the same way.
+
+The cold copy uses inplace writes (no inode rotation) so engine mmaps stay valid if you re-launch quickly. We previously ran a `\\wsl.localhost\` watchdog watcher for live edit propagation, but `ReadDirectoryChangesW` over Plan 9 doesn't receive Linux-side inotify events; the watcher logged zero mirrored events in practice. Cold-copy at known sync points (launch, build) replaced it.
+
+```bash
+just bar::sync                 # cold-copy sources without launching
+just bar::sync-logs -- -f      # tail the cold-copy log
+just bar::regen-shim           # rewrite bar-launch.cmd if BAR_DATA_DIR changes
+```
+
+If `cmd.exe`, `wslpath`, or `winget.exe` aren't reachable from WSL, the relevant setup steps no-op with a warning -- you can edit `BAR-Devtools/.env` directly and re-run `just setup::init` once the prereqs are in place.
 
 ### Documentation
 
@@ -197,14 +279,14 @@ cp repos.conf repos.local.conf
 Edit `repos.local.conf` -- only include the repos you want to override:
 
 ```
-teiserver  https://github.com/yourname/teiserver.git  your-branch  core
-bar-lobby  https://github.com/yourname/bar-lobby.git  your-branch  core
+teiserver  https://github.com/yourname/teiserver.git  your-branch  teiserver
+bar-lobby  https://github.com/yourname/bar-lobby.git  your-branch  bar,chobby
 ```
 
 Then clone or re-clone:
 
 ```bash
-just repos::clone core
+just repos::clone teiserver
 ```
 
 `repos.local.conf` is gitignored so it won't affect anyone else.
@@ -214,7 +296,7 @@ just repos::clone core
 You can also point a repo entry at a local directory instead of cloning. Add a fifth column with the path:
 
 ```
-lua-doc-extractor  https://github.com/rhys-vdw/lua-doc-extractor.git  your-branch  extra  ~/code/lua-doc-extractor
+lua-doc-extractor  https://github.com/rhys-vdw/lua-doc-extractor.git  your-branch  recoil  ~/code/lua-doc-extractor
 ```
 
 This creates a symlink instead of cloning.
@@ -224,14 +306,15 @@ This creates a symlink instead of cloning.
 `repos.conf` uses a simple whitespace-delimited format:
 
 ```
-# directory    url    branch    group    [local_path]
-teiserver      https://github.com/beyond-all-reason/teiserver.git    master    core
+# directory    url    branch    feature    [local_path]
+teiserver      https://github.com/beyond-all-reason/teiserver.git    master    teiserver
+bar-lobby      https://github.com/beyond-all-reason/bar-lobby.git    master    bar,chobby
 ```
 
 - **directory** -- local folder name (created by `clone`)
 - **url** -- git clone URL
 - **branch** -- branch to checkout
-- **group** -- `core` (required for the dev stack) or `extra` (optional)
+- **feature** -- comma-separated feature tags. Valid tags: `bar`, `recoil`, `teiserver`, `chobby`, `spads-source`. A repo with multiple tags is pulled in by any of those features (e.g. `bar-lobby` is needed for both `bar` and `chobby`).
 - **local_path** -- (optional) absolute or `~`-relative path to symlink instead of cloning
 
 ## Architecture
