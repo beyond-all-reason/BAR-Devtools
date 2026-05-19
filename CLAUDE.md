@@ -64,14 +64,13 @@ just repos::clone [repo]    # clone or sync per repos.conf / repos.local.conf
 
 ## Rules encoded as skills
 
-`.claude/skills/` contains six skill files. They are the project's design rules — read the relevant one before changing the area it covers, even if a different approach seems obvious:
+`.claude/skills/` contains five skill files. They are the project's design rules — read the relevant one before changing the area it covers, even if a different approach seems obvious:
 
 - **exactly-one-way** — every operation has one path; no `_have_X` fallbacks, no "if X exists else Y" ceremony around things `setup::*` already establishes. Touched when reviewing/refactoring setup or sync.
-- **front-load-prompts** — every `read -rp` in a long-running recipe goes in the Step 0 batch at the top. Touched when adding interactive decisions to `cmd_init` or any multi-minute recipe.
+- **front-load-prompts** — every interactive decision in a long-running recipe is asked in the Step 0 batch up front, never mid-run. Touched when adding interactive decisions to `cmd_init` or any multi-minute recipe.
 - **setup-module-registry** — adding a setup-time decision → new file under `scripts/setup/NN-<name>.sh` using the read/prompt/write/apply contract.
 - **trust-the-container** — don't probe inside `bar-dev` for binaries that `dev.Containerfile` installs. Touched when editing `setup.sh`, `dev.Containerfile`, or distrobox-related plumbing.
-- **wsl2-sync-architecture** — hard-won facts about the WSL2 ↔ Windows boundary. Read before changing `sync.py`, `sync.sh`, `launch.sh`, or watchman/rsync invocations.
-- **probe-before-architecture** — for platform-boundary choices (sync, IPC, build pipeline), build a probe harness with real numbers before writing production code.
+- **wsl2-sync-architecture** — hard-won facts about the WSL2 ↔ Windows boundary, including when to re-probe the sync architecture and what a probe must measure. Read before changing `sync.py`, `sync.sh`, `launch.sh`, or watchman/rsync invocations.
 
 ## Cross-repo conventions
 

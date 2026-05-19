@@ -5,51 +5,26 @@ description: All interactive decisions in long-running setup scripts go in one b
 
 # Front-load prompts
 
-`setup::init` does ~5 minutes of distrobox image build + ~90 minutes of repo clones + ~45 minutes of engine build. Then, on Windows potentially sync time. The contributor walks away during that time. **Every interactive prompt belongs before the first long-running step**, captured into a variable that the later step reads.
+`setup::init` does ~5 minutes of distrobox image build + ~90 minutes of repo clones + ~45 minutes of engine build. Then, on Windows, potentially sync time. The contributor walks away during that time. **Every interactive prompt belongs before the first long-running step**, captured so a later step reads the answer instead of re-asking.
 
 ## The Step 0 pattern
 
-```bash
-cmd_init() {
-  ensure_wsl_setup
-  _setup_consent_splash       # press-Enter + sudo -v cache
+`cmd_init`'s configuration phase (`step "0/N  Configuration"`) is a flat batch: detect what it can, ask every decision, then `confirm_setup_plan` rolls the lot up for one Y/n. Nothing below step 0 prompts.
 
-  # Front-load all decisions ----
-  step "0/N  Configuration"
-  ensure_bar_data_dir         # WSL: pick spring data dir (writes .env)
-  pick_features               # component selection -> $features
-  local game_dir do_link=""
-  game_dir="$(detect_game_dir 2>/dev/null)" || true
-  if [ -n "$game_dir" ]; then
-    read -rp "Symlink all selected components after build? [y/N] " do_link
-  fi
-  prompt_springsettings_opt_in
+The prompts are not hand-written `read -rp` calls in `cmd_init` — each decision is a self-registering module under `scripts/setup/NN-<name>.sh`, driven by `ensure_module_by_name`. That mechanism is its own convention; see the **setup-module-registry** skill. The rule *this* skill carries is the ordering: a module's prompt fires in step 0, its `apply` runs whenever it has to (immediately, or deferred to the end of `cmd_init`), but the question is always asked up front.
 
-  # Then run -----
-  step "1/N  ..."   # uses $features, $do_link, env vars
-  ...
-}
-```
+## Running setup::init is itself the consent
 
-Each later step reads the captured answer; no second prompt for the same decision.
+`confirm_setup_plan` closes step 0 with a rollup — every decision the user made, plus the work ahead (repos to clone, whether the distrobox build is still pending, a sudo heads-up) — and a single Y/n. That is the one generic gate. Once the user confirms it, **they have consented to the script running**: no per-step "Install X? [Y/n]". If they want out, they Ctrl-C.
 
-## What "running setup::init is itself the consent" means
+So any sub-tool with an interactive default needs its non-interactive flag — `distrobox stop --yes`, `distrobox rm -f --yes`, `distrobox create --yes`, `apt install -y`. A prompt that fires past step 0 is the bug.
 
-The `_setup_consent_splash` shows a fact-driven list of system changes (apt installs, sysctl bump, distrobox container) and waits for a single Enter. That's the only generic Y/n. After that, **the user has consented to the script running** — no per-step "Install X? [Y/n]" gates. If the user wanted to back out, they'd Ctrl-C; the script doesn't owe them another off-ramp partway through.
+## Ask up front, act later
 
-This applies to `distrobox stop --yes`, `distrobox rm -f --yes`, `distrobox create --yes`, `apt install -y`. Any sub-tool that has an interactive default needs the non-interactive flag.
-
-## Inverting the symlink prompt
-
-The old shape had `read -rp "Symlink all? [y/N]"` *inside* step 6 ("Symlinks"), gating cmd_link calls. The new shape asks the question in step 0 (when the user is paying attention) and step 6 just runs (or skips with `Skipping symlinks (declined at configuration step)`). Same logic for any other "should I do X" decision: ask up front, act later.
-
-## Don't re-prompt for state already in `.env`
-
-`prompt_springsettings_opt_in` checks `grep -q "^ALLOW_SPRINGSETTINGS_MOD=" "$env_file"` and skips the prompt if it's set. Same for `BAR_DATA_DIR`. Re-runs of `setup::init` should noop on questions the user already answered. If they want to re-decide, they edit `.env`.
+The load-bearing example is the symlink decision. The question ("symlink the selected components into the game dir after build?") is asked in step 0, when the user is paying attention, and persisted to `.env`. Step 6 ("Symlinks") just acts on the saved answer, or prints `Skipping symlinks (declined at configuration step)`. Same shape for any "should I do X" decision: the prompt goes in step 0, the work goes wherever it has to.
 
 ## Audit checklist when adding a step
 
-- Does the step have a `read -rp` or Y/n prompt? → move it to step 0, capture into a variable.
+- Does the step have a `read -rp` or Y/n prompt? → it doesn't belong there. Make it a setup module (see **setup-module-registry**) so the prompt lands in step 0 and the answer persists to `.env`.
 - Does the step call a sub-tool with an interactive default? → add `--yes` / `-y` / `--non-interactive`.
-- Does the step `read -p` for a path or value? → if it's a real configuration choice, move it to step 0 and persist via `.env` so re-runs skip it.
-- Is the prompt conditional on detection that requires earlier setup (e.g. `detect_game_dir`)? → fine, but the *prompt* still goes in step 0 after the detection runs, not buried in step 6.
+- Is the prompt conditional on detection that needs earlier setup (e.g. `detect_game_dir`)? → fine, but the prompt still goes in step 0 *after* the detection, not buried in a later step.

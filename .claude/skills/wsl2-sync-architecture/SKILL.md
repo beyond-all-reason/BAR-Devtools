@@ -1,6 +1,6 @@
 ---
 name: wsl2-sync-architecture
-description: Hard-won facts about the WSL2 ↔ Windows sync daemon (sync.py, sync.sh, launch.sh). Read this before changing how files cross the WSL/Windows boundary, before adjusting watchman/rsync invocations, or before "improving" the cold-copy path.
+description: Hard-won facts about the WSL2 ↔ Windows sync daemon (sync.py, sync.sh, launch.sh). Read this before changing how files cross the WSL/Windows boundary, before adjusting watchman/rsync invocations, before "improving" the cold-copy path, or before proposing a different sync architecture.
 ---
 
 # WSL2 sync architecture
@@ -48,3 +48,23 @@ The watchman RPM Meta publishes is built against a specific Fedora release. **Pi
 - Per-event mirrors log at `INFO` (not `DEBUG`) — the user wants to see what synced.
 - Startup line includes the inotify watch limit, the chosen Observer class (native vs polling), and the watchman version.
 - Signals are logged by name (`SIGTERM (kill)`, `SIGINT (Ctrl-C)`, `SIGHUP (terminal closed)`) with recovery hints (`just bar::stop`, `just link::create`) — never just "received signal 15".
+
+## Re-probing the sync decision
+
+`wsl-watchdog-mntc` was picked by measuring all six candidate architectures end-to-end with `scripts/probe_wsl_sync.py` — not by reasoning from first principles. A Windows-side watcher *felt* obvious; Plan 9 not forwarding inotify is what killed it. Don't relitigate the boundary facts above from a comment thread — re-run the probe.
+
+Re-probe when:
+
+- WSL has a major version change (1 → 2 was an inotify boundary; a future one might shift again).
+- Watchdog / Watchman / rsync has a major bump touching the OS abstraction layer.
+- The watched tree's file count grows ~10×.
+- Someone proposes "just use X" where X is one of the rejected arms — re-run before deciding the platform changed.
+
+A probe that earns a decision measures, on real hardware:
+
+- **Median + p99 round-trip** — edit on source → *content-equal* on destination. Equality, not first-byte: partial-write windows matter.
+- **Cold-start cost** — seed an empty destination with N files; this is what users feel on first daemon launch.
+- **Steady-state per-event cost** — individual edits after the seed.
+- **Failure modes** — kill the watcher mid-edit, exhaust the watch limit, hit `EACCES` on locked files. The architecture has to survive these, not just win the happy-path benchmark.
+
+And it documents its preconditions: if the result depends on `fs.inotify.max_user_watches=524288`, production must enforce that (`ensure_sync_daemon_deps_wsl`) — a probe that passes only because of a sysctl production never sets is a lie. Keep `scripts/probe_wsl_sync.py` runnable so the decision stays reproducible; killed candidates and their numbers live in `bar-design-docs/bifurcated_types/dev_setup_restructured.md`.
