@@ -154,7 +154,7 @@ Setup runs before `python3`, `pipx`, and `distrobox` are guaranteed to exist. A 
 
 - `read -rp` anywhere outside `prompt_<name>`. If you're reaching for it, write a module instead.
 - Hand-rolled `.env` reads/writes. Use `read_env_key` / `write_env_key`.
-- "Skip if .env has the key" guards inside `prompt_<name>`. The engine handles that. (Legacy modules — `prompt_ssh_setup_choice`, `prompt_editor_setup_choice` — still have their own internal guard for back-compat with direct callers; new modules should not.)
+- "Skip if .env has the key" guards inside `prompt_<name>`. `ensure_module` owns that gate. A second in-prompt guard silently ignores `BAR_RESET_CONFIG` — exactly the bug that wedged `setup::reconfigure` until the legacy `prompt_ssh_setup_choice` / `prompt_editor_setup_choice` / `prompt_springsettings_opt_in` guards were removed. A prompt may still short-circuit on a *probe* (e.g. ssh's `_github_ssh_works` autodetect) — but gate that on `BAR_RESET_CONFIG` so a reconfigure still asks.
 - Cross-module reaches in `apply_<name>`. If you need `BAR_DATA_DIR` from inside `apply_chobby_channel`, call `read_env_key BAR_DATA_DIR`. Don't depend on call ordering or shared globals.
 
 ## What's special about `cmd_doctor`

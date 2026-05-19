@@ -1544,15 +1544,9 @@ write_springsettings_optin_env() {
 # Ask the user once whether bar::launch is allowed to modify the engine's
 # springsettings.cfg in service of its own --debug-* flags. Default no:
 # the cfg is the user's territory and most contributors will never use
-# the debug flags. Idempotent -- if the key is already set in .env, this
-# is a no-op so re-running setup::init doesn't re-prompt.
+# the debug flags. ensure_module gates the re-ask (skips when the key is in
+# .env, unless BAR_RESET_CONFIG is set) -- no second guard here.
 prompt_springsettings_opt_in() {
-  local env_file="$DEVTOOLS_DIR/.env"
-  if [ -f "$env_file" ] && grep -q "^ALLOW_SPRINGSETTINGS_MOD=" "$env_file"; then
-    info "ALLOW_SPRINGSETTINGS_MOD already set in .env -- not re-prompting"
-    return 0
-  fi
-
   echo ""
   echo -e "${BOLD}springsettings.cfg modification opt-in${NC}"
   echo "  Some bar::launch flags (currently --debug-gl) need to write keys to"
@@ -1579,22 +1573,18 @@ _github_ssh_works() {
   printf '%s' "$out" | grep -q "successfully authenticated"
 }
 
-# Step-0 prompt: pick how the user wants SSH to GitHub configured. Skipped
-# entirely when an agent already authenticates (no point in nagging users
-# who arrived with a working setup) or when BAR_SSH_SETUP is already in
-# .env (re-runs respect the prior choice; edit .env to re-decide). The
-# actual setup runs later via run_ssh_setup_choice so the user can answer
-# here and walk away during the long steps.
+# Step-0 prompt: pick how the user wants SSH to GitHub configured. ensure_module
+# gates the re-ask via .env / BAR_RESET_CONFIG. Within the prompt we still skip
+# the menu when an agent already authenticates (no point nagging users who
+# arrived with a working setup) -- except under BAR_RESET_CONFIG, where a
+# reconfigure means "ask me anyway". The actual setup runs later via
+# run_ssh_setup_choice so the user can answer here and walk away.
 prompt_ssh_setup_choice() {
-  local env_file="$DEVTOOLS_DIR/.env"
-  touch "$env_file"
-  if grep -q "^BAR_SSH_SETUP=" "$env_file"; then
-    info "BAR_SSH_SETUP already set in .env -- not re-prompting"
-    return 0
-  fi
-  if _github_ssh_works; then
+  # No "already set" guard -- ensure_module owns that gate; a second check
+  # here ignores BAR_RESET_CONFIG and wedges `setup::reconfigure`.
+  if [ -z "${BAR_RESET_CONFIG:-}" ] && _github_ssh_works; then
     info "ssh -T git@github.com already authenticates -- skipping ssh setup prompt"
-    echo "BAR_SSH_SETUP=existing" >> "$env_file"
+    write_env_key BAR_SSH_SETUP existing
     return 0
   fi
 
@@ -1620,7 +1610,7 @@ prompt_ssh_setup_choice() {
       *)         echo "  Invalid choice: ${ans}" ;;
     esac
   done
-  echo "BAR_SSH_SETUP=$choice" >> "$env_file"
+  write_env_key BAR_SSH_SETUP "$choice"
   ok "Recorded BAR_SSH_SETUP=$choice in .env"
 }
 
@@ -1724,29 +1714,24 @@ _editor_show_preamble() {
 }
 
 # Top-level editor opt-in. Front-loaded into cmd_init's Step 0/N batch.
-# Persists BAR_EDITOR_SETUP=yes|no; future runs skip re-prompting (matches
-# how prompt_ssh_setup_choice / springsettings opt-in behave).
+# Persists BAR_EDITOR_SETUP=yes|no. ensure_module decides whether to call
+# this -- skips when .env has the key, unless BAR_RESET_CONFIG is set.
 #
 # One prompt, not three: the preamble's ✓/✗ list already previews exactly
 # what `yes` will do (install the ✗ items, remove a flagged sumneko.lua),
 # so a separate "install missing exts?" / "uninstall sumneko?" pair would
 # just be the user re-stating what they already saw on screen.
 prompt_editor_setup_choice() {
-  local env_file="$DEVTOOLS_DIR/.env"
-  touch "$env_file"
-  if grep -q "^BAR_EDITOR_SETUP=" "$env_file"; then
-    info "BAR_EDITOR_SETUP already set in .env -- not re-prompting"
-    return 0
-  fi
-
+  # No "already set" guard -- ensure_module owns that gate; a second check
+  # here ignores BAR_RESET_CONFIG and wedges `setup::reconfigure`.
   editor_collect_state
   _editor_show_preamble
 
   local ans
   read -r -p "Wire up editor integration after the build? [Y/n] " ans
   case "${ans:-y}" in
-    y|Y|yes|YES) echo "BAR_EDITOR_SETUP=yes" >> "$env_file" ;;
-    *)           echo "BAR_EDITOR_SETUP=no"  >> "$env_file" ;;
+    y|Y|yes|YES) write_env_key BAR_EDITOR_SETUP yes ;;
+    *)           write_env_key BAR_EDITOR_SETUP no  ;;
   esac
 }
 
