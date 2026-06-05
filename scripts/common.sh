@@ -85,6 +85,38 @@ is_wsl() {
     [ -n "${WSL_DISTRO_NAME:-}" ] || [ -f /proc/sys/fs/binfmt_misc/WSLInterop ]
 }
 
+# returns 0 if $1 >= $2 (dotted numeric versions), else 1
+_ver_ge() {
+    local IFS=.
+    local -a a=($1) b=($2)
+    local i max=${#a[@]}
+    [ "${#b[@]}" -gt "$max" ] && max=${#b[@]}
+    for ((i=0; i<max; i++)); do
+        local ai=${a[i]:-0} bi=${b[i]:-0}
+        if (( 10#$ai > 10#$bi )); then return 0; fi
+        if (( 10#$ai < 10#$bi )); then return 1; fi
+    done
+    return 0
+}
+
+# WSL2: nudge toward virtiofs for /mnt/c (faster than Plan 9 drvfs -- the sync
+# write path). Key is undocumented + experimental; gated on kernel only, since
+# the DeviceHost version isn't visible from Linux. No-op off WSL / on old kernels.
+wsl_virtiofs_hint() {
+    is_wsl || return 0
+    if [ "$(awk '$2=="/mnt/c"{print $3; exit}' /proc/mounts)" = "virtiofs" ]; then
+        ok "WSL2 /mnt/c is on virtiofs"
+        return 0
+    fi
+    local kver
+    kver="$(uname -r | grep -oE '^[0-9]+(\.[0-9]+)*')"
+    _ver_ge "$kver" 6.18.26.3 || return 0
+    info "WSL2 kernel $kver supports virtiofs (experimental; faster /mnt/c than Plan 9)."
+    info "  Add to %UserProfile%\\.wslconfig, then run 'wsl --shutdown':"
+    info "    [wsl2]"
+    info "    virtiofs=true"
+}
+
 # echo running engine processes that have the local-build binaries open
 # (engine::build would corrupt them); game dir from $1 or $BAR_DATA_DIR
 _engine_holders() {

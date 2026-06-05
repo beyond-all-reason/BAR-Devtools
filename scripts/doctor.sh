@@ -70,6 +70,14 @@ check_doctor_env() {
 }
 
 
+check_doctor_wsl() {
+  is_wsl || return 0
+  echo -e "${BOLD}WSL2${NC}"
+  wsl_virtiofs_hint
+  echo ""
+}
+
+
 check_doctor_ports() {
   echo -e "${BOLD}Ports${NC}"
 
@@ -266,6 +274,7 @@ cmd_doctor() {
 
   check_doctor_deps
   check_doctor_env
+  check_doctor_wsl
   check_doctor_modules
   check_doctor_ports
   check_doctor_repos

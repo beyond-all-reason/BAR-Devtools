@@ -209,6 +209,7 @@ ensure_wsl_setup() {
   fi
 
   ok "WSL2 environment ready (systemd active, / is a shared mount)"
+  wsl_virtiofs_hint
   echo ""
 }
 
@@ -293,19 +294,6 @@ install_distrobox_upstream() {
     | sudo sh -s -- --prefix /usr/local
   hash -r
   ok "distrobox installed: $(/usr/local/bin/distrobox --version 2>/dev/null | awk '{print $NF}')"
-}
-
-_ver_ge() {
-  local IFS=.
-  local -a a=($1) b=($2)
-  local i max=${#a[@]}
-  [ "${#b[@]}" -gt "$max" ] && max=${#b[@]}
-  for ((i=0; i<max; i++)); do
-    local ai=${a[i]:-0} bi=${b[i]:-0}
-    if (( 10#$ai > 10#$bi )); then return 0; fi
-    if (( 10#$ai < 10#$bi )); then return 1; fi
-  done
-  return 0
 }
 
 # Docker Compose v5+ from upstream releases. Compose v2.x defaults to bake/BuildKit, which podman
