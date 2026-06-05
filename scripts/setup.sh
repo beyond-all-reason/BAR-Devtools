@@ -1835,7 +1835,11 @@ cmd_init() {
   else
     cmd_setup_bar_launch
   fi
-  recap "bar-launch venv" ok "ready"
+  if [ $? -eq 0 ]; then
+    recap "bar-launch venv" ok "ready"
+  else
+    recap "bar-launch venv" warn "failed -- see output above"
+  fi
   echo ""
 
   step "8/8  Deferred module apply (editor, etc.)"
