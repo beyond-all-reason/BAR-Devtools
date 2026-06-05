@@ -5,7 +5,7 @@ description: All interactive decisions in long-running setup scripts go in one b
 
 # Front-load prompts
 
-`setup::init` does ~5 minutes of distrobox image build + ~90 minutes of repo clones + ~45 minutes of engine build. Then, on Windows, potentially sync time. The contributor walks away during that time. **Every interactive prompt belongs before the first long-running step**, captured so a later step reads the answer instead of re-asking.
+`setup::init` does ~5 minutes of distrobox image build + ~90 minutes of repo clones + ~45 minutes of engine build. Then, on Windows, sync time. The contributor walks away during that time. **Every interactive prompt belongs before the first long-running step**, captured so a later step reads the answer instead of re-asking.
 
 ## The Step 0 pattern
 

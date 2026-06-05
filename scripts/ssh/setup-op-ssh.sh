@@ -34,11 +34,11 @@ case "$OP_SSH_ENV" in
     wsl)
         exec bash "$DEVTOOLS_DIR/scripts/ssh/setup-wsl-ssh.sh" "$@"
         ;;
-    bazzite|linux-arch|linux-debian|linux-fedora)
+    fedora-atomic|linux-arch|linux-debian|linux-fedora)
         exec bash "$DEVTOOLS_DIR/scripts/ssh/setup-linux-ssh.sh" "$@"
         ;;
     *)
-        err "Unsupported environment. This wizard supports WSL2 and native Linux (Bazzite/Arch/Debian/Fedora)."
+        err "Unsupported environment. This wizard supports WSL2 and native Linux (Fedora Atomic/Arch/Debian/Fedora)."
         exit 1
         ;;
 esac

@@ -16,10 +16,10 @@ is_op_installed() {
 
 install_op_desktop() {
     case "$OP_SSH_ENV" in
-        bazzite)
-            info "Bazzite is rpm-ostree immutable — using Flatpak."
+        fedora-atomic)
+            info "Fedora Atomic (rpm-ostree) is immutable — using Flatpak."
             if ! have flatpak; then
-                err "flatpak not found on Bazzite (unexpected). Install it via rpm-ostree first."
+                err "flatpak not found (unexpected on Fedora Atomic). Install it via rpm-ostree first."
                 return 1
             fi
             flatpak install --user -y --noninteractive flathub com.onepassword.OnePassword
@@ -76,7 +76,7 @@ install_op_cli() {
         return
     fi
     case "$OP_SSH_ENV" in
-        bazzite)
+        fedora-atomic)
             # Flatpak desktop bundle doesn't include `op`.
             local arch url tmp
             arch="$(uname -m)"

@@ -16,40 +16,15 @@ just setup::init                  # full first-time setup (clones, builds, edito
 just services::up                 # start Postgres + Teiserver
 ```
 
-`setup::init` front-loads every interactive question (features, SSH choice, springsettings opt-in, editor integration) into one batch at the top, then runs unattended. If you opt in to editor integration during the prompt, the language servers / formatters are wired up at the end of init — you don't run a second command.
-
-`scripts/bootstrap.sh` exists because `apt install just` on Ubuntu LTS produces 1.21 (frozen), which can't parse this repo's module syntax. The script wraps the upstream installer at <https://just.systems> and is idempotent — safe to re-run. If you'd rather not pipe a script, the equivalent is:
-
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
-  | bash -s -- --to ~/.local/bin
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
-```
-
-`setup::init` walks you through installing dependencies, cloning repositories, and building Docker images. You only need to run it once.
-
-To revisit those choices later -- change which features you work on, redo the SSH or editor setup -- run `just setup::reconfigure`. It re-prompts every saved `.env` decision, then re-clones for newly-selected features and prunes deselected ones (workspace symlinks are removed; in-tree clones are moved to `.backups/`, never deleted). Under the hood it just re-runs `setup::init` with the `BAR_RESET_CONFIG=1` environment variable, which forces each setup module to ask again instead of reusing `.env`.
-
-`services::up` starts PostgreSQL and Teiserver. On first run it seeds the database with test data and creates default accounts (~2-3 minutes). Subsequent starts are fast.
-
-Once running:
-
-| Service | URL |
-|---------|-----|
-| Teiserver Web UI | http://localhost:4000 |
-| Teiserver HTTPS | https://localhost:8888 |
-| Spring Protocol | `localhost:8200` (TCP) / `:8201` (TLS) |
-| PostgreSQL | `localhost:5433` |
-
-**Default login:** `root@localhost` / `password`
+Teiserver comes up at http://localhost:4000 — log in with `root@localhost` / `password`. (Full port list under [Ports](#ports).)
 
 ## Quick Setup (Windows)
 
-The whole stack runs inside WSL2 — nothing needs native Windows. From a **PowerShell** prompt, install the VS Code WSL bridge, a Nerd Font (for a decent prompt later), cap WSL2's resource use, and pull a distro:
+The whole stack runs inside WSL2 — nothing needs native Windows. From a **PowerShell** prompt, install the VS Code WSL bridge, cap WSL2's resource use, and pull a distro:
 
 ```powershell
 code --install-extension ms-vscode-remote.remote-wsl
-winget install --id DEVCOM.JetBrainsMonoNerdFont
+winget install --id DEVCOM.JetBrainsMonoNerdFont   # optional — Nerd Font for the starship prompt (see Nice-to-haves)
 
 # Leave ~5-6 GB for Windows; tune to your machine:
 @"
@@ -62,7 +37,7 @@ processors=4
 wsl --install -d Ubuntu-24.04
 ```
 
-In **Windows Terminal**, set Ubuntu as your default profile and pick *JetBrainsMono Nerd Font* under that profile's *Appearance → Font face*. Open a fresh Ubuntu terminal and follow the [Linux Quick Start](#quick-start) — it's identical:
+In **Windows Terminal**, set Ubuntu as your default profile (and, if you installed the Nerd Font above, pick *JetBrainsMono Nerd Font* under that profile's *Appearance → Font face*). Open a fresh Ubuntu terminal and follow the [Linux Quick Start](#quick-start) — it's identical:
 
 ```bash
 git clone https://github.com/beyond-all-reason/BAR-Devtools.git
@@ -82,7 +57,7 @@ On WSL, `setup::init` additionally prompts for a `BAR_DATA_DIR` and wires up the
 **A prompt that doesn't make you sad.** A fresh WSL distro's bash prompt (`user@host:~$`) has no git info, exit status, or color. Install [starship](https://starship.rs/) on the host:
 
 ```bash
-curl -sS https://starship.rs/install.sh | sh
+curl -sS https://starship.rs/install.sh | sh -s -- -b ~/.local/bin
 echo 'eval "$(starship init bash)"' >> ~/.bashrc && exec bash
 ```
 
@@ -98,16 +73,6 @@ time_format = '%T'
 style = 'bold yellow'
 ```
 
-The dev distrobox image (`docker/dev.Containerfile`) already ships starship pre-enabled, so `distrobox enter bar-dev` gives you the prompt with zero host setup. Starship's defaults use Nerd Font glyphs — if you skipped the font install above, strip them with `starship preset plain-text-symbols -o ~/.config/starship.toml`.
-
-**Git identity + Claude Code.**
-
-```bash
-git config --global user.email "you@example.com"
-git config --global user.name "Your Name"
-curl -fsSL https://claude.ai/install.sh | bash
-```
-
 </details>
 
 ## Requirements
@@ -119,7 +84,7 @@ curl -fsSL https://claude.ai/install.sh | bash
 - **[just](https://github.com/casey/just)** -- command runner
 - **[distrobox](https://distrobox.it/)** (recommended) -- dev toolchain container
 
-`just setup::deps` will detect your distro and install what's missing (except `just` itself).
+`just setup::deps` will detect your distro and install what's missing (except `just` itself). `setup::init` only needs to run once; re-run `just setup::reconfigure` to change your feature/SSH/editor choices later — it re-clones for newly-selected features and prunes deselected ones (in-tree clones move to `.backups/`, never deleted).
 
 ### Dev environment (distrobox)
 

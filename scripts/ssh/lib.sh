@@ -7,19 +7,15 @@ is_wsl() {
     [ -n "${WSL_DISTRO_NAME:-}" ] || [ -f /proc/sys/fs/binfmt_misc/WSLInterop ]
 }
 
-# Sets OP_SSH_ENV to one of: wsl, bazzite, linux-arch, linux-debian, linux-fedora, unknown.
+# Sets OP_SSH_ENV to one of: wsl, fedora-atomic, linux-arch, linux-debian, linux-fedora, unknown.
 detect_env() {
     if is_wsl; then
         OP_SSH_ENV=wsl
         return
     fi
-    if [ -r /etc/os-release ]; then
-        # shellcheck disable=SC1091
-        . /etc/os-release
-        if [ "${VARIANT_ID:-}" = "bazzite" ] || [ "${ID:-}" = "bazzite" ]; then
-            OP_SSH_ENV=bazzite
-            return
-        fi
+    if [ -f /run/ostree-booted ] || have rpm-ostree; then
+        OP_SSH_ENV=fedora-atomic
+        return
     fi
     if have pacman; then OP_SSH_ENV=linux-arch
     elif have apt-get; then OP_SSH_ENV=linux-debian
