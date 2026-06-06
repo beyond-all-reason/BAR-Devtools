@@ -129,6 +129,25 @@ check_doctor_repos() {
     return
   fi
 
+  if [ -f "$REPOS_LOCAL" ]; then
+      local old_local_conf_entries
+      old_local_conf_entries="$(
+        awk '
+          /^[[:space:]]*($|#|@)/ { next }
+          $4 == "core" || $4 == "extra" { print $1 " (" $4 ")" }
+        ' "$REPOS_LOCAL"
+      )"
+
+      if [ -n "$old_local_conf_entries" ]; then
+        _warn "repos.local.conf appears to use the old group format (core/extra)"
+        echo "$old_local_conf_entries" | sed 's/^/       /'
+        echo ""
+        echo "       Delete repos.local.conf to use repos.conf defaults,"
+        echo "       or recreate it using the current repos.conf format."
+        echo ""
+      fi
+    fi
+
   local i missing_features_set=""
   local -a missing=()
   for i in "${!REPO_DIRS[@]}"; do
