@@ -17,11 +17,11 @@ BOLD=$'\033[1m'
 DIM=$'\033[2m'
 NC=$'\033[0m'
 
-info()  { echo -e "${BLUE}[info]${NC}  $*"; }
-ok()    { echo -e "${GREEN}[ok]${NC}    $*"; }
-warn()  { echo -e "${YELLOW}[warn]${NC}  $*"; }
-err()   { echo -e "${RED}[error]${NC} $*"; }
-step()  { echo -e "${CYAN}[step]${NC}  $*"; }
+info()  { echo -e "${BLUE}[info]${NC}  $*" >&2; }
+ok()    { echo -e "${GREEN}[ok]${NC}    $*" >&2; }
+warn()  { echo -e "${YELLOW}[warn]${NC}  $*" >&2; }
+err()   { echo -e "${RED}[error]${NC} $*" >&2; }
+step()  { echo -e "${CYAN}[step]${NC}  $*" >&2; }
 
 : "${SETUP_ENV_FILE:=$DEVTOOLS_DIR/.env}"
 
