@@ -9,13 +9,14 @@ mod lua      'just/lua.just'
 mod docs     'just/docs.just'
 mod bar      'just/bar.just'
 mod tei      'just/tei.just'
-
-# Diagnose your dev environment (read-only, no side effects)
-doctor:
-    just setup::doctor
+mod ssh      'just/ssh.just'
 
 default:
     @just --list --list-submodules
+
+# Diagnose your dev environment (read-only)
+doctor:
+    just setup::doctor
 
 reset:
     just lua::reset

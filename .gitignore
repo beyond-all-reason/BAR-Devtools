@@ -1,16 +1,18 @@
-# Cloned repositories (managed via repos.conf)
-teiserver/
-bar-lobby/
-spads_config_bar/
-ansible-spads-setup/
+# Cloned repositories (managed via repos.conf — match dirs and symlinks, so
+# `@local_root` symlinks aren't accidentally committed).
+teiserver
+bar-lobby
+spads_config_bar
+ansible-spads-setup
 Beyond-All-Reason
 BYAR-Chobby
-bar-db/
-bar-live-services/
+bar-db
+bar-live-services
 RecoilEngine
 lua-doc-extractor
-SPADS/
-SpringLobbyInterface/
+SPADS
+SpringLobbyInterface
+bar_debug_launcher
 
 # Personal config overrides
 repos.local.conf
@@ -19,4 +21,11 @@ repos.local.conf
 # Runtime / editor state
 tasks/
 .devtools/
+.backups/
 *.log
+bar-lua-codemod/target/
+.claude/settings.local.json
+.claude/projects/
+.claude/todos/
+.claude/cache/
+__pycache__/

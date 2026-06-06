@@ -2,48 +2,127 @@ set export
 
 DEVTOOLS_DIR        := justfile_directory()
 COMPOSE_FILE        := DEVTOOLS_DIR / "docker-compose.dev.yml"
-COMPOSE             := "docker compose -f " + COMPOSE_FILE
+COMPOSE             := "podman compose -f " + COMPOSE_FILE
 BAR_DIR             := DEVTOOLS_DIR / "Beyond-All-Reason"
-INTEGRATION_COMPOSE := "docker compose -f " + BAR_DIR / "tools" / "headless_testing" / "docker-compose.yml"
-LUALS_VERSION       := "3.17.1"
-LUALS_DIR           := DEVTOOLS_DIR / ".devtools" / "lua-language-server"
-LUALS_BIN           := LUALS_DIR / "bin" / "lua-language-server"
+INTEGRATION_COMPOSE := "podman compose -f " + BAR_DIR / "tools" / "headless_testing" / "docker-compose.yml"
 
 [private]
 require-bar:
     #!/usr/bin/env bash
-    if [ ! -d "{{BAR_DIR}}" ]; then
-        echo "Error: Beyond-All-Reason is not cloned." >&2
-        echo "Run: just repos::clone extra" >&2
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    require_repo bar Beyond-All-Reason "Beyond All Reason"
+
+[private]
+require-emmylua-check:
+    #!/usr/bin/env bash
+    if ! command -v emmylua_check >/dev/null 2>&1; then
+        echo "Error: emmylua_check not on PATH (install in the dev container or from https://github.com/EmmyLuaLs/emmylua-analyzer-rust/releases )." >&2
         exit 1
     fi
 
-[private]
-require-luals:
-    #!/usr/bin/env bash
-    [ -x "{{LUALS_BIN}}" ] && exit 0
-    set -euo pipefail
-    source "$DEVTOOLS_DIR/scripts/common.sh"
-    step "lua-language-server not found, downloading v{{LUALS_VERSION}}..."
-    mkdir -p "{{LUALS_DIR}}"
-    ARCH="$(uname -m)"
-    case "$ARCH" in
-        x86_64)  PLAT="linux-x64" ;;
-        aarch64) PLAT="linux-arm64" ;;
-        *)       err "Unsupported arch: $ARCH"; exit 1 ;;
-    esac
-    curl -fsSL "https://github.com/LuaLS/lua-language-server/releases/download/${LUALS_VERSION}/lua-language-server-${LUALS_VERSION}-${PLAT}.tar.gz" \
-        | tar xz -C "{{LUALS_DIR}}"
-    ok "Downloaded lua-language-server v{{LUALS_VERSION}}"
+# Launch BAR for development (GUI by default; --headless to skip the Tk window)
+launch *FLAGS:
+    @bash "$DEVTOOLS_DIR/scripts/launch.sh" {{FLAGS}}
 
-# Type-check BAR Lua code (LuaLS diagnostics)
-check *args: require-bar require-luals
+# Stop BAR processes and the WSL sync daemon (run before engine::build on WSL)
+stop:
+    @BAR_LAUNCH_MODE=stop bash "$DEVTOOLS_DIR/scripts/launch.sh"
+
+# Switch Chobby to byar-dev so the local .sdd loads (idempotent)
+dev-mode:
     #!/usr/bin/env bash
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
-    step "Running LuaLS type check..."
+    source "$DEVTOOLS_DIR/scripts/setup.sh"
+    game_dir="${BAR_DATA_DIR:-$(detect_game_dir 2>/dev/null || true)}"
+    if [ -z "$game_dir" ]; then
+      err "Could not resolve BAR data dir. Set BAR_DATA_DIR or run 'just setup::init' first."
+      exit 1
+    fi
+    write_env_key BAR_CHOBBY_CHANNEL "byar-dev"
+    apply_chobby_channel
+    ensure_devmode_marker "$game_dir"
+    info "Relaunch Chobby (or run 'just bar::launch') to pick up the change."
+
+# Regenerate the Windows-side launcher shim from current .env values (WSL2-only)
+regen-shim:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    source "$DEVTOOLS_DIR/scripts/setup.sh"
+    if ! is_wsl; then
+      err "regen-shim is WSL2-only -- on Linux, 'just bar::launch' runs bar-launch directly."
+      exit 1
+    fi
+    regenerate_bar_launch_cmd_shim
+
+# Tail the WSL sync daemon log (WSL2-only)
+sync-logs *TAIL_FLAGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    if ! grep -qi microsoft /proc/version 2>/dev/null; then
+      err "sync-logs is WSL2-only (Linux uses symlinks; nothing to log)."
+      exit 1
+    fi
+    if [ -z "${BAR_DATA_DIR:-}" ]; then
+      err "BAR_DATA_DIR not set. Run 'just setup::init' on WSL2 first."
+      exit 1
+    fi
+    logfile="$BAR_DATA_DIR/.bar-launch/sync.log"
+    if [ ! -f "$logfile" ]; then
+      err "No sync log at $logfile yet -- has 'just bar::launch' or 'sync.sh start' run?"
+      exit 1
+    fi
+    info "Tailing $logfile (Ctrl-C to stop)"
+    set -- {{TAIL_FLAGS}}
+    [ "${1:-}" = "--" ] && shift
+    exec tail -F "$@" "$logfile"
+
+# Tail the engine's infolog from the most recent BAR run
+log *TAIL_FLAGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    source "$DEVTOOLS_DIR/scripts/setup.sh"
+    tail_extra=()
+    if is_wsl; then
+      if [ -z "${BAR_DATA_DIR:-}" ]; then
+        err "BAR_DATA_DIR not set. Run 'just setup::init' on WSL2 first."
+        exit 1
+      fi
+      logfile="$BAR_DATA_DIR/infolog.txt"
+      # Plan 9 doesn't forward inotify from Windows writers on /mnt/c; poll instead.
+      tail_extra=(---disable-inotify -s 0.5)
+    else
+      game_dir="$(detect_game_dir 2>/dev/null)" || {
+        err "Game directory not detected. Set BAR_DATA_DIR or run 'just setup::init'."
+        exit 1
+      }
+      logfile="$game_dir/infolog.txt"
+    fi
+    if [ ! -f "$logfile" ]; then
+      err "No infolog at $logfile yet -- has the engine run?"
+      exit 1
+    fi
+    info "Tailing $logfile (Ctrl-C to stop)"
+    set -- {{TAIL_FLAGS}}
+    [ "${1:-}" = "--" ] && shift
+    exec tail -F "${tail_extra[@]}" "$@" "$logfile"
+
+# Alias for `bar::log` (just's `alias` directive doesn't work inside modules)
+logs *TAIL_FLAGS:
+    @just bar::log {{TAIL_FLAGS}}
+
+# Type-check BAR Lua code (EmmyLua analyzer CLI)
+check *args: require-bar require-emmylua-check
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    step "Running emmylua_check (EmmyLua analyzer)..."
     cd "$BAR_DIR"
-    "{{LUALS_BIN}}" --check=. --checklevel=Warning --logpath=/tmp/luals-check {{args}}
+    emmylua_check -c .emmyrc.json . {{args}}
     ok "Type check complete"
 
 # Lint BAR Lua code (luacheck via lux)
@@ -70,28 +149,70 @@ units *args: require-bar
     enter_distrobox
     (cd "$BAR_DIR" && lx --lua-version 5.1 test {{args}})
 
-# Drop into an interactive test shell (busted on PATH)
-test-shell: require-bar
+# Install BAR's Lua dependencies into .lux/
+lux-install: require-bar
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    enter_distrobox
+    (cd "$BAR_DIR" && lx --lua-version 5.1 sync)
+
+# Drop into an interactive shell with busted on PATH (for unit-test work)
+units-shell: require-bar
     #!/usr/bin/env bash
     set -e
     source "$DEVTOOLS_DIR/scripts/common.sh"
     cd "$BAR_DIR"
-    echo -e "${GREEN}[ok]${NC}    Entering lx test shell (busted is available)."
-    echo -e "${GREEN}[ok]${NC}    Type 'exit' to return."
-    if [ -n "${DEVTOOLS_DISTROBOX:-}" ] && [ -z "${_DEVTOOLS_IN_DISTROBOX:-}" ] && [ ! -f /run/.containerenv ]; then
-        exec script -qec "distrobox enter '${DEVTOOLS_DISTROBOX}' -- lx --lua-version 5.1 shell --test --no-loader" /dev/null
-    fi
-    exec lx --lua-version 5.1 shell --test --no-loader
+    ok "Entering lx test shell (busted on PATH)."
+    echo ""
+    info "Filter to specific tests by tagging their description with #<tag>"
+    info "and running busted with -t <tag>. Example:"
+    echo ""
+    echo -e "  ${DIM}-- in some_spec.lua${NC}"
+    echo -e "  ${CYAN}it(\"computes attack range #focus\", function() ... end)${NC}"
+    echo ""
+    echo -e "  ${DIM}# in this shell${NC}"
+    echo -e "  ${CYAN}busted -t focus${NC}"
+    echo ""
+    info "Type 'exit' to return."
+    echo ""
+    distrobox_exec_interactive lx --lua-version 5.1 shell --test --no-loader
+
+# Drop into an interactive lux shell scoped to BAR's lux.toml (for package work)
+lx-shell: require-bar
+    #!/usr/bin/env bash
+    set -e
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    cd "$BAR_DIR"
+    ok "Entering lx shell (package work)."
+    info "Examples: 'lx add <pkg>', 'lx sync', 'lx install'. Type 'exit' to return."
+    echo ""
+    distrobox_exec_interactive lx --lua-version 5.1 shell --no-loader
 
 # Run headless integration tests (x86-64 only)
 integrations *args: require-bar
     #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    require_host
     if [[ "$(uname -m)" == arm64 ]]; then
         echo "Error: integration tests require an x86-64 host." >&2
         echo "The Spring engine used by headless tests has no arm64 build." >&2
         exit 1
     fi
-    {{INTEGRATION_COMPOSE}} up --build --abort-on-container-exit {{args}}
+
+    # Prefer a local Recoil build over the stock engine download if one exists.
+    compose="{{INTEGRATION_COMPOSE}}"
+    local_engine="$DEVTOOLS_DIR/RecoilEngine/build-amd64-linux/install"
+    if [ -x "$local_engine/spring-headless" ]; then
+        info "Using local engine: $local_engine"
+        export BAR_LOCAL_ENGINE="$local_engine"
+        export BAR_DEVTOOLS_DIR="$DEVTOOLS_DIR"
+        compose="$compose -f $DEVTOOLS_DIR/docker-compose.integrations.local.yml"
+    else
+        info "Using stock engine (build RecoilEngine with 'just engine::build linux' to use your local build)"
+    fi
+    $compose up --build --abort-on-container-exit {{args}}
 
 # Run all BAR tests (unit + integrations)
 test: units integrations
@@ -104,7 +225,7 @@ setup-hooks:
     hook="$BAR_DIR/.git/hooks/pre-commit"
     if [ ! -d "$BAR_DIR/.git" ]; then
         err "BAR repo not found at $BAR_DIR"
-        info "Clone it first: just repos::clone extra"
+        info "Clone it first: just repos::clone bar"
         exit 1
     fi
     mkdir -p "$(dirname "$hook")"

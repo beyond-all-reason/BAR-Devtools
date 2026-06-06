@@ -17,3 +17,11 @@ create target:
     source "$DEVTOOLS_DIR/scripts/common.sh"
     source "$DEVTOOLS_DIR/scripts/setup.sh"
     cmd_link "{{target}}"
+
+# Remove Devtools symlinks from the game directory (engine, chobby, bar, or all)
+unlink target="all":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    source "$DEVTOOLS_DIR/scripts/setup.sh"
+    cmd_unlink "{{target}}"

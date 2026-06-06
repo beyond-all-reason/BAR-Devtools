@@ -41,6 +41,11 @@ services:
       - ./docker/teiserver-entrypoint.sh:/entrypoint.sh:ro,z
       - ./docker/setup-spads-bot.exs:/setup-spads-bot.exs:ro,z
       - devtools_state:/app/.devtools
+      # Overlay host source so the live container is the dev env; _build/deps + generated config/priv stay baked in.
+      - ./teiserver/lib:/app/lib:z
+      - ./teiserver/test:/app/test:z
+      - ./teiserver/assets:/app/assets:ro,z
+      - ./teiserver/.formatter.exs:/app/.formatter.exs:ro,z
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:4000/ || exit 1"]
       interval: 10s
