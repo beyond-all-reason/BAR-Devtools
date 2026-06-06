@@ -2099,6 +2099,46 @@ cmd_link() {
   ok "Linked $target: $link_path -> $source_path"
 }
 
+cmd_unlink() {
+  local target="${1:-all}"
+  local game_dir
+  game_dir="$(detect_game_dir 2>/dev/null)" || true
+  if [ -z "$game_dir" ]; then
+    err "Game directory not found. Set BAR_DATA_DIR env var or install BAR to the default location."
+    exit 1
+  fi
+
+  local -A link_map=(
+    [engine]="$game_dir/engine/local-build"
+    [chobby]="$game_dir/games/BYAR-Chobby.sdd"
+    [bar]="$game_dir/games/Beyond-All-Reason.sdd"
+  )
+
+  local -a targets
+  if [ "$target" = "all" ]; then
+    targets=(engine chobby bar)
+  elif [ -n "${link_map[$target]:-}" ]; then
+    targets=("$target")
+  else
+    err "Unknown link target: $target"
+    echo "  Valid targets: engine, chobby, bar, all"
+    exit 1
+  fi
+
+  local name link_path
+  for name in "${targets[@]}"; do
+    link_path="${link_map[$name]}"
+    if [ -L "$link_path" ]; then
+      rm "$link_path"
+      ok "Unlinked $name: removed symlink $link_path"
+    elif [ -e "$link_path" ]; then
+      warn "$name: $link_path exists but isn't a Devtools symlink -- leaving it."
+    else
+      info "$name: not linked."
+    fi
+  done
+}
+
 # Load the setup module registry. MUST run after every setup.sh helper is defined.
 # shellcheck source=scripts/setup/_lib.sh
 source "$DEVTOOLS_DIR/scripts/setup/_lib.sh"
