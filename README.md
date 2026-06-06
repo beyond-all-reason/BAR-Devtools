@@ -56,7 +56,7 @@ On WSL, `setup::init` additionally prompts for a `BAR_DATA_DIR` and wires up the
 Optional — none of this is needed to build or run BAR.
 
 <details>
-<summary><strong>A nicer shell prompt (starship)</strong></summary>
+<summary><strong>A more beautiful shell prompt (starship)</strong></summary>
 
 A fresh WSL distro drops you at a barebones `user@host:~$` — no git info, exit status, or color. [starship](https://starship.rs/) fixes that. Install it into `~/.local/bin` on the host (Linux or WSL):
 
@@ -79,7 +79,7 @@ time_format = '%T'
 style = 'bold yellow'
 ```
 
-Starship's defaults use Nerd Font glyphs, which render as boxes without one installed — either install a Nerd Font (Windows: the `winget` line in [Quick Setup (Windows)](#quick-setup-windows); Linux: your distro's nerd-fonts package) or strip them: `starship preset plain-text-symbols -o ~/.config/starship.toml`.
+Starship's defaults use Nerd Font glyphs. In the Windows terminal — including WSL, which renders through it — they show as boxes until you install a Nerd Font: use the `winget` line in [Quick Setup (Windows)](#quick-setup-windows), or strip the glyphs with `starship preset plain-text-symbols -o ~/.config/starship.toml`. Native Linux terminals usually have a capable font already.
 
 </details>
 
