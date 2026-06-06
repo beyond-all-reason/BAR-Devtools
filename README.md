@@ -67,18 +67,6 @@ echo 'eval "$(starship init bash)"' >> ~/.bashrc && exec bash
 
 Targeting `~/.local/bin` — rather than the installer's default `/usr/local/bin`, or a distro package's `/usr/bin` — is what makes the prompt follow you into the dev container: distrobox shares your home dir and `~/.bashrc`, not host system dirs, so `distrobox enter bar-dev` picks up the same binary and init line for free.
 
-A minimal `~/.config/starship.toml` that adds a clock on the right:
-
-```toml
-right_format = '$time'
-
-[time]
-disabled = false
-format = '[$time]($style)'
-time_format = '%T'
-style = 'bold yellow'
-```
-
 Starship's defaults use Nerd Font glyphs. In the Windows terminal — including WSL, which renders through it — they show as boxes until you install a Nerd Font: use the `winget` line in [Quick Setup (Windows)](#quick-setup-windows), or strip the glyphs with `starship preset plain-text-symbols -o ~/.config/starship.toml`. Native Linux terminals usually have a capable font already.
 
 </details>
