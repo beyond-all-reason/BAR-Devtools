@@ -17,12 +17,13 @@ _apply_protocol() {
 
 load_repos_conf() {
   REPO_DIRS=(); REPO_URLS=(); REPO_UPSTREAM_URLS=(); REPO_BRANCHES=(); REPO_FEATURES=(); REPO_LOCAL_PATHS=()
-  local -A seen=() base_urls=()
+  local -A seen=() base_urls=() seen_in_file=() directive_seen=()
   local local_root="" protocol=""
 
   _parse_conf() {
     local file="$1" is_base="$2"
     [ -f "$file" ] || return 0
+    seen_in_file=(); directive_seen=()
     while IFS= read -r line || [ -n "$line" ]; do
       line="${line%$'\r'}"
       line="${line%%#*}"
@@ -35,8 +36,10 @@ load_repos_conf() {
         case "$key" in
           local_root) local_root="${val/#\~/$HOME}" ;;
           protocol)   protocol="$val" ;;
-          *)          warn "Unknown directive in $file: @$key" ;;
+          *)          warn "Unknown directive in $file: @$key"; continue ;;
         esac
+        [ -n "${directive_seen[$key]:-}" ] && warn "  ${file##*/}: @$key set more than once -- using '$val'"
+        directive_seen[$key]=1
         continue
       fi
 
@@ -44,6 +47,7 @@ load_repos_conf() {
       read -r dir url branch feature local_path <<< "$line"
       [ -z "$dir" ] && continue
       local_path="${local_path/#\~/$HOME}"
+      local raw_url="$url" raw_branch="$branch" raw_feature="$feature" raw_local_path="$local_path"
 
       # repos.conf URL is canonical; repos.local.conf overrides per blank column
       if [ "$is_base" = "1" ] && [ -n "$url" ]; then
@@ -59,6 +63,18 @@ load_repos_conf() {
       feature="${feature:-$prev_feature}"
       local_path="${local_path:-$prev_local_path}"
       [ -z "$url" ] && continue
+
+      if [ -n "${seen_in_file[$dir]:-}" ]; then
+        warn "  ${file##*/}: duplicate entry for '$dir' -- using the last one"
+      elif [ -n "${seen[$dir]:-}" ]; then
+        local changes=""
+        [ -n "$raw_url" ]        && [ "$raw_url" != "$prev_url" ]               && changes+=" url=$raw_url"
+        [ -n "$raw_branch" ]     && [ "$raw_branch" != "$prev_branch" ]         && changes+=" branch=$prev_branch->$raw_branch"
+        [ -n "$raw_feature" ]    && [ "$raw_feature" != "$prev_feature" ]       && changes+=" feature=$raw_feature"
+        [ -n "$raw_local_path" ] && [ "$raw_local_path" != "$prev_local_path" ] && changes+=" local_path=$raw_local_path"
+        [ -n "$changes" ] && info "  $dir: local override --$changes"
+      fi
+      seen_in_file[$dir]=1
 
       seen[$dir]="$url|$branch|$feature|$local_path"
     done < "$file"
