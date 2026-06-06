@@ -111,6 +111,17 @@ load_repos_conf() {
   done
 }
 
+# host/owner/repo, ignoring scheme (https/ssh/scp) and a trailing .git
+_normalize_remote_url() {
+  local u="${1%.git}"; u="${u%/}"
+  if [[ "$u" =~ ^[^@/]+@([^:/]+):(.+)$ ]]; then
+    u="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"   # git@host:owner/repo
+  else
+    u="${u#*://}"; u="${u#*@}"                  # scheme://[user@]host/owner/repo
+  fi
+  printf '%s' "$u"
+}
+
 # warn (don't touch) when an existing repo's remotes don't match config
 verify_remotes() {
   local dir="$1" target="$2" url="$3" upstream_url="$4"
@@ -120,16 +131,22 @@ verify_remotes() {
   origin_url="$(git -C "$target" remote get-url origin 2>/dev/null || true)"
   upstream_remote_url="$(git -C "$target" remote get-url upstream 2>/dev/null || true)"
 
+  local n_origin n_upstream n_url n_upstream_url
+  n_origin="$(_normalize_remote_url "$origin_url")"
+  n_upstream="$(_normalize_remote_url "$upstream_remote_url")"
+  n_url="$(_normalize_remote_url "$url")"
+  n_upstream_url="$(_normalize_remote_url "$upstream_url")"
+
   local complaint=""
   if [ -n "$upstream_url" ]; then
-    if [ "$origin_url" != "$url" ] || [ "$upstream_remote_url" != "$upstream_url" ]; then
+    if [ "$n_origin" != "$n_url" ] || [ "$n_upstream" != "$n_upstream_url" ]; then
       complaint="expected origin=${url}, upstream=${upstream_url}"
     fi
   else
     # tolerate the legacy layout where origin (and only origin) is canonical
-    if [ -n "$upstream_remote_url" ] && [ "$upstream_remote_url" != "$url" ]; then
+    if [ -n "$upstream_remote_url" ] && [ "$n_upstream" != "$n_url" ]; then
       complaint="expected upstream=${url}"
-    elif [ -z "$upstream_remote_url" ] && [ -n "$origin_url" ] && [ "$origin_url" != "$url" ]; then
+    elif [ -z "$upstream_remote_url" ] && [ -n "$origin_url" ] && [ "$n_origin" != "$n_url" ]; then
       complaint="expected upstream=${url}"
     fi
   fi
