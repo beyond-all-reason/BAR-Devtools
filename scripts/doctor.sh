@@ -27,14 +27,14 @@ check_doctor_deps() {
   elif ! podman info &>/dev/null; then
     _fail "'podman info' failed (storage init issue?)"
     echo "       Try: podman system reset  (destroys local images)"
-  elif ! command -v docker-compose &>/dev/null; then
-    _fail "Go docker-compose not installed (podman compose dispatcher needs it as provider)"
+  elif ! podman compose version &>/dev/null; then
+    _fail "podman compose not functional (install docker-compose or upgrade podman)"
     echo "       Run: just setup::deps"
   elif [ ! -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock" ]; then
     _fail "podman API socket not active (docker-compose can't reach the daemon)"
     echo "       Run: systemctl --user enable --now podman.socket  (or just setup::deps)"
   else
-    _pass "podman $(podman --version | awk '{print $3}') + docker-compose $(docker-compose version --short 2>/dev/null) + socket"
+    _pass "podman $(podman --version | awk '{print $3}') + compose + socket"
   fi
 
   if ! command -v distrobox &>/dev/null; then
@@ -91,8 +91,8 @@ check_doctor_ports() {
   )
 
   local our_ports=""
-  if docker compose -f "$DEVTOOLS_DIR/docker-compose.dev.yml" ps --format '{{.Ports}}' 2>/dev/null | grep -q .; then
-    our_ports="$(docker compose -f "$DEVTOOLS_DIR/docker-compose.dev.yml" ps --format '{{.Ports}}' 2>/dev/null)"
+  if podman compose -f "$DEVTOOLS_DIR/docker-compose.dev.yml" ps --format '{{.Ports}}' 2>/dev/null | grep -q .; then
+    our_ports="$(podman compose -f "$DEVTOOLS_DIR/docker-compose.dev.yml" ps --format '{{.Ports}}' 2>/dev/null)"
   fi
 
   local conflict=0
