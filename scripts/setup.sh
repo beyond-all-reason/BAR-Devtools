@@ -358,6 +358,10 @@ cmd_install_deps() {
   if ! command -v podman &>/dev/null; then
     missing+=("container-runtime")
   fi
+  # curl drives the upstream distrobox/compose installers below; ensure it first.
+  if ! command -v curl &>/dev/null; then
+    missing+=("curl")
+  fi
   # Debian gets compose from install_compose_upstream below, never from apt.
   if [ "$distro" != "debian" ] && ! command -v docker-compose &>/dev/null; then
     missing+=("container-compose")
