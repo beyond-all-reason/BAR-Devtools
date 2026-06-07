@@ -35,17 +35,24 @@ read_env_key() {
     printf '%s' "$val"
 }
 
+# append a newline when $1 has content but no trailing newline
+_ensure_trailing_newline() {
+    local file="$1"
+    [ -s "$file" ] && [ -n "$(tail -c1 "$file")" ] && printf '\n' >> "$file"
+}
+
 # upsert $1=$2 into .env
 write_env_key() {
     local key="$1" val="$2"
     touch "$SETUP_ENV_FILE"
+
     if grep -q "^${key}=" "$SETUP_ENV_FILE" 2>/dev/null; then
         sed -i "s|^${key}=.*|${key}=${val}|" "$SETUP_ENV_FILE"
-    else
-        # don't glue onto a file that lacks a trailing newline
-        [ -s "$SETUP_ENV_FILE" ] && [ -n "$(tail -c1 "$SETUP_ENV_FILE")" ] && printf '\n' >> "$SETUP_ENV_FILE"
-        printf '%s=%s\n' "$key" "$val" >> "$SETUP_ENV_FILE"
+        return
     fi
+
+    _ensure_trailing_newline "$SETUP_ENV_FILE"
+    printf '%s=%s\n' "$key" "$val" >> "$SETUP_ENV_FILE"
 }
 
 # true if csv list $1 contains tag $2
