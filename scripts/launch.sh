@@ -398,7 +398,7 @@ stop_linux() {
 
   # -f matches the full cmdline so we don't hit unrelated Pythons.
   local pids
-  pids="$(pgrep -f 'python.* -m bar_launch' 2>/dev/null | awk 'NF')"
+  pids="$(pgrep -f 'python.* -m bar_launch' 2>/dev/null | awk 'NF' || true)"
   if [ -n "$pids" ]; then
     while IFS= read -r pid; do
       [ -z "$pid" ] && continue
@@ -414,7 +414,7 @@ stop_linux() {
   game_dir="$(detect_game_dir 2>/dev/null)" || true
   if [ -n "$game_dir" ]; then
     local spring_pids
-    spring_pids="$(pgrep -x 'spring|spring-headless|spring-dedicated' 2>/dev/null | awk 'NF')"
+    spring_pids="$(pgrep -x 'spring|spring-headless|spring-dedicated' 2>/dev/null | awk 'NF' || true)"
     if [ -n "$spring_pids" ]; then
       while IFS= read -r pid; do
         [ -z "$pid" ] && continue
@@ -435,7 +435,7 @@ stop_linux() {
   # Anything alive after a brief grace period gets SIGKILL.
   sleep 0.3
   local python_bar_launch_survivors
-  python_bar_launch_survivors="$(pgrep -f 'python.* -m bar_launch' 2>/dev/null | awk 'NF')"
+  python_bar_launch_survivors="$(pgrep -f 'python.* -m bar_launch' 2>/dev/null | awk 'NF' || true)"
   if [ -n "$python_bar_launch_survivors" ]; then
     while IFS= read -r pid; do
       [ -z "$pid" ] && continue
