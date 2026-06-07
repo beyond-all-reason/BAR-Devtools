@@ -167,7 +167,7 @@ verify_remotes() {
     warn "  ${dir}: remotes don't match config (${complaint})"
     [ -n "$origin_url" ]          && warn "    origin   = ${origin_url}"
     [ -n "$upstream_remote_url" ] && warn "    upstream = ${upstream_remote_url}"
-    warn "    run \`just repos::standardize-remotes\` to normalize"
+    warn "    run \`just repos::normalize-remotes\` to normalize"
   fi
 }
 
@@ -203,7 +203,7 @@ do_clone() {
 }
 
 # normalize an existing repo's remotes; warns and skips unrecognized layouts
-standardize_remotes() {
+normalize_remotes() {
   local dir="$1" target="$2" url="$3" upstream_url="$4"
   [ -d "$target/.git" ] || return 0
 
@@ -464,7 +464,7 @@ cmd_update() {
   ok "Update complete."
 }
 
-cmd_standardize_remotes() {
+cmd_normalize_remotes() {
   load_repos_conf
 
   echo -e "${BOLD}=== Normalizing Repository Remotes ===${NC}"
@@ -482,7 +482,7 @@ cmd_standardize_remotes() {
     local repo_path="$DEVTOOLS_DIR/$dir"
     [ -n "$local_path" ] && repo_path="$local_path"
     [ -d "$repo_path/.git" ] || continue
-    standardize_remotes "$dir" "$repo_path" "$url" "$upstream_url"
+    normalize_remotes "$dir" "$repo_path" "$url" "$upstream_url"
   done
   echo ""
   ok "Fixup complete."
