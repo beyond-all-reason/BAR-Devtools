@@ -17,7 +17,7 @@ _apply_protocol() {
 
 load_repos_conf() {
   REPO_DIRS=(); REPO_URLS=(); REPO_UPSTREAM_URLS=(); REPO_BRANCHES=(); REPO_FEATURES=(); REPO_LOCAL_PATHS=()
-  local -A seen=() base_urls=() seen_in_file=() directive_seen=()
+  local -A seen=() base_urls=() base_features=() seen_in_file=() directive_seen=()
   local local_root="" protocol=""
 
   _parse_conf() {
@@ -47,11 +47,13 @@ load_repos_conf() {
       read -r dir url branch feature local_path <<< "$line"
       [ -z "$dir" ] && continue
       local_path="${local_path/#\~/$HOME}"
-      local raw_url="$url" raw_branch="$branch" raw_feature="$feature" raw_local_path="$local_path"
+      local raw_url="$url" raw_branch="$branch" raw_local_path="$local_path"
 
-      # repos.conf URL is canonical; repos.local.conf overrides per blank column
-      if [ "$is_base" = "1" ] && [ -n "$url" ]; then
-        base_urls[$dir]="$url"
+      # repos.conf is canonical for url and feature; repos.local.conf overrides
+      # per blank column but never the feature (classification belongs upstream)
+      if [ "$is_base" = "1" ]; then
+        [ -n "$url" ]     && base_urls[$dir]="$url"
+        [ -n "$feature" ] && base_features[$dir]="$feature"
       fi
 
       local prev_url="" prev_branch="" prev_feature="" prev_local_path=""
@@ -70,7 +72,6 @@ load_repos_conf() {
         local changes=""
         [ -n "$raw_url" ]        && [ "$raw_url" != "$prev_url" ]               && changes+=" url=$raw_url"
         [ -n "$raw_branch" ]     && [ "$raw_branch" != "$prev_branch" ]         && changes+=" branch=$prev_branch->$raw_branch"
-        [ -n "$raw_feature" ]    && [ "$raw_feature" != "$prev_feature" ]       && changes+=" feature=$raw_feature"
         [ -n "$raw_local_path" ] && [ "$raw_local_path" != "$prev_local_path" ] && changes+=" local_path=$raw_local_path"
         [ -n "$changes" ] && info "  $dir: local override --$changes"
       fi
@@ -87,6 +88,9 @@ load_repos_conf() {
   for dir in "${!seen[@]}"; do
     local url branch feature local_path upstream_url=""
     IFS='|' read -r url branch feature local_path <<< "${seen[$dir]}"
+
+    # repos.conf owns the feature; local-only repos keep their own
+    feature="${base_features[$dir]:-$feature}"
 
     url="$(_apply_protocol "$url" "$protocol")"
     if [ -n "${base_urls[$dir]:-}" ]; then

@@ -144,23 +144,24 @@ check_doctor_repos() {
   fi
 
   if [ -f "$REPOS_LOCAL" ]; then
-      local old_local_conf_entries
-      old_local_conf_entries="$(
-        awk '
-          /^[[:space:]]*($|#|@)/ { next }
-          $4 == "core" || $4 == "extra" { print $1 " (" $4 ")" }
-        ' "$REPOS_LOCAL"
-      )"
+    local ignored_feature_entries
+    ignored_feature_entries="$(
+      awk '
+        FNR==NR { if ($0 !~ /^[[:space:]]*($|#|@)/) conf[$1]=1; next }
+        /^[[:space:]]*($|#|@)/ { next }
+        $4 != "" && ($1 in conf) { print $1 " (" $4 ")" }
+      ' "$REPOS_CONF" "$REPOS_LOCAL"
+    )"
 
-      if [ -n "$old_local_conf_entries" ]; then
-        _warn "repos.local.conf appears to use the old group format (core/extra)"
-        echo "$old_local_conf_entries" | sed 's/^/       /'
-        echo ""
-        echo "       Delete repos.local.conf to use repos.conf defaults,"
-        echo "       or recreate it using the current repos.conf format."
-        echo ""
-      fi
+    if [ -n "$ignored_feature_entries" ]; then
+      _warn "repos.local.conf sets a feature column that is ignored (repos.conf owns features)"
+      echo "$ignored_feature_entries" | sed 's/^/       /'
+      echo ""
+      echo "       Remove the 4th column from these entries (keep it only as a"
+      echo "       placeholder if you also set a 5th-column local path)."
+      echo ""
     fi
+  fi
 
   local i missing_features_set=""
   local -a missing=()
