@@ -17,11 +17,11 @@ BOLD=$'\033[1m'
 DIM=$'\033[2m'
 NC=$'\033[0m'
 
-info()  { echo -e "${BLUE}[info]${NC}  $*"; }
-ok()    { echo -e "${GREEN}[ok]${NC}    $*"; }
-warn()  { echo -e "${YELLOW}[warn]${NC}  $*"; }
-err()   { echo -e "${RED}[error]${NC} $*"; }
-step()  { echo -e "${CYAN}[step]${NC}  $*"; }
+info()  { echo -e "${BLUE}[info]${NC}  $*" >&2; }
+ok()    { echo -e "${GREEN}[ok]${NC}    $*" >&2; }
+warn()  { echo -e "${YELLOW}[warn]${NC}  $*" >&2; }
+err()   { echo -e "${RED}[error]${NC} $*" >&2; }
+step()  { echo -e "${CYAN}[step]${NC}  $*" >&2; }
 
 : "${SETUP_ENV_FILE:=$DEVTOOLS_DIR/.env}"
 
@@ -35,15 +35,24 @@ read_env_key() {
     printf '%s' "$val"
 }
 
+# append a newline when $1 has content but no trailing newline
+_ensure_trailing_newline() {
+    local file="$1"
+    [ -s "$file" ] && [ -n "$(tail -c1 "$file")" ] && printf '\n' >> "$file"
+}
+
 # upsert $1=$2 into .env
 write_env_key() {
     local key="$1" val="$2"
     touch "$SETUP_ENV_FILE"
+
     if grep -q "^${key}=" "$SETUP_ENV_FILE" 2>/dev/null; then
         sed -i "s|^${key}=.*|${key}=${val}|" "$SETUP_ENV_FILE"
-    else
-        printf '%s=%s\n' "$key" "$val" >> "$SETUP_ENV_FILE"
+        return
     fi
+
+    _ensure_trailing_newline "$SETUP_ENV_FILE"
+    printf '%s=%s\n' "$key" "$val" >> "$SETUP_ENV_FILE"
 }
 
 # true if csv list $1 contains tag $2

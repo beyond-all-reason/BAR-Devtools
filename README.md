@@ -108,27 +108,32 @@ The [test-switcher](https://marketplace.visualstudio.com/items?itemName=bmalehor
 
 ## Using Your Own Forks
 
-`repos.conf` lists the default upstream repositories. To override any with your own fork or branch, copy it to `repos.local.conf` (gitignored — won't affect anyone else), keep only the entries you want to change, and re-clone:
+`repos.conf` lists the default upstream repositories. To override any with your own fork or branch, add just the rows you want to change to `repos.local.conf` (gitignored — won't affect anyone else), then re-clone:
 
 ```bash
-cp repos.conf repos.local.conf
-# edit repos.local.conf, then:
+# repos.local.conf — only the entries you're changing:
+teiserver  https://github.com/yourname/teiserver.git  your-branch
+```
+
+```bash
 just repos::clone teiserver
 ```
 
-Both files share one whitespace-delimited format:
+The two files use **different** whitespace-delimited formats. `repos.conf`
+carries the `feature` column; `repos.local.conf` does not (it only overrides
+url/branch and, as an exception, a per-repo `local_path`):
 
 ```
-# directory    url    branch    feature    [local_path]
-teiserver  https://github.com/yourname/teiserver.git  your-branch  teiserver
-bar-lobby  https://github.com/yourname/bar-lobby.git  your-branch  bar,chobby
+# repos.conf        directory  url  branch  feature  [local_path]
+# repos.local.conf  directory  url  branch  [local_path]
+teiserver  https://github.com/yourname/teiserver.git  your-branch
 ```
 
-- **directory** -- local folder name (created by `clone`)
+- **directory** -- local folder name (created by `clone`); the only required column
 - **url** -- git clone URL
 - **branch** -- branch to checkout
-- **feature** -- comma-separated tags (`bar`, `recoil`, `teiserver`, `chobby`, `spads-source`); a repo is pulled in by any of its tags (e.g. `bar-lobby` serves both `bar` and `chobby`)
-- **local_path** -- (optional) absolute or `~`-relative path to **symlink** instead of clone (e.g. a fifth column `~/code/lua-doc-extractor`)
+- **feature** -- comma-separated tags (`bar`, `recoil`, `teiserver`, `chobby`, `spads-source`); a repo is pulled in by any of its tags (e.g. `bar-lobby` serves both `bar` and `chobby`). **`repos.conf` only** -- it's upstream classification, so `repos.local.conf` has no feature column (a stray one is ignored and flagged by `just doctor`).
+- **local_path** -- (optional) absolute or `~`-relative path to **symlink** instead of clone (e.g. `~/code/lua-doc-extractor`). In `repos.local.conf` it's the 4th column -- a per-repo exception to `@local_root`.
 
 Two optional `@`-directives can lead the file:
 

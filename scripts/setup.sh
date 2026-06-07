@@ -579,20 +579,33 @@ _find_appimage_in_dir() {
               -iname 'beyondallreason*.appimage' \) 2>/dev/null | sort -r)
 }
 
-# Resolve BAR_APPIMAGE_PATH: keep existing, else auto-discover ~/Applications, else prompt.
-ensure_bar_appimage_path_set() {
-  local env_file="$DEVTOOLS_DIR/.env"
-  touch "$env_file"
+# True if BAR_APPIMAGE_PATH (live env, else .env) resolves to an AppImage --
+# matching bar_launch/core.py: a file directly, or a dir containing one.
+bar_appimage_resolves() {
+  local p="${BAR_APPIMAGE_PATH:-}"
+  [ -n "$p" ] || p="$(read_env_key BAR_APPIMAGE_PATH)"
+  [ -n "$p" ] || return 1
+  p="${p/#\~/$HOME}"
+  [ -f "$p" ] && return 0
+  [ -d "$p" ] && [ -n "$(_find_appimage_in_dir "$p")" ]
+}
 
-  if grep -q "^BAR_APPIMAGE_PATH=" "$env_file" 2>/dev/null; then
+# Resolve BAR_APPIMAGE_PATH: keep existing if it resolves, else auto-discover
+# ~/Applications, else prompt. Re-prompts when a saved path no longer resolves.
+ensure_bar_appimage_path_set() {
+  if bar_appimage_resolves; then
     info "BAR_APPIMAGE_PATH already set in .env"
     return 0
   fi
 
+  local existing
+  existing="$(read_env_key BAR_APPIMAGE_PATH)"
+  [ -n "$existing" ] && warn "BAR_APPIMAGE_PATH=$existing no longer resolves to an AppImage (moved or renamed?)"
+
   local found
   found="$(_find_appimage_in_dir "$HOME/Applications")"
   if [ -n "$found" ]; then
-    echo "BAR_APPIMAGE_PATH=$found" >> "$env_file"
+    write_env_key BAR_APPIMAGE_PATH "$found"
     ok "Discovered AppImage at $found (added to .env)"
     return 0
   fi
@@ -624,19 +637,19 @@ ensure_bar_appimage_path_set() {
 
   local expanded="${response/#\~/$HOME}"
   if [ -f "$expanded" ]; then
-    echo "BAR_APPIMAGE_PATH=$expanded" >> "$env_file"
+    write_env_key BAR_APPIMAGE_PATH "$expanded"
     ok "Added BAR_APPIMAGE_PATH=$expanded to .env"
   elif [ -d "$expanded" ]; then
     local resolved
     resolved="$(_find_appimage_in_dir "$expanded")"
     if [ -n "$resolved" ]; then
       # Persist the directory, not the file, so in-place AppImage upgrades don't need a .env edit.
-      echo "BAR_APPIMAGE_PATH=$expanded" >> "$env_file"
+      write_env_key BAR_APPIMAGE_PATH "$expanded"
       ok "Added BAR_APPIMAGE_PATH=$expanded to .env (resolves to $resolved)"
     else
       warn "$expanded is a directory but contains no Beyond-All-Reason*.AppImage."
       warn "Saving anyway -- the launcher will scan it again at run time."
-      echo "BAR_APPIMAGE_PATH=$expanded" >> "$env_file"
+      write_env_key BAR_APPIMAGE_PATH "$expanded"
     fi
   else
     err "$expanded does not exist."
@@ -1908,8 +1921,8 @@ cmd_init() {
   echo -e "    ${BOLD}just link::status${NC}             Show symlink status"
   echo -e "    ${BOLD}just repos::status${NC}            Show repository status"
   echo ""
-  echo "  To use your own forks, copy repos.conf to repos.local.conf"
-  echo "  and edit the URLs/branches. Then run: just repos::clone"
+  echo "  To use your own forks, add the rows you want to change to"
+  echo "  repos.local.conf (directory/url/branch). Then run: just repos::clone"
   echo ""
 }
 

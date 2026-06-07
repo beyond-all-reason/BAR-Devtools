@@ -69,6 +69,20 @@ check_doctor_env() {
     echo "       Rebuild: just setup::distrobox"
   fi
 
+  # AppImage is a Linux-only boot path; WSL launches the Windows .exe shim.
+  if ! is_wsl; then
+    local appimage
+    appimage="$(read_env_key BAR_APPIMAGE_PATH)"
+    if [ -z "$appimage" ]; then
+      info "  BAR_APPIMAGE_PATH not set (only needed for AppImage/launcher boots)"
+    elif bar_appimage_resolves; then
+      _pass "BAR_APPIMAGE_PATH=$appimage (resolves)"
+    else
+      _warn "BAR_APPIMAGE_PATH=$appimage does not resolve to an AppImage (moved or renamed?)"
+      echo "       Fix: just setup::reconfigure"
+    fi
+  fi
+
   echo ""
 }
 
@@ -130,23 +144,20 @@ check_doctor_repos() {
   fi
 
   if [ -f "$REPOS_LOCAL" ]; then
-      local old_local_conf_entries
-      old_local_conf_entries="$(
-        awk '
-          /^[[:space:]]*($|#|@)/ { next }
-          $4 == "core" || $4 == "extra" { print $1 " (" $4 ")" }
-        ' "$REPOS_LOCAL"
-      )"
+    # col4 is local_path (a path); a non-path value there is a stray feature
+    local stray_feature_entries="" dir col4 _
+    while read -r dir _ _ col4 _ || [ -n "$dir" ]; do
+      case "$dir"  in ''|'#'*|'@'*) continue ;; esac   # blank / comment / directive
+      case "$col4" in ''|*/*|'~'*)  continue ;; esac   # empty or a path -> fine
+      stray_feature_entries+="       $dir ($col4)"$'\n'
+    done < "$REPOS_LOCAL"
 
-      if [ -n "$old_local_conf_entries" ]; then
-        _warn "repos.local.conf appears to use the old group format (core/extra)"
-        echo "$old_local_conf_entries" | sed 's/^/       /'
-        echo ""
-        echo "       Delete repos.local.conf to use repos.conf defaults,"
-        echo "       or recreate it using the current repos.conf format."
-        echo ""
-      fi
+    if [ -n "$stray_feature_entries" ]; then
+      _warn "Please remove feature flags from repos.local.conf (repos.conf owns them)"
+      printf '%s' "$stray_feature_entries"
+      echo ""
     fi
+  fi
 
   local i missing_features_set=""
   local -a missing=()
