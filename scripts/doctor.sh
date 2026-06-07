@@ -144,18 +144,17 @@ check_doctor_repos() {
   fi
 
   if [ -f "$REPOS_LOCAL" ]; then
-    # 4th column is local_path (a path); a non-path value is a stray feature
-    local stray_feature_entries
-    stray_feature_entries="$(
-      awk '
-        /^[[:space:]]*($|#|@)/ { next }
-        $4 != "" && $4 !~ /\// && $4 !~ /^~/ { print $1 " (" $4 ")" }
-      ' "$REPOS_LOCAL"
-    )"
+    # col4 is local_path (a path); a non-path value there is a stray feature
+    local stray_feature_entries="" dir col4 _
+    while read -r dir _ _ col4 _ || [ -n "$dir" ]; do
+      case "$dir"  in ''|'#'*|'@'*) continue ;; esac   # blank / comment / directive
+      case "$col4" in ''|*/*|'~'*)  continue ;; esac   # empty or a path -> fine
+      stray_feature_entries+="       $dir ($col4)"$'\n'
+    done < "$REPOS_LOCAL"
 
     if [ -n "$stray_feature_entries" ]; then
       _warn "Please remove feature flags from repos.local.conf (repos.conf owns them)"
-      echo "$stray_feature_entries" | sed 's/^/       /'
+      printf '%s' "$stray_feature_entries"
       echo ""
     fi
   fi
