@@ -107,8 +107,8 @@ check_podman() {
 
 check_distrobox() {
   if ! command -v distrobox &>/dev/null; then
-    warn "distrobox not found. Install it for the recommended dev environment."
-    warn "See: https://distrobox.it/#installation"
+    err "distrobox not found. Required for the dev toolchain (lux, stylua, emmylua, clangd)."
+    err "See: https://distrobox.it/#installation"
     return 1
   fi
   ok "distrobox $(distrobox version 2>/dev/null | head -1) detected"
