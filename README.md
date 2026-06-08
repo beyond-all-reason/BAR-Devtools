@@ -129,7 +129,7 @@ url/branch and, as an exception, a per-repo `local_path`):
 teiserver  https://github.com/yourname/teiserver.git  your-branch
 ```
 
-- **directory** -- local folder name (created by `clone`); the only required column
+- **directory** -- local folder name (created by `clone`)
 - **url** -- git clone URL
 - **branch** -- branch to checkout
 - **feature** -- comma-separated tags (`bar`, `recoil`, `teiserver`, `chobby`, `spads-source`); a repo is pulled in by any of its tags (e.g. `bar-lobby` serves both `bar` and `chobby`). **`repos.conf` only** -- it's upstream classification, so `repos.local.conf` has no feature column (a stray one is ignored and flagged by `just doctor`).
