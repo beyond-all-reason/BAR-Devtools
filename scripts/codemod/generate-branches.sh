@@ -519,13 +519,17 @@ generate_topology() {
     echo ""
     echo "**Leaves** — each targets \`master\`, mergeable independently:"
     echo ""
-    echo "| Branch | Command | Diff vs \`master\` | Units |"
+    echo "| Branch | Command | Diff vs parent | Units |"
     echo "|--------|---------|------|-------|"
     for transform in "${TRANSFORMS[@]}"; do
-        local branch pr_url stats command
+        local branch pr_url stats command base
         branch=$(tvar "$transform" "branch")
         pr_url=$(tvar "$transform" "pr")
-        stats=$(diff_stat origin/master "$branch")
+        # Diff against the PR base (the branch this leaf stacks on), not master:
+        # for transform leaves that's `fmt`, isolating the transform's own
+        # changes from the stylua reformat baseline. `fmt` itself bases on master.
+        base="${PR_BASE[$branch]:-origin/master}"
+        stats=$(diff_stat "$base" "$branch")
         # Most transforms invoke `bar-lua-codemod <name>`. Exceptions are
         # hand-maintained:
         #   - fmt: runs stylua, not the codemod
