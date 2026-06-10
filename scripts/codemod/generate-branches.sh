@@ -9,24 +9,30 @@ source "${DEVTOOLS_DIR}/scripts/common.sh"
 
 CODEMOD="${CODEMOD_BIN:-${DEVTOOLS_DIR}/bar-lua-codemod/target/release/bar-lua-codemod}"
 BAR="${BAR_DIR:-${DEVTOOLS_DIR}/Beyond-All-Reason}"
-ORIGIN_REMOTE="${ORIGIN_REMOTE:-origin}"
-FORK_REMOTE="${FORK_REMOTE:-upstream}"
+# UPSTREAM_REMOTE = the canonical upstream repo (beyond-all-reason); FORK_REMOTE =
+# the personal fork. With the standard git convention (origin=fork,
+# upstream=canonical) these map to the `upstream` and `origin` remotes
+# respectively. Main-chain branches host on the canonical (same-repo PRs); leaf
+# branches host on the fork (cross-repo PRs).
+UPSTREAM_REMOTE="${UPSTREAM_REMOTE:-upstream}"
+FORK_REMOTE="${FORK_REMOTE:-origin}"
 
-ORIGIN_REPO="beyond-all-reason/Beyond-All-Reason"
+UPSTREAM_REPO="beyond-all-reason/Beyond-All-Reason"
 FORK_OWNER="${FORK_OWNER:-$(git -C "$BAR" remote get-url "$FORK_REMOTE" 2>/dev/null | sed -n 's|.*[:/]\([^/]*\)/.*|\1|p')}"
 
-# Branches hosted directly on origin (beyond-all-reason). Everything else lives
-# on the fork and its PRs are cross-repo.
+# Branches hosted directly on the canonical repo ($UPSTREAM_REMOTE,
+# beyond-all-reason), with same-repo PRs. Everything else lives on the fork
+# ($FORK_REMOTE) and its PRs are cross-repo.
 # fmt-llm-source must be in this set: PR #7407's base is
-# beyond-all-reason:fmt-llm-source, so origin's copy has to track local or
+# beyond-all-reason:fmt-llm-source, so the canonical copy has to track local or
 # the capstone PR goes DIRTY against a stale base even when topology is sound.
-ORIGIN_BRANCHES_RE='^(fmt|mig|fmt-llm|fmt-llm-source)$'
+UPSTREAM_BRANCHES_RE='^(fmt|mig|fmt-llm|fmt-llm-source)$'
 
 # Return the --head value for a gh pr create invocation: bare branch name for
 # same-repo PRs, owner:branch for cross-repo PRs from the fork.
 head_for() {
     local branch="$1"
-    if [[ "$branch" =~ $ORIGIN_BRANCHES_RE ]]; then
+    if [[ "$branch" =~ $UPSTREAM_BRANCHES_RE ]]; then
         echo "$branch"
     else
         echo "$FORK_OWNER:$branch"
@@ -36,8 +42,8 @@ head_for() {
 # Remote a branch should be pushed to.
 remote_for() {
     local branch="$1"
-    if [[ "$branch" =~ $ORIGIN_BRANCHES_RE ]]; then
-        echo "$ORIGIN_REMOTE"
+    if [[ "$branch" =~ $UPSTREAM_BRANCHES_RE ]]; then
+        echo "$UPSTREAM_REMOTE"
     else
         echo "$FORK_REMOTE"
     fi
@@ -135,6 +141,7 @@ fmt_pr="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7199"
 fmt_pr_title="[Style] stylua format entire codebase"
 fmt_prereq=""
 fmt_description=""
+fmt_summary='Runs [stylua](https://github.com/JohnnyMorganz/StyLua) over the entire Lua tree, applying the repo style (indentation, quotes, call parens, line width). Formatting only — no behavioral change.'
 
 run_fmt() {
     stylua_pass
@@ -162,6 +169,7 @@ bracket_to_dot_commit="gen(bar_codemod): bracket-to-dot"
 bracket_to_dot_pr="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7287"
 bracket_to_dot_prereq=""
 bracket_to_dot_description=""
+bracket_to_dot_summary='Rewrites identifier-keyed string access to dot notation — `x["y"]` → `x.y` and `["y"] =` → `y =` — so the analyzer can resolve field types through the access.'
 
 run_bracket_to_dot() {
     "$CODEMOD" bracket-to-dot --path "$BAR" --exclude common/luaUtilities
@@ -181,6 +189,7 @@ rename_aliases_commit="gen(bar_codemod): rename-aliases"
 rename_aliases_pr="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7288"
 rename_aliases_prereq=""
 rename_aliases_description=""
+rename_aliases_summary='Renames deprecated Spring method aliases to their canonical names (e.g. `Spring.GetMyTeamID` → `Spring.GetLocalTeamID`) so call sites line up with the names the engine type stubs declare.'
 
 run_rename_aliases() {
     "$CODEMOD" rename-aliases --path "$BAR" --exclude common/luaUtilities
@@ -199,6 +208,7 @@ detach_bar_modules_branch="mig-detach-bar-modules"
 detach_bar_modules_commit="gen(bar_codemod): detach-bar-modules"
 detach_bar_modules_pr="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7289"
 detach_bar_modules_prereq="detach-bar-modules-env"
+detach_bar_modules_summary='Moves BAR-added helpers off the `Spring` table back to bare globals — `Spring.I18N` → `I18N`, plus `Utilities`, `Debug`, `Lava`, and `GetModOptionsCopy` — since they aren'\''t engine API and otherwise break type-checking against the `Spring` stubs.'
 detach_bar_modules_description='The `detach-bar-modules-env` prereq exposes the detached modules to the widget/gadget sandbox (`luarules/system.lua`, `luaui/system.lua`), adds type stubs for them under `types/`, and lists them as globals in `.emmyrc.json` so EmmyLua resolves them as bare identifiers. Cherry-picked on top of `fmt` before the codemod runs.'
 
 run_detach_bar_modules() {
@@ -218,7 +228,8 @@ spring_split_branch="mig-spring-split"
 spring_split_commit="gen(bar_codemod): spring-split"
 spring_split_pr="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7290"
 spring_split_prereq=""
-spring_split_description='See [RecoilEngine#2799](https://github.com/beyond-all-reason/RecoilEngine/pull/2799) for the SpringSynced/SpringUnsynced/SpringShared type split on the engine side.'
+spring_split_summary='Splits the monolithic `Spring` table into `Engine.Synced` / `Engine.Unsynced` / `Engine.Shared`, rewriting each `Spring.X` to the bucket that actually declares `X` per the generated API stubs — so synced/unsynced-only calls type-check in the right context.'
+spring_split_description='See [RecoilEngine#2799](https://github.com/beyond-all-reason/RecoilEngine/pull/2799) for the Engine.Synced/Engine.Unsynced/Engine.Shared type split on the engine side.'
 
 run_spring_split() {
     local lib="$BAR/recoil-lua-library/library"
@@ -226,15 +237,16 @@ run_spring_split() {
     "$CODEMOD" spring-split --path "$BAR" --library "$lib" --exclude common/luaUtilities
 
     sed -i '/^_G\.GG = /i\
-_G.SpringSynced = _G.SpringSynced or _G.Spring\
-_G.SpringUnsynced = _G.SpringUnsynced or _G.Spring\
-_G.SpringShared = _G.SpringShared or _G.Spring\
+_G.Engine = _G.Engine or {}\
+_G.Engine.Synced = _G.Engine.Synced or _G.Spring\
+_G.Engine.Unsynced = _G.Engine.Unsynced or _G.Spring\
+_G.Engine.Shared = _G.Engine.Shared or _G.Spring\
 ' "$BAR/spec/spec_helper.lua"
 }
 
 describe_spring_split() {
     cat <<'EOF'
-# spring-split - split Spring into SpringSynced, SpringUnsynced, and SpringShared
+# spring-split - split Spring into Engine.Synced, Engine.Unsynced, and Engine.Shared
 bar-lua-codemod spring-split --path "$BAR_DIR" --library "$BAR_DIR/recoil-lua-library/src" --exclude common/luaUtilities
 EOF
 }
@@ -247,6 +259,7 @@ i18n_kikito_pr="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7291
 i18n_kikito_pr_title="[Deps] i18n-kikito"
 i18n_kikito_prereq="lux-i18n"
 i18n_kikito_description=""
+i18n_kikito_summary='Swaps the vendored `gajop/i18n` fork for upstream [`kikito/i18n.lua`](https://github.com/kikito/i18n.lua) and rewrites the unit-name translation call sites to the new API.'
 
 run_i18n_kikito() {
     rm -rf "$BAR/modules/i18n/i18nlib"
@@ -274,7 +287,8 @@ integration_tests_commit="gen(hand): integration tests return-table shape"
 integration_tests_pr="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7437"
 integration_tests_pr_title="[Tests] Restructure integration tests to table-return shape"
 integration_tests_prereq="integration-tests-curated"
-integration_tests_description='Carried-commit leaf. Restructures `luaui/Tests/` and `luaui/TestsExamples/` (20 files) from bare-global hook declarations to a `return { ... }` shape, and patches `dbg_test_runner.lua` to read hooks from the returned table. Isolated so the convention change can be discussed/reverted independently.'
+integration_tests_summary='Hand-curated (not a codemod): restructures the tests under `luaui/Tests/` and `luaui/TestsExamples/` (20 files) from bare-global hook declarations to a `return { ... }` shape, and patches `dbg_test_runner.lua` to read hooks from the returned table.'
+integration_tests_description='Isolated so the convention change can be discussed/reverted independently.'
 
 run_integration_tests() {
     : # carried-commit leaf; prereq cherry-pick is the entire payload
@@ -300,7 +314,8 @@ busted_types_commit="gen(hand): inline luassert and busted LuaCATS types"
 busted_types_pr="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7438"
 busted_types_pr_title="[Types] Inline LuaCATS busted+luassert type annotations"
 busted_types_prereq="busted-types-curated"
-busted_types_description='Carried-commit leaf. Vendors [LuaCATS/busted](https://github.com/LuaCATS/busted) and [LuaCATS/luassert](https://github.com/LuaCATS/luassert) type annotations under `types/busted/` and `types/luassert/`. Waits on [lumen-oss/lux#953](https://github.com/lumen-oss/lux/issues/953) to replace with a Lux dev-dep declaration.'
+busted_types_summary='Hand-curated (not a codemod): vendors [LuaCATS/busted](https://github.com/LuaCATS/busted) and [LuaCATS/luassert](https://github.com/LuaCATS/luassert) type annotations under `types/busted/` and `types/luassert/`.'
+busted_types_description='Waits on [lumen-oss/lux#953](https://github.com/lumen-oss/lux/issues/953) to replace with a Lux dev-dep declaration.'
 
 run_busted_types() {
     : # carried-commit leaf; prereq cherry-pick is the entire payload
@@ -448,7 +463,7 @@ museum_description() {
         "gen(bar_codemod): detach-bar-modules")
             echo "Spring.{I18N,Utilities,Debug,Lava,GetModOptionsCopy} → bare globals" ;;
         "gen(bar_codemod): spring-split")
-            echo "Spring.X → SpringSynced/SpringUnsynced/SpringShared.X per @context" ;;
+            echo "Spring.X → Engine.Synced/Engine.Unsynced/Engine.Shared.X per @env" ;;
         "gen(bar_codemod): i18n-kikito")
             echo "vendored gajop/i18n → kikito/i18n.lua via lux dependency" ;;
         "gen(hand): integration tests return-table shape")
@@ -538,11 +553,16 @@ generate_topology() {
 
 generate_leaf_pr_body() {
     local transform="$1" output_file="$2"
-    local description
+    local description summary
     description=$(tvar "$transform" "description")
+    summary=$(tvar "$transform" "summary")
 
     echo "Part of [BAR type-error cleanup]($TRACKING_ISSUE). Rebuilds idempotently from \`master\` via [\`just bar::fmt-mig-generate\`]($DEVTOOLS_PR)."
     echo ""
+    if [[ -n "$summary" ]]; then
+        echo "**What it does:** $summary"
+        echo ""
+    fi
     echo '```sh'
     "describe_${transform}"
     echo '```'
@@ -601,7 +621,9 @@ ensure_fmt_prereq() {
     # lose it. That's acceptable for the curated prereqs we have today
     # (integration-tests-curated, busted-types-curated, lux-i18n,
     # detach-bar-modules-env).
-    git_bar cherry-pick -Xtheirs "origin/master..$prefix"
+    # --empty=drop: the recoil-lua-library submodule-bump commit lands empty
+    # when the submodule is already at the bumped gitlink; drop it, don't halt.
+    git_bar cherry-pick --empty=drop -Xtheirs "origin/master..$prefix"
     stylua_pass
     git_bar add -A
     if ! git_bar diff --cached --quiet; then
@@ -633,9 +655,9 @@ cherry_pick_prefix() {
     fi
     if git_bar merge-base --is-ancestor fmt HEAD 2>/dev/null; then
         ensure_fmt_prereq "$prefix"
-        git_bar cherry-pick "fmt..${prefix}-fmt"
+        git_bar cherry-pick --empty=drop "fmt..${prefix}-fmt"
     else
-        git_bar cherry-pick "origin/master..$prefix"
+        git_bar cherry-pick --empty=drop "origin/master..$prefix"
     fi
 }
 
@@ -843,7 +865,7 @@ build_fmt_llm_source() {
     else
         # -Xtheirs: on conflicts between mig's transforms and env commit edits,
         # keep the env commit's content (stylua_pass below renormalizes).
-        if ! git_bar cherry-pick -Xtheirs "${env_commits[@]}"; then
+        if ! git_bar cherry-pick --empty=drop -Xtheirs "${env_commits[@]}"; then
             local conflicted
             conflicted=$(git_bar diff --name-only --diff-filter=U | sed 's/^/    /')
             err ""
@@ -1126,7 +1148,7 @@ update_prs() {
                 step "Creating PR for $branch..."
                 local new_url
                 new_url=$(gh_host pr create \
-                    --repo "$ORIGIN_REPO" \
+                    --repo "$UPSTREAM_REPO" \
                     --head "$(head_for "$branch")" \
                     --base "$base" \
                     --title "$pr_title" \
@@ -1185,7 +1207,7 @@ link_gh_stack() {
     fi
 
     step "Linking stack on GitHub: ${chain[*]}"
-    if (cd "$BAR" && gh stack link --remote "$ORIGIN_REMOTE" --base master "${chain[@]}"); then
+    if (cd "$BAR" && gh stack link --remote "$UPSTREAM_REMOTE" --base master "${chain[@]}"); then
         ok "Stack linked"
     else
         warn "gh stack link failed — PRs are still individually correct, just no stack comment"
@@ -1216,7 +1238,7 @@ update_capstone_pr() {
         step "Creating PR for $branch (base: $base)..."
         local new_url
         new_url=$(gh_host pr create \
-            --repo "$ORIGIN_REPO" \
+            --repo "$UPSTREAM_REPO" \
             --head "$(head_for "$branch")" \
             --base "$base" \
             --title "$pr_title" \
@@ -1335,7 +1357,7 @@ push_branches() {
             mirror+=("$b")
         fi
     done
-    if [[ ${#mirror[@]} -gt 0 ]] && [[ "$ORIGIN_REMOTE" != "$FORK_REMOTE" ]]; then
+    if [[ ${#mirror[@]} -gt 0 ]] && [[ "$UPSTREAM_REMOTE" != "$FORK_REMOTE" ]]; then
         step "Mirroring main-chain branches to fork: ${mirror[*]} -> $FORK_REMOTE"
         git_bar push "$FORK_REMOTE" --force-with-lease "${mirror[@]}"
         ok "Mirrored to $FORK_REMOTE"
@@ -1365,7 +1387,7 @@ fmt-llm capstone branch.
 
 Flags:
   --push              Force-push origin-hosted branches (fmt, mig,
-                      fmt-llm-source, fmt-llm) to \$ORIGIN_REMOTE and all
+                      fmt-llm-source, fmt-llm) to \$UPSTREAM_REMOTE and all
                       other leaves to \$FORK_REMOTE
   --update-prs        Update all PR descriptions via gh (creates new PRs
                       for leaves without one)
@@ -1392,10 +1414,43 @@ if [[ "$DO_LLM_ONLY" == "true" ]] && [[ "$DO_SKIP_GENERATION" == "true" ]]; then
     exit 1
 fi
 
+# Keep the deterministic baseline current. The baseline is the fork's master
+# ($FORK_REMOTE/master, i.e. origin/master) — a pure downstream mirror of the
+# canonical ($UPSTREAM_REMOTE/master). The prereq branches are maintained on top of
+# current canonical, so a stale fork master makes origin/master..<prereq> balloon
+# into the whole upstream delta. Fast-forward the fork master to the canonical and
+# publish it. FF-only: a diverged fork master means real local work — refuse to force.
+sync_origin_master() {
+    git_bar fetch --no-recurse-submodules "$UPSTREAM_REMOTE" 2>/dev/null \
+        || { warn "Could not fetch $UPSTREAM_REMOTE; skipping master sync (baseline may be stale)."; return 0; }
+    local canon="$UPSTREAM_REMOTE/master" base="$FORK_REMOTE/master" base_sha canon_sha
+    git_bar rev-parse --verify "$canon" >/dev/null 2>&1 \
+        || { warn "$canon not found; skipping master sync."; return 0; }
+    base_sha=$(git_bar rev-parse "$base"); canon_sha=$(git_bar rev-parse "$canon")
+    [[ "$base_sha" == "$canon_sha" ]] && { info "  $base already current with $canon."; return 0; }
+    if git_bar merge-base --is-ancestor "$canon" "$base"; then
+        info "  $base is ahead of $canon — leaving as is."; return 0
+    fi
+    if ! git_bar merge-base --is-ancestor "$base" "$canon"; then
+        err "$base has diverged from $canon (not a fast-forward) — refusing to force."
+        err "The fork master must be a clean downstream mirror of the canonical; resolve by hand."
+        exit 1
+    fi
+    step "Fast-forwarding $base to $canon (${base_sha:0:9} -> ${canon_sha:0:9})..."
+    git_bar push "$FORK_REMOTE" "$canon_sha:refs/heads/master"
+    git_bar -c submodule.recurse=false fetch --no-recurse-submodules "$FORK_REMOTE"
+    ok "  $base synced to canonical."
+}
+
 # ─── Run ─────────────────────────────────────────────────────────────────────
 
 step "Fetching origin..."
 git_bar -c submodule.recurse=false fetch --no-recurse-submodules origin
+
+# require-library regenerates recoil-lua-library/library every run, leaving the
+# submodule perpetually dirty. Tell git to ignore it so status/add/checkout
+# don't stage or trip over the generated content during branch building.
+git_bar config submodule.recoil-lua-library.ignore all 2>/dev/null || true
 
 if [[ "$DO_SKIP_GENERATION" == "true" ]]; then
     step "--skip-generation: skipping ALL branch rebuilds (PR bodies only)"
@@ -1424,6 +1479,9 @@ elif [[ "$DO_LLM_ONLY" == "true" ]]; then
     build_fmt_llm
     persist_test_results
 else
+    step "Syncing origin/master from upstream..."
+    sync_origin_master
+
     step "Rebasing prefix and prereq branches onto origin/master..."
     # Prereq/prefix branches are small, hand-maintained (lux-i18n,
     # detach-bar-modules-env). A merge conflict means upstream changes have

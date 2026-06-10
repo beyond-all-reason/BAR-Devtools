@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 /// Scan all .lua files under `library_dir` for method declarations and build
-/// a mapping of method name -> target class (SpringSynced, SpringUnsynced,
-/// or SpringShared).  First declaration wins if the same name appears in
+/// a mapping of method name -> target class (Engine.Synced, Engine.Unsynced,
+/// or Engine.Shared).  First declaration wins if the same name appears in
 /// multiple classes.
 pub fn build_mapping(library_dir: &Path) -> HashMap<String, String> {
     let mut mapping = HashMap::new();
@@ -20,7 +20,7 @@ pub fn build_mapping(library_dir: &Path) -> HashMap<String, String> {
             Ok(c) => c,
             Err(_) => continue,
         };
-        const CLASSES: &[&str] = &["SpringSynced", "SpringUnsynced", "SpringShared"];
+        const CLASSES: &[&str] = &["Engine.Synced", "Engine.Unsynced", "Engine.Shared"];
         for line in content.lines() {
             let trimmed = line.trim();
             for &class in CLASSES {
@@ -141,21 +141,21 @@ mod tests {
     fn shared(methods: &[&str]) -> HashMap<String, String> {
         methods
             .iter()
-            .map(|m| (m.to_string(), "SpringShared".to_string()))
+            .map(|m| (m.to_string(), "Engine.Shared".to_string()))
             .collect()
     }
 
     fn synced(methods: &[&str]) -> HashMap<String, String> {
         methods
             .iter()
-            .map(|m| (m.to_string(), "SpringSynced".to_string()))
+            .map(|m| (m.to_string(), "Engine.Synced".to_string()))
             .collect()
     }
 
     #[test]
     fn shared_call() {
         let (out, n) = transform("local x = Spring.GetGameFrame()", shared(&["GetGameFrame"]));
-        assert_eq!(out, "local x = SpringShared.GetGameFrame()");
+        assert_eq!(out, "local x = Engine.Shared.GetGameFrame()");
         assert_eq!(n, 1);
     }
 
@@ -165,14 +165,14 @@ mod tests {
             r#"Spring.CreateUnit("armcom", 0, 0, 0, 0, 0)"#,
             synced(&["CreateUnit"]),
         );
-        assert_eq!(out, r#"SpringSynced.CreateUnit("armcom", 0, 0, 0, 0, 0)"#);
+        assert_eq!(out, r#"Engine.Synced.CreateUnit("armcom", 0, 0, 0, 0, 0)"#);
         assert_eq!(n, 1);
     }
 
     #[test]
     fn var_reference() {
         let (out, n) = transform("local fn = Spring.Echo", shared(&["Echo"]));
-        assert_eq!(out, "local fn = SpringShared.Echo");
+        assert_eq!(out, "local fn = Engine.Shared.Echo");
         assert_eq!(n, 1);
     }
 
@@ -196,42 +196,42 @@ mod tests {
             "Spring.MoveCtrl.SetLimits(unitID, 0, 0)",
             synced(&["MoveCtrl"]),
         );
-        assert_eq!(out, "SpringSynced.MoveCtrl.SetLimits(unitID, 0, 0)");
+        assert_eq!(out, "Engine.Synced.MoveCtrl.SetLimits(unitID, 0, 0)");
         assert_eq!(n, 1);
     }
 
     #[test]
     fn multiple_in_one_file() {
         let mut mapping = HashMap::new();
-        mapping.insert("Echo".to_string(), "SpringShared".to_string());
-        mapping.insert("CreateUnit".to_string(), "SpringSynced".to_string());
+        mapping.insert("Echo".to_string(), "Engine.Shared".to_string());
+        mapping.insert("CreateUnit".to_string(), "Engine.Synced".to_string());
         let (out, n) = transform(
             "Spring.Echo(\"hi\")\nSpring.CreateUnit(\"a\", 0, 0, 0, 0, 0)",
             mapping,
         );
-        assert!(out.contains("SpringShared.Echo"));
-        assert!(out.contains("SpringSynced.CreateUnit"));
+        assert!(out.contains("Engine.Shared.Echo"));
+        assert!(out.contains("Engine.Synced.CreateUnit"));
         assert_eq!(n, 2);
     }
 
     fn unsynced(methods: &[&str]) -> HashMap<String, String> {
         methods
             .iter()
-            .map(|m| (m.to_string(), "SpringUnsynced".to_string()))
+            .map(|m| (m.to_string(), "Engine.Unsynced".to_string()))
             .collect()
     }
 
     #[test]
     fn unsynced_call() {
         let (out, n) = transform("Spring.SendCommands(cmd)", unsynced(&["SendCommands"]));
-        assert_eq!(out, "SpringUnsynced.SendCommands(cmd)");
+        assert_eq!(out, "Engine.Unsynced.SendCommands(cmd)");
         assert_eq!(n, 1);
     }
 
     #[test]
     fn preserves_trivia() {
         let (out, n) = transform("  Spring.GetGameFrame() -- get frame", shared(&["GetGameFrame"]));
-        assert_eq!(out, "  SpringShared.GetGameFrame() -- get frame");
+        assert_eq!(out, "  Engine.Shared.GetGameFrame() -- get frame");
         assert_eq!(n, 1);
     }
 }

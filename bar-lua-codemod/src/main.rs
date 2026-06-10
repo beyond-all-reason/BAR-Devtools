@@ -79,7 +79,7 @@ enum Commands {
         dry_run: bool,
     },
 
-    /// Replace Spring.X with SpringSynced.X or SpringShared.X based on API stubs
+    /// Replace Spring.X with Engine.Synced.X / Engine.Unsynced.X / Engine.Shared.X based on API stubs
     SpringSplit {
         /// Root directory to process
         #[arg(long, default_value = ".")]
