@@ -69,9 +69,9 @@ Deduplicates prereqs across transforms, cherry-picks all unique ones, then runs 
 
 ### Constraints
 
-1. **Prereq must be harmless on master.** `Utilities = Utilities` in `system.lua` captures `nil` on master but the real table after the codemod transforms `init.lua`.
+1. **Prereq must be harmless on master.** `BAR = BAR` in `system.lua` captures `nil` on master but the real namespace table after the codemod transforms `init.lua` (`BAR = BAR or {}` + `BAR.X = ...`).
 2. **Codemod must not clobber prereq.** Don't put patterns the codemod matches in prereq files.
-3. **No post-transform cruft.** If a workaround is needed (e.g. `_G.Utilities = _G.Spring.Utilities`), fix the codemod to handle it natively instead.
+3. **No post-transform cruft.** If a workaround is needed (e.g. `_G.BAR = _G.Spring`), fix the codemod to handle it natively instead.
 
 ### Existing prereqs
 
@@ -85,15 +85,15 @@ Deduplicates prereqs across transforms, cherry-picks all unique ones, then runs 
 
 ### Runtime: "attempt to index global 'X' (a nil value)"
 
-Widgets run in sandboxed environments via `setfenv` with `__index = System`. The `System` table is in `luaui/system.lua` / `luarules/system.lua`. If a codemod introduces a bare global not in `System`, widgets get `nil`.
+Widgets run in sandboxed environments via `setfenv` with `__index = System`. The `System` table is in `luaui/system.lua` / `luarules/system.lua`. If a codemod introduces a global not in `System`, widgets get `nil`.
 
-**Fix:** Add `X = X` to both `system.lua` files via a prereq branch.
+**Fix:** Add it to both `system.lua` files via a prereq branch. The detached BAR modules are exposed as a single `BAR = BAR` entry (the `BAR` namespace), not five bare globals.
 
 ### Sandbox execution order
 
 ```
-init.lua        -> sets globals (Utilities, I18N, etc.)
-barwidgets.lua  -> loads system.lua -> builds System table
+init.lua        -> sets BAR namespace (BAR.Utilities, BAR.I18N, etc.)
+barwidgets.lua  -> loads system.lua -> builds System table (incl. BAR)
                 -> setfenv(widget_chunk, widget) where widget.__index = System
 ```
 
@@ -221,9 +221,17 @@ BAR-side extensions (UnitScriptTable, ObjectRenderingTable) and temporary data t
 (ResourceData, TeamData, PlayerData, UnitWrapper).
 
 ### Category 12: I18N Type
-**Fix:** Ensure `types/I18N.lua` contains the `I18NModule` class definition (callable table
-with `translate`, `load`, `set`, `setLocale`, `getLocale`, `loadFile`, `unitName`,
-`setLanguage`, `languages` fields plus `@overload fun(key, data?): string`).
+The detached BAR modules live under the **`BAR` namespace**: `BAR.I18N`,
+`BAR.Utilities`, `BAR.Debug`, `BAR.Lava`, `BAR.GetModOptionsCopy`. They are
+**NOT** bare globals. Never strip the `BAR.` prefix — bare `I18N(...)`,
+`Utilities.X`, etc. are `undefined-global`. If a local variable shadows the
+name (e.g. `local I18N = state.I18N`, a string table), rename the **local** (to
+`i18nStrings` or similar); never touch the `BAR.I18N(...)` call sites.
+
+**Fix:** The `I18NModule` class lives in `types/BAR.lua` as the `I18N` field of
+the `BAR` class (callable table with `translate`, `load`, `set`, `setLocale`,
+`getLocale`, `loadFile`, `unitName`, `setLanguage`, `languages` plus
+`@overload fun(key, data?): string`). Call sites are `BAR.I18N(...)`.
 
 ### Category 13: Undefined Variables / Actual Bugs
 **Error:** `undefined-global` for lowercase variable names (`alpha`, `lastframeduration`)
@@ -1065,11 +1073,7 @@ that rarely fail (fonts, VBOs).
 | `types/Spring.lua` | BAR-side `UnitScriptTable`/`ObjectRenderingTable` extensions, temp data classes | `unit_script.lua`, `unitrendering.lua` |
 | `types/GameCMD.lua` | `GameCMD` class | `modules/customcommands.lua` |
 | `types/Game.lua` | `Game.Commands`, `Game.CustomCommands` | `init.lua` + `modules/commands.lua` |
-| `types/I18N.lua` | `I18NModule` | `modules/i18n/i18n.lua` (kikito) |
-| `types/Utilities.lua` | `Utilities` class | `common/springFunctions.lua` |
-| `types/Debug.lua` | `BARDebug` class | `common/springUtilities/debug.lua` |
-| `types/Lava.lua` | `Lava` class | `modules/lava.lua` |
-| `types/GetModOptionsCopy.lua` | `GetModOptionsCopy` function | `common/springOverrides.lua` |
+| `types/BAR.lua` | `BAR` namespace: `I18N` (`I18NModule`), `Utilities`, `Debug` (`BARDebug`), `Lava`, `GetModOptionsCopy` — all fields of the `BAR` class | `common/springFunctions.lua`, `modules/i18n/i18n.lua` (kikito), `common/springUtilities/debug.lua`, `modules/lava.lua`, `common/springOverrides.lua` |
 | `types/Gadget.lua` | `Gadget`, `gadget`, `GG` | Engine gadget handler |
 | `types/Widget.lua` | `Widget`, `widget`, `WG` | Engine widget handler |
 | `types/Addon.lua` | `Addon`, `AddonInfo`, `addon` | Engine addon base |

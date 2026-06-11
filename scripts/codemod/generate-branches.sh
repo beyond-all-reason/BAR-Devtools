@@ -129,7 +129,7 @@ enter_distrobox "$@"
 # Optional: run_*, describe_*, post_commit_*, generate_*_pr_body functions.
 
 # Branches cherry-picked onto every leaf and mig branch before any transform.
-PREFIX_BRANCHES=("fix_stylua")
+PREFIX_BRANCHES=("fix_stylua" "engine-builders-env")
 
 TRANSFORMS=("fmt" "bracket_to_dot" "rename_aliases" "detach_bar_modules" "i18n_kikito" "spring_split" "integration_tests" "busted_types")
 
@@ -208,8 +208,8 @@ detach_bar_modules_branch="mig-detach-bar-modules"
 detach_bar_modules_commit="gen(bar_codemod): detach-bar-modules"
 detach_bar_modules_pr="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7289"
 detach_bar_modules_prereq="detach-bar-modules-env"
-detach_bar_modules_summary='Moves BAR-added helpers off the `Spring` table back to bare globals — `Spring.I18N` → `I18N`, plus `Utilities`, `Debug`, `Lava`, and `GetModOptionsCopy` — since they aren'\''t engine API and otherwise break type-checking against the `Spring` stubs.'
-detach_bar_modules_description='The `detach-bar-modules-env` prereq exposes the detached modules to the widget/gadget sandbox (`luarules/system.lua`, `luaui/system.lua`), adds type stubs for them under `types/`, and lists them as globals in `.emmyrc.json` so EmmyLua resolves them as bare identifiers. Cherry-picked on top of `fmt` before the codemod runs.'
+detach_bar_modules_summary='Moves BAR-added helpers off the `Spring` table into a `BAR` namespace — `Spring.I18N` → `BAR.I18N`, plus `BAR.Utilities`, `BAR.Debug`, `BAR.Lava`, and `BAR.GetModOptionsCopy` — since they aren'\''t engine API and otherwise break type-checking against the `Spring` stubs.'
+detach_bar_modules_description='The `detach-bar-modules-env` prereq exposes `BAR` to the widget/gadget sandbox (`luarules/system.lua`, `luaui/system.lua`), bootstraps `BAR = BAR or {}` in `init.lua`/`springOverrides.lua` before the detached defs, adds the consolidated `types/BAR.lua` stub, and lists `BAR` as a global in `.emmyrc.json`. Cherry-picked on top of `fmt` before the codemod runs.'
 
 run_detach_bar_modules() {
     "$CODEMOD" detach-bar-modules --path "$BAR" --exclude common/luaUtilities
@@ -227,7 +227,10 @@ EOF
 spring_split_branch="mig-spring-split"
 spring_split_commit="gen(bar_codemod): spring-split"
 spring_split_pr="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7290"
-spring_split_prereq=""
+# spring-split-env carries the busted-VM Engine shim (spec_helper.lua). The
+# runtime Engine table is engine-provided (RecoilEngine LuaParser/Game::LoadDefs);
+# the shim only stands in for the no-engine test VM.
+spring_split_prereq="spring-split-env"
 spring_split_summary='Splits the monolithic `Spring` table into `Engine.Synced` / `Engine.Unsynced` / `Engine.Shared`, rewriting each `Spring.X` to the bucket that actually declares `X` per the generated API stubs — so synced/unsynced-only calls type-check in the right context.'
 spring_split_description='See [RecoilEngine#2799](https://github.com/beyond-all-reason/RecoilEngine/pull/2799) for the Engine.Synced/Engine.Unsynced/Engine.Shared type split on the engine side.'
 
@@ -235,13 +238,6 @@ run_spring_split() {
     local lib="$BAR/recoil-lua-library/library"
     [ -d "$lib" ] || lib="$BAR/recoil-lua-library/src"
     "$CODEMOD" spring-split --path "$BAR" --library "$lib" --exclude common/luaUtilities
-
-    sed -i '/^_G\.GG = /i\
-_G.Engine = _G.Engine or {}\
-_G.Engine.Synced = _G.Engine.Synced or _G.Spring\
-_G.Engine.Unsynced = _G.Engine.Unsynced or _G.Spring\
-_G.Engine.Shared = _G.Engine.Shared or _G.Spring\
-' "$BAR/spec/spec_helper.lua"
 }
 
 describe_spring_split() {
@@ -461,7 +457,7 @@ museum_description() {
         "gen(bar_codemod): rename-aliases")
             echo "deprecated Spring API aliases (GetMyTeamID → GetLocalTeamID, etc.)" ;;
         "gen(bar_codemod): detach-bar-modules")
-            echo "Spring.{I18N,Utilities,Debug,Lava,GetModOptionsCopy} → bare globals" ;;
+            echo "Spring.{I18N,Utilities,Debug,Lava,GetModOptionsCopy} → BAR.{…} namespace" ;;
         "gen(bar_codemod): spring-split")
             echo "Spring.X → Engine.Synced/Engine.Unsynced/Engine.Shared.X per @env" ;;
         "gen(bar_codemod): i18n-kikito")

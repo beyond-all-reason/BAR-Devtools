@@ -15,6 +15,10 @@ Stacked — merge bottom-up. Each PR's own diff is scoped to its layer; stack na
 
 > **Important:** Do not run `just bar::fmt-mig` until `fmt` has merged. Running it earlier reformats the entire codebase on your branch (~200k lines).
 
+<!-- GENERATED:BRANCH_TOPOLOGY -->
+
+<!-- GENERATED:MUSEUM_TABLE -->
+
 **For contributors — after `fmt` merges, update your open branches:**
 ```bash
 just bar::fmt-mig                       # transform your branch first
@@ -32,9 +36,6 @@ See the [BAR-Devtools README](https://github.com/beyond-all-reason/BAR-Devtools#
 - New PR gate: "Type Check" (`just bar::check`)
 - Replaced LuaLS/Sumneko with [EmmyLua](https://marketplace.visualstudio.com/items?itemName=tangzx.emmylua) (~100x faster). **Never use the Sumneko VS Code plugin.**
 
-<!-- GENERATED:BRANCH_TOPOLOGY -->
-
-<!-- GENERATED:MUSEUM_TABLE -->
 
 ## New developer commands
 

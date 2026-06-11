@@ -17,8 +17,9 @@ impl DetachBarModules {
     }
 
     /// Match `Spring.Module` (prefix = Spring) or `_G.Spring.Module`
-    /// (prefix = _G, first suffix = .Spring). In both cases, promote the
-    /// module name and drop the Spring segment.
+    /// (prefix = _G, first suffix = .Spring). In both cases, rename the
+    /// Spring segment to `BAR`, keeping the module name and everything after
+    /// it (`Spring.I18N.t()` → `BAR.I18N.t()`).
     fn try_rewrite(
         &mut self,
         prefix: &Prefix,
@@ -33,23 +34,22 @@ impl DetachBarModules {
             let Some(Suffix::Index(Index::Dot { name, .. })) = suffixes.first() else {
                 return None;
             };
-            let module_name = name.token().to_string();
-            if !self.modules.contains(&module_name) {
+            if !self.modules.contains(&name.token().to_string()) {
                 return None;
             }
             self.conversions += 1;
             let new_prefix = Prefix::Name(TokenReference::new(
                 token_ref.leading_trivia().cloned().collect(),
                 Token::new(TokenType::Identifier {
-                    identifier: module_name.as_str().into(),
+                    identifier: "BAR".into(),
                 }),
-                name.trailing_trivia().cloned().collect(),
+                token_ref.trailing_trivia().cloned().collect(),
             ));
-            return Some((new_prefix, suffixes[1..].to_vec()));
+            return Some((new_prefix, suffixes.to_vec()));
         }
 
         if prefix_name == "_G" && suffixes.len() >= 2 {
-            let Some(Suffix::Index(Index::Dot { name: spring_name, .. })) = suffixes.first()
+            let Some(Suffix::Index(Index::Dot { dot, name: spring_name, .. })) = suffixes.first()
             else {
                 return None;
             };
@@ -60,23 +60,22 @@ impl DetachBarModules {
             else {
                 return None;
             };
-            let module_name = module_name_tok.token().to_string();
-            if !self.modules.contains(&module_name) {
+            if !self.modules.contains(&module_name_tok.token().to_string()) {
                 return None;
             }
             self.conversions += 1;
             let new_first = Suffix::Index(Index::Dot {
-                dot: TokenReference::symbol(".").expect("'.' is a valid Lua symbol"),
+                dot: dot.clone(),
                 name: TokenReference::new(
-                    vec![],
+                    spring_name.leading_trivia().cloned().collect(),
                     Token::new(TokenType::Identifier {
-                        identifier: module_name.as_str().into(),
+                        identifier: "BAR".into(),
                     }),
-                    module_name_tok.trailing_trivia().cloned().collect(),
+                    spring_name.trailing_trivia().cloned().collect(),
                 ),
             });
             let mut remaining = vec![new_first];
-            remaining.extend_from_slice(&suffixes[2..]);
+            remaining.extend_from_slice(&suffixes[1..]);
             return Some((prefix.clone(), remaining));
         }
 
@@ -133,21 +132,21 @@ mod tests {
     #[test]
     fn simple_call() {
         let (out, n) = transform("Spring.I18N.translate(key)");
-        assert_eq!(out, "I18N.translate(key)");
+        assert_eq!(out, "BAR.I18N.translate(key)");
         assert_eq!(n, 1);
     }
 
     #[test]
     fn method_access() {
         let (out, n) = transform("local x = Spring.Utilities.Round(1.5)");
-        assert_eq!(out, "local x = Utilities.Round(1.5)");
+        assert_eq!(out, "local x = BAR.Utilities.Round(1.5)");
         assert_eq!(n, 1);
     }
 
     #[test]
     fn var_reference() {
         let (out, n) = transform("local u = Spring.Utilities");
-        assert_eq!(out, "local u = Utilities");
+        assert_eq!(out, "local u = BAR.Utilities");
         assert_eq!(n, 1);
     }
 
@@ -168,36 +167,36 @@ mod tests {
     #[test]
     fn preserves_trivia() {
         let (out, n) = transform("  Spring.Debug.log(msg) -- log it");
-        assert_eq!(out, "  Debug.log(msg) -- log it");
+        assert_eq!(out, "  BAR.Debug.log(msg) -- log it");
         assert_eq!(n, 1);
     }
 
     #[test]
     fn assignment_declaration() {
         let (out, n) = transform("Spring.I18N = Spring.I18N or VFS.Include('i18n.lua')");
-        assert_eq!(out, "I18N = I18N or VFS.Include('i18n.lua')");
+        assert_eq!(out, "BAR.I18N = BAR.I18N or VFS.Include('i18n.lua')");
         assert_eq!(n, 2);
     }
 
     #[test]
     fn multiple_in_one_file() {
         let (out, n) = transform("Spring.I18N.t('x')\nSpring.Lava.isActive()");
-        assert!(out.contains("I18N.t('x')"));
-        assert!(out.contains("Lava.isActive()"));
+        assert!(out.contains("BAR.I18N.t('x')"));
+        assert!(out.contains("BAR.Lava.isActive()"));
         assert_eq!(n, 2);
     }
 
     #[test]
     fn g_spring_module_assignment() {
         let (out, n) = transform("_G.Spring.Utilities = _G.Spring.Utilities or {}");
-        assert_eq!(out, "_G.Utilities = _G.Utilities or {}");
+        assert_eq!(out, "_G.BAR.Utilities = _G.BAR.Utilities or {}");
         assert_eq!(n, 2);
     }
 
     #[test]
     fn g_spring_module_call() {
         let (out, n) = transform("_G.Spring.I18N('key')");
-        assert_eq!(out, "_G.I18N('key')");
+        assert_eq!(out, "_G.BAR.I18N('key')");
         assert_eq!(n, 1);
     }
 
@@ -211,7 +210,7 @@ mod tests {
     #[test]
     fn g_spring_deep_access() {
         let (out, n) = transform("_G.Spring.Utilities.Gametype.IsFFA()");
-        assert_eq!(out, "_G.Utilities.Gametype.IsFFA()");
+        assert_eq!(out, "_G.BAR.Utilities.Gametype.IsFFA()");
         assert_eq!(n, 1);
     }
 }

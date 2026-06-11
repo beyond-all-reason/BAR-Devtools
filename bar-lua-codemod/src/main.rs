@@ -49,7 +49,7 @@ enum Commands {
         dry_run: bool,
     },
 
-    /// Detach BAR modules from the Spring table (Spring.I18N -> I18N, etc.)
+    /// Detach BAR modules from the Spring table into the BAR namespace (Spring.I18N -> BAR.I18N, etc.)
     DetachBarModules {
         /// Root directory to process
         #[arg(long, default_value = ".")]

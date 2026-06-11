@@ -80,9 +80,12 @@ impl VisitorMut for I18nCallSites {
 
         // Identify the call-suffix index for a direct i18n translate invocation.
         // Spring.I18N(...)  → suffixes[0]=.I18N  suffixes[1]=(...)  → call_idx=1
+        // BAR.I18N(...)     → suffixes[0]=.I18N  suffixes[1]=(...)  → call_idx=1
         // I18N(...)         → suffixes[0]=(...)                     → call_idx=0
+        // BAR.I18N appears on the mig rollup, where detach-bar-modules runs
+        // before this transform; Spring.I18N on the standalone mig-i18n leaf.
         let call_idx;
-        if prefix_name == "Spring" {
+        if prefix_name == "Spring" || prefix_name == "BAR" {
             if suffixes.len() < 2 {
                 return call;
             }
@@ -226,6 +229,14 @@ mod tests {
     fn bare_i18n_concat() {
         let (out, n) = transform("local x = I18N('units.names.' .. name)");
         assert_eq!(out, "local x = I18N.unitName(name)");
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn bar_namespaced_i18n_concat() {
+        // mig rollup: detach-bar-modules has already turned Spring.I18N into BAR.I18N
+        let (out, n) = transform("local x = BAR.I18N('units.names.' .. name)");
+        assert_eq!(out, "local x = BAR.I18N.unitName(name)");
         assert_eq!(n, 1);
     }
 
