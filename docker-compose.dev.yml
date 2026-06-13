@@ -89,6 +89,12 @@ services:
       dockerfile: ../../../docker/recoil-docs.Dockerfile
     platform: linux/amd64
     profiles: ["docs"]
+    # Match the host UID/GID so files the extractor writes into the
+    # /recoil mount (e.g. rts/Lua/library/generated/) are host-owned.
+    # Without this the container runs as root, leaves root-owned files
+    # in the host's RecoilEngine checkout, and host-side cleanup
+    # (git clean, rm, just lua::reset) fails with EACCES.
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     volumes:
       - ./RecoilEngine:/recoil:z
     working_dir: /recoil/doc/site
