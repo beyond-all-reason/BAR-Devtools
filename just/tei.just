@@ -39,7 +39,6 @@ mix *args: require-setup
     source "$DEVTOOLS_DIR/scripts/common.sh"
     require_host
     {{COMPOSE}} run --rm --service-ports -e MIX_ENV=dev --entrypoint "" \
-        -v {{TEISERVER_DIR}}/:/app/:z \
         teiserver mix {{args}}
 
 
@@ -50,7 +49,6 @@ dev-shell: require-setup
     source "$DEVTOOLS_DIR/scripts/common.sh"
     require_host
     {{COMPOSE}} run --rm --service-ports -e MIX_ENV=dev --entrypoint "" \
-        -v {{TEISERVER_DIR}}/:/app/:z \
         teiserver bash -c "echo 'Entering teiserver dev shell (MIX_ENV=dev). Type exit to return.' && exec bash"
 
 # Drop into an interactive test shell for teiserver
