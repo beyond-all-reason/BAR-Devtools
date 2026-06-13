@@ -388,18 +388,20 @@ cmd_install_deps() {
     info "Missing (via package manager): ${apt_missing[*]}"
     info "Running: ${install_cmd}${packages}"
     echo ""
-    $install_cmd $packages
+    # set -e is off here (LHS of `||`); fresh-WSL apt lists are stale, so refresh and hard-fail explicitly.
+    [ "$distro" = "debian" ] && { sudo apt-get update || { err "apt-get update failed"; return 1; } ; }
+    $install_cmd $packages || { err "Package install failed: ${apt_missing[*]}"; return 1; }
     echo ""
   fi
 
   if [ "$distro" = "debian" ]; then
-    install_distrobox_upstream
+    install_distrobox_upstream || return 1
     echo ""
   fi
-  install_compose_upstream
+  install_compose_upstream || return 1
   echo ""
 
-  ensure_podman_socket
+  ensure_podman_socket || return 1
   echo ""
 
   ok "Dependencies installed successfully."
