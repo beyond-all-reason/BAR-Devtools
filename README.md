@@ -1,8 +1,6 @@
 # BAR Devtools
 
-Local development environment for [Beyond All Reason](https://www.beyondallreason.info/) -- spins up **Teiserver** (lobby server), **PostgreSQL**, **SPADS** (autohost), and **bar-lobby** (game client) with a single command.
-
-Everything server-side runs in Docker. The game client runs natively.
+Shared development environment for [Beyond All Reason](https://www.beyondallreason.info/) — game code (Lua), engine (C++), lobby server (Elixir), and autohost (Perl) all from one repo.
 
 ## Quick Start
 
@@ -157,6 +155,14 @@ just bar::lx-shell      # interactive lx shell for package work
                         #   (`lx add <pkg>`, `lx sync`, `lx install`, etc.)
 ```
 
+> **⚠️ Merge conflicts with master?** The project ships deterministic code transforms (formatting, API renames, Spring split) that can be replayed onto any branch. Transform your branch first, then merge:
+> ```bash
+> just bar::fmt-mig                       # transform your branch first
+> git commit -am "apply code transforms"  # squashed away when PR merges
+> git merge origin/master                 # conflicts are now real conflicts only
+> ```
+> This is idempotent — safe to run multiple times. Includes `bar::fmt`, so no need to run it separately.
+
 ### Teiserver development
 
 Tests run in a separate container with `MIX_ENV=test`, so they work whether or not `services::up` is running. The test database is independent from the dev database.
@@ -236,6 +242,7 @@ just services::down             # stop everything
 just services::logs teiserver   # tail logs
 just services::shell teiserver  # open bash inside the running container
 ```
+The SPADS bot account (`spadsbot` / `password`) is created automatically during Teiserver init.
 
 ## Requirements
 
@@ -299,32 +306,15 @@ This runs a read-only check of your system dependencies, environment, ports, rep
 
 **Port 5432/5433 conflict with host PostgreSQL:**
 Either stop your local PostgreSQL (`sudo systemctl stop postgresql`) or change the port:
+**Port conflict with host PostgreSQL:**
 ```bash
 BAR_POSTGRES_PORT=5434 just services::up
 ```
 
-**Teiserver takes forever on first run:**
-The initial database seeding includes generating fake data. Follow progress with:
-```bash
-just services::logs teiserver
-```
+**Teiserver takes forever on first run:** Initial DB seeding generates fake data. Follow progress with `just services::logs teiserver`.
 
-**SPADS fails with "No Spring map/mod found":**
-Game data download may have failed. Check logs and retry:
-```bash
-just services::logs spads
-just services::down
-just services::up spads
-```
+**SPADS "No Spring map/mod found":** Game data download may have failed. `just services::down && just services::up spads`.
 
-**Docker permission denied:**
-```bash
-sudo usermod -aG docker $USER
-# Then log out and back in
-```
+**Docker permission denied:** `sudo usermod -aG docker $USER` then log out and back in.
 
-**Nuclear option -- start completely fresh:**
-```bash
-just services::reset
-just services::up
-```
+**Nuclear option:** `just services::reset && just services::up`

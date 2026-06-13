@@ -5,6 +5,11 @@ COMPOSE_FILE        := DEVTOOLS_DIR / "docker-compose.dev.yml"
 COMPOSE             := "podman compose -f " + COMPOSE_FILE
 BAR_DIR             := DEVTOOLS_DIR / "Beyond-All-Reason"
 INTEGRATION_COMPOSE := "podman compose -f " + BAR_DIR / "tools" / "headless_testing" / "docker-compose.yml"
+CODEMOD_DIR         := DEVTOOLS_DIR / "bar-lua-codemod"
+CODEMOD_BIN         := CODEMOD_DIR / "target" / "release" / "bar-lua-codemod"
+# Batch check uses `emmylua_check` (Rust EmmyLua analyzer), baked into the dev
+# container image. `emmylua_ls` is LSP-only (no --check) and lives on the host
+# for editor integration — see `just setup::editor`.
 
 [private]
 require-bar:
@@ -115,15 +120,35 @@ log *TAIL_FLAGS:
 logs *TAIL_FLAGS:
     @just bar::log {{TAIL_FLAGS}}
 
-# Type-check BAR Lua code (EmmyLua analyzer CLI)
-check *args: require-bar require-emmylua-check
+# Type-check BAR Lua code (EmmyLua analyzer CLI — `-c .emmyrc.json` avoids LuaLS-only keys in `.luarc.json`)
+check *args: require-bar
     #!/usr/bin/env bash
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
+    enter_distrobox
     step "Running emmylua_check (EmmyLua analyzer)..."
     cd "$BAR_DIR"
     emmylua_check -c .emmyrc.json . {{args}}
     ok "Type check complete"
+
+# Type-check but only surface errors — warnings/hints dropped. Exits 0 iff no errors
+# (emmylua_check itself exits non-zero on any diagnostic, so we re-derive exit code from the error count).
+check-errors: require-bar
+    #!/usr/bin/env bash
+    set -uo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    enter_distrobox
+    step "Running emmylua_check (errors only)..."
+    cd "$BAR_DIR"
+    json="$(emmylua_check -c .emmyrc.json -f json . 2>/dev/null || true)"
+    printf '%s\n' "$json" | jq -r '.[] | . as $f | .diagnostics[] | select(.severity == 1) |
+        "\($f.file):\(.range.start.line + 1):\(.range.start.character + 1): \(.code): \(.message)"'
+    count="$(printf '%s\n' "$json" | jq '[.[] | .diagnostics[] | select(.severity == 1)] | length')"
+    if [[ "$count" -gt 0 ]]; then
+        err "$count error(s)"
+        exit 1
+    fi
+    ok "No errors"
 
 # Lint BAR Lua code (luacheck via lux)
 lint *args: require-bar
@@ -216,6 +241,97 @@ integrations *args: require-bar
 
 # Run all BAR tests (unit + integrations)
 test: units integrations
+
+# Build bar-lua-codemod binary
+codemod-build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    step "Building bar-lua-codemod..."
+    bash "$DEVTOOLS_DIR/scripts/codemod-cargo.sh" build --release
+    ok "Built: {{CODEMOD_BIN}}"
+
+# Run bar-lua-codemod unit tests
+codemod-test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    step "Testing bar-lua-codemod..."
+    bash "$DEVTOOLS_DIR/scripts/codemod-cargo.sh" test
+    ok "All tests passed"
+
+[private]
+require-codemod:
+    #!/usr/bin/env bash
+    [ -x "{{CODEMOD_BIN}}" ] && exit 0
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    step "bar-lua-codemod not found, building..."
+    bash "$DEVTOOLS_DIR/scripts/codemod-cargo.sh" build --release
+    ok "Built bar-lua-codemod"
+
+# Run codemod transforms + stylua (contributors run after rebasing)
+fmt-mig: require-bar require-codemod
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    enter_distrobox
+    step "bracket-to-dot transform..."
+    "{{CODEMOD_BIN}}" bracket-to-dot --path "$BAR_DIR" --exclude common/luaUtilities
+    step "rename-aliases transform..."
+    "{{CODEMOD_BIN}}" rename-aliases --path "$BAR_DIR" --exclude common/luaUtilities
+    step "detach-bar-modules transform..."
+    "{{CODEMOD_BIN}}" detach-bar-modules --path "$BAR_DIR" --exclude common/luaUtilities
+    step "spring-split transform..."
+    "{{CODEMOD_BIN}}" spring-split --path "$BAR_DIR" --library "$BAR_DIR/recoil-lua-library/src" --exclude common/luaUtilities
+    step "stylua..."
+    (cd "$BAR_DIR" && lx --lua-version 5.1 exec stylua .)
+    ok "fmt-mig complete"
+
+[private]
+require-library:
+    just lua::library
+
+# $CREDENTIALS_RUNNER is an opaque command prefix that loads secrets into
+# the environment of whatever it wraps. When set, fmt-mig-generate runs
+# generate-branches.sh through it so subprocesses (notably the parallel
+# `claude --print` workers spawned by scripts/codemod/llm-type-triage.sh) inherit
+# the loaded credentials. Without this, the workers would run with the
+# credential-less env that just/bash inherits and fail at auth.
+#
+# Write the prefix however your secrets store wants. Tilde expansion is
+# applied. Examples:
+#
+#   # 1Password CLI
+#   CREDENTIALS_RUNNER="op run --env-file=~/code/ai.env.op --"
+#
+#   # Bitwarden CLI
+#   CREDENTIALS_RUNNER="bw run --envfile ~/secrets/ai.env --"
+#
+#   # direnv loader (treats first arg as a directory whose .envrc to apply)
+#   CREDENTIALS_RUNNER="direnv exec ~/code/secrets"
+#
+#   # raw env injection from a sourceable .env-style file
+#   CREDENTIALS_RUNNER="env $(grep -v '^#' ~/.config/anthropic/key.env | xargs)"
+#
+# When unset, the script runs unwrapped — fine for non-AI invocations
+# (e.g. `--push` only) where no subprocess actually needs credentials.
+
+# Regenerate fmt, mig-*, and mig branches from origin/master (uses $CREDENTIALS_RUNNER for AI auth)
+fmt-mig-generate *args: require-bar require-codemod require-library
+    #!/usr/bin/env bash
+    set -euo pipefail
+    script="$DEVTOOLS_DIR/scripts/codemod/generate-branches.sh"
+    if [[ -n "${CREDENTIALS_RUNNER:-}" ]]; then
+        # Expand ~ in the prefix (most secrets-wrapper tools don't expand
+        # it themselves when invoked through a non-interactive shell).
+        expanded="${CREDENTIALS_RUNNER//\~/$HOME}"
+        echo "[info] wrapping fmt-mig-generate with: $expanded" >&2
+        # eval re-parses the prefix so multi-token wrappers like
+        # `op run --env-file=path --` keep their structure when prepended.
+        eval "exec $expanded bash \"\$script\" {{args}}"
+    fi
+    exec bash "$script" {{args}}
 
 # Install git pre-commit hook in the BAR repo
 setup-hooks:

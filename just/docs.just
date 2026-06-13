@@ -13,7 +13,7 @@ generate:
     require_host
     {{COMPOSE}} run --rm recoil-docs lua_pages
 
-# Generate everything then start Hugo dev server
+# Extract Lua library locally (contexts branch), regen pages, start Hugo dev server.
 server:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -21,7 +21,7 @@ server:
     require_host
     {{COMPOSE}} run --rm --service-ports recoil-docs server_full -- --bind 0.0.0.0
 
-# Start Hugo dev server without regenerating
+# Start Hugo dev server without regenerating anything
 server-only:
     #!/usr/bin/env bash
     set -euo pipefail
