@@ -95,6 +95,71 @@ check_doctor_wsl() {
 }
 
 
+check_doctor_flatpak() {
+  if ! command -v flatpak &>/dev/null; then
+    _pass "flatpak not installed"
+    echo ""
+    return
+  fi
+
+  if ! flatpak info info.beyondallreason.bar &>/dev/null; then
+    _pass "flatpak installed, BAR not installed via flatpak"
+    echo ""
+    return
+  fi
+
+  # Flatpak is installed and BAR is installed via it
+  local ver
+  ver="$(flatpak --version 2>/dev/null || echo "unknown")"
+  _pass "$ver, info.beyondallreason.bar installed"
+
+  # Flatpak data dir where symlinks would sit
+  local flatpak_data_dir="$HOME/.var/app/info.beyondallreason.bar/data"
+  [ -d "$flatpak_data_dir" ] || {
+    echo ""
+    return
+  }
+
+  # Check each devtools symlink for flatpak exposure
+  local linked_outside=0
+  local -A link_map=(
+    [bar]="$flatpak_data_dir/games/Beyond-All-Reason.sdd"
+    [chobby]="$flatpak_data_dir/games/BYAR-Chobby.sdd"
+    [engine]="$flatpak_data_dir/engine/local-build"
+  )
+  local name link_path target
+  for name in bar chobby engine; do
+    link_path="${link_map[$name]}"
+    if [ -L "$link_path" ]; then
+      target="$(readlink "$link_path")"
+      case "$target" in
+        "$flatpak_data_dir"/*|"$HOME/.var/app/info.beyondallreason.bar"/*)
+          : ;;
+        *)
+          if [ "$linked_outside" -eq 0 ]; then
+            _warn "$name symlink target is outside Flatpak sandbox"
+            info "  $link_path -> $target"
+            linked_outside=1
+          else
+            info "  $name -> $target (also outside)"
+          fi
+          ;;
+      esac
+    fi
+  done
+
+  if [ "$linked_outside" -gt 0 ]; then
+    echo ""
+    warn "The Flatpak sandbox blocks the Spring engine from following symlinks"
+    warn "into folders it hasn't been granted access to."
+    warn "Please grant access to these folders with:"
+    warn "  flatpak override --user info.beyondallreason.bar --filesystem=$DEVTOOLS_DIR"
+  fi
+
+  echo ""
+}
+
+
 check_doctor_ports() {
   echo -e "${BOLD}Ports${NC}"
 
@@ -308,6 +373,7 @@ cmd_doctor() {
   check_doctor_deps
   check_doctor_env
   check_doctor_wsl
+  check_doctor_flatpak
   check_doctor_modules
   check_doctor_ports
   check_doctor_repos
