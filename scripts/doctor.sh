@@ -108,43 +108,73 @@ check_doctor_flatpak() {
     return
   fi
 
-  # Flatpak is installed and BAR is installed via it
   local ver
   ver="$(flatpak --version 2>/dev/null || echo "unknown")"
   _pass "$ver, info.beyondallreason.bar installed"
 
-  # Flatpak data dir where symlinks would sit
+  # Flatpak data dir where devtools symlinks would sit
   local flatpak_data_dir="$HOME/.var/app/info.beyondallreason.bar/data"
   [ -d "$flatpak_data_dir" ] || {
     echo ""
     return
   }
 
-  # Check each devtools symlink for flatpak exposure
+  # Collect permitted filesystem paths from Flatpak permissions (merged).
+  # Extract the line: filesystems=path:flag;path;path:ro;...
+  # then split on semicolons and strip trailing access-mode flags (:create, :ro, etc).
+  local -a permitted=("$flatpak_data_dir")
+  local perms_line
+  perms_line="$(flatpak info --show-permissions info.beyondallreason.bar 2>/dev/null | sed -n 's/^filesystems=//p')"
+  if [ -n "$perms_line" ]; then
+    local IFS=';'
+    local -a entries=($perms_line)
+    local e stripped
+    for e in "${entries[@]}"; do
+      [ -z "$e" ] && continue
+      # Strip access-mode flag after trailing colon
+      stripped="${e%:*}"
+      # Resolve tilde for ~/ paths and store as-is for absolute paths
+      case "$stripped" in
+        "~"/*) stripped="$HOME/${stripped#~/}" ;;
+        "~")   stripped="$HOME" ;;
+      esac
+      permitted+=("$stripped")
+    done
+  fi
+
+  # Check each devtools symlink: is its target inside a permitted path?
   local linked_outside=0
   local -A link_map=(
     [bar]="$flatpak_data_dir/games/Beyond-All-Reason.sdd"
     [chobby]="$flatpak_data_dir/games/BYAR-Chobby.sdd"
     [engine]="$flatpak_data_dir/engine/local-build"
   )
-  local name link_path target
+  local name link_path target perm
   for name in bar chobby engine; do
     link_path="${link_map[$name]}"
-    if [ -L "$link_path" ]; then
-      target="$(readlink "$link_path")"
+    [ -L "$link_path" ] || continue
+
+    target="$(readlink "$link_path")"
+
+    # No warning needed if the symlink target is in a flatpak-permitted path
+    local covered=0
+    for perm in "${permitted[@]}"; do
       case "$target" in
-        "$flatpak_data_dir"/*|"$HOME/.var/app/info.beyondallreason.bar"/*)
-          : ;;
-        *)
-          if [ "$linked_outside" -eq 0 ]; then
-            _warn "$name symlink target is outside Flatpak sandbox"
-            info "  $link_path -> $target"
-            linked_outside=1
-          else
-            info "  $name -> $target (also outside)"
-          fi
+        "$perm"/*|"$perm")
+          covered=1
+          break
           ;;
       esac
+    done
+
+    [ "$covered" -eq 1 ] && continue
+
+    if [ "$linked_outside" -eq 0 ]; then
+      _warn "$name symlink target is outside Flatpak sandbox"
+      info "  $link_path -> $target"
+      linked_outside=1
+    else
+      info "  $name -> $target (also outside)"
     fi
   done
 
