@@ -313,7 +313,7 @@ install_compose_upstream() {
   local symlink="/usr/local/bin/docker-compose"
   local url="https://github.com/docker/compose/releases/download/v${pin_version}/docker-compose-linux-${arch}"
 
-  info "Installing docker-compose v${pin_version} from upstream releases (apt's is ${current:-missing})..."
+  info "Installing docker-compose v${pin_version} from upstream releases (current: ${current:-missing})..."
   sudo mkdir -p "$plugin_dir"
   sudo curl -fsSL "$url" -o "$target"
   sudo chmod +x "$target"
@@ -340,7 +340,10 @@ cmd_install_deps() {
     exit 1
   fi
 
-  info "Detected distro: ${BOLD}${distro}${NC}"
+  local ostree=0
+  _is_ostree && ostree=1
+
+  info "Detected distro: ${BOLD}${distro}${NC}$([ "$ostree" -eq 1 ] && echo " (rpm-ostree)")"
   echo ""
 
   local missing=()
@@ -355,20 +358,30 @@ cmd_install_deps() {
   if ! command -v curl &>/dev/null; then
     missing+=("curl")
   fi
-  # Debian gets compose from install_compose_upstream below, never from apt.
-  if [ "$distro" != "debian" ] && ! command -v docker-compose &>/dev/null; then
+  # Debian and rpm-ostree get compose from install_compose_upstream below, never from the package manager.
+  if [ "$distro" != "debian" ] && [ "$ostree" -eq 0 ] && ! command -v docker-compose &>/dev/null; then
     missing+=("container-compose")
   fi
   if ! command -v distrobox &>/dev/null; then
     missing+=("distrobox")
   fi
 
-  # Debian gets distrobox from upstream; drop it from the apt list.
+  # Debian and rpm-ostree get distrobox from upstream; drop it from the package-manager list.
   local apt_missing=()
   for tool in "${missing[@]}"; do
-    if [ "$distro" = "debian" ] && [ "$tool" = "distrobox" ]; then continue; fi
+    if [ "$tool" = "distrobox" ] && { [ "$distro" = "debian" ] || [ "$ostree" -eq 1 ]; }; then continue; fi
     apt_missing+=("$tool")
   done
+
+  # rpm-ostree's package layer is read-only at runtime; base-layer tools must be layered manually.
+  if [ "$ostree" -eq 1 ] && [ "${#apt_missing[@]}" -gt 0 ]; then
+    local pkgs=""
+    for dep in "${apt_missing[@]}"; do pkgs+=" $(pkg_name "$dep")"; done
+    err "rpm-ostree system: cannot install${pkgs} at runtime."
+    info "  Layer them, then reboot:  rpm-ostree install${pkgs}"
+    info "  (compose and distrobox are handled automatically and don't need this.)"
+    return 1
+  fi
 
   if [ "${#apt_missing[@]}" -gt 0 ]; then
     local packages=""
@@ -385,7 +398,7 @@ cmd_install_deps() {
     echo ""
   fi
 
-  if [ "$distro" = "debian" ]; then
+  if [ "$distro" = "debian" ] || [ "$ostree" -eq 1 ]; then
     install_distrobox_upstream || return 1
     echo ""
   fi
