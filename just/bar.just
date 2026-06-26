@@ -28,21 +28,9 @@ launch *FLAGS:
 stop:
     @BAR_LAUNCH_MODE=stop bash "$DEVTOOLS_DIR/scripts/launch.sh"
 
-# Switch Chobby to byar-dev so the local .sdd loads (idempotent)
+# Switch Chobby to byar-dev so the local .sdd loads (alias for chobby::dev-mode on)
 dev-mode:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    source "$DEVTOOLS_DIR/scripts/common.sh"
-    source "$DEVTOOLS_DIR/scripts/setup.sh"
-    game_dir="${BAR_DATA_DIR:-$(detect_game_dir 2>/dev/null || true)}"
-    if [ -z "$game_dir" ]; then
-      err "Could not resolve BAR data dir. Set BAR_DATA_DIR or run 'just setup::init' first."
-      exit 1
-    fi
-    write_env_key BAR_CHOBBY_CHANNEL "byar-dev"
-    apply_chobby_channel
-    ensure_devmode_marker "$game_dir"
-    info "Relaunch Chobby (or run 'just bar::launch') to pick up the change."
+    @just chobby::dev-mode on
 
 # Build the Windows venv if missing, then regenerate the launcher shim (WSL2-only)
 regen-shim:

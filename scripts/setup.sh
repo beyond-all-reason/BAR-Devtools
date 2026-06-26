@@ -1319,7 +1319,6 @@ cmd_init() {
   game_dir="$(detect_game_dir 2>/dev/null)" || true
   do_link="$(read_env_key BAR_LINK_ON_BUILD)"
 
-  if module_relevant chobby_channel; then ensure_module_by_name chobby_channel || true; fi
   if module_relevant springsettings; then ensure_module_by_name springsettings || true; fi
   ensure_module_by_name ssh             || true
   # editor's apply is deferred to step 8 -- distrobox-export needs the container from step 2.

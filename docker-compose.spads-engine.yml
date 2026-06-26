@@ -1,0 +1,11 @@
+# Overlay: host the SPADS autohost on the local RecoilEngine build (the same
+# engine `bar::launch` injects as --engine local-build) instead of the installer's
+# auto-managed published engine. Apply with an extra `-f` only when you've built
+# RecoilEngine, so contributors without a build are unaffected:
+#   podman compose -f docker-compose.dev.yml -f docker-compose.spads-engine.yml --profile spads up -d spads
+services:
+  spads:
+    environment:
+      SPADS_LOCAL_ENGINE: "1"
+    volumes:
+      - ./RecoilEngine/build-amd64-linux/install:/local-engine:ro,z

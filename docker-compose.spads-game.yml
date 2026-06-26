@@ -1,0 +1,16 @@
+# Overlay: host the dev's local Beyond-All-Reason checkout (archive name
+# "Beyond All Reason $VERSION") instead of the published byar:test, so the autohost
+# serves the same game -- and the same game modes -- as a byar-dev client. Both
+# sides load this identical .sdd, so the $VERSION archive name lines up and joins
+# succeed. Applied automatically by spads_compose() when the repo is cloned:
+#   podman compose -f docker-compose.dev.yml -f docker-compose.spads-game.yml --profile spads up -d spads
+services:
+  spads:
+    # Read the (often symlinked, external) checkout without SELinux relabel: :z
+    # would recursively relabel/mutate the target and fails when it isn't relabelable.
+    security_opt:
+      - label=disable
+    environment:
+      SPADS_LOCAL_GAME: "1"
+    volumes:
+      - ./Beyond-All-Reason:/opt/spads/var/spring/data/games/Beyond-All-Reason.sdd:ro

@@ -11,7 +11,6 @@ export REPOS_CONF REPOS_LOCAL
 source "$DEVTOOLS_DIR/scripts/common.sh"
 source "$DEVTOOLS_DIR/scripts/setup.sh"
 source "$DEVTOOLS_DIR/scripts/repos.sh"
-source "$DEVTOOLS_DIR/scripts/chobby-channel.sh"
 
 require_host
 
@@ -37,64 +36,6 @@ preflight_symlinks() {
   info "(continuing; bar-launch will still work for non-local sources like 'rapid://...:test')"
 }
 
-# Only relevant when chobby drives game selection and a local BAR.sdd exists.
-preflight_chobby_channel() {
-  local data_dir="$1"; shift
-  [ -n "$data_dir" ] || return 0
-
-  if _has_flag --play "$@"; then
-    local play_val
-    play_val="$(_flag_value --play "$@")"
-    [ "$play_val" = "chobby" ] || return 0
-  fi
-
-  if [ ! -L "$data_dir/games/Beyond-All-Reason.sdd" ] && \
-     [ ! -d "$data_dir/games/Beyond-All-Reason.sdd" ]; then
-    return 0
-  fi
-
-  local desired="${BAR_CHOBBY_CHANNEL:-}"
-  if [ -z "$desired" ]; then
-    desired="$(read_env_key BAR_CHOBBY_CHANNEL 2>/dev/null || true)"
-  fi
-
-  local cfg_current widget_current
-  cfg_current="$(_chobby_game_field "$data_dir/chobby_config.json")"
-  widget_current="$(_chobby_widget_game_field "$data_dir")"
-  # IGL_data.lua's saved value overrides chobby_config.json's default.
-  local effective="${widget_current:-$cfg_current}"
-
-  if [ "$desired" = "byar-dev" ]; then
-    if [ "$cfg_current" = "byar-dev" ] && \
-       { [ -z "$widget_current" ] || [ "$widget_current" = "byar-dev" ]; }; then
-      return 0
-    fi
-
-    warn "Chobby channel drifted from byar-dev:"
-    warn "  chobby_config.json:   ${cfg_current:-<unset>}"
-    warn "  IGL_data.lua widget:  ${widget_current:-<unset>}  <-- this is what the dropdown will use"
-    warn "Your local Beyond-All-Reason.sdd edits will NOT load until this is fixed."
-
-    if [ ! -t 0 ]; then
-      warn "(non-interactive shell -- not prompting; run 'just bar::dev-mode' to fix)"
-      return 0
-    fi
-    local ans
-    read -rp "Reset Chobby channel to dev mode (byar-dev) now? [Y/n] " ans
-    if [ -z "$ans" ] || [[ "$ans" =~ ^[Yy] ]]; then
-      set_chobby_channel "$data_dir" "byar-dev"
-      ok "Chobby channel reset to byar-dev"
-    else
-      warn "Continuing without fix; Chobby will load the rapid build for this run."
-    fi
-    return 0
-  fi
-
-  warn "bar::launch found a local Beyond-All-Reason.sdd but Chobby channel = '${effective:-<unset>}', NOT byar-dev."
-  warn "Your local edits will NOT load and dev-mode is OFF."
-  warn "Fix: just bar::dev-mode   (or set BAR_CHOBBY_CHANNEL=byar-dev in .env)"
-}
-
 run_linux() {
   local repo_path
   repo_path="$(bar_launch_repo_path)"
@@ -113,7 +54,6 @@ run_linux() {
   game_dir="$(detect_game_dir 2>/dev/null)" || true
   if [ -n "$game_dir" ]; then
     ensure_devmode_marker "$game_dir"
-    preflight_chobby_channel "$game_dir" "${user_args[@]}"
     _apply_managed_springsettings "$game_dir/springsettings.cfg" "${user_args[@]}"
     if [ -e "$game_dir/engine/local-build" ] && ! _has_flag --engine "${user_args[@]}"; then
       injected+=(--engine local-build)
@@ -285,7 +225,6 @@ run_wsl() {
   fi
 
   ensure_devmode_marker "$BAR_DATA_DIR"
-  preflight_chobby_channel "$BAR_DATA_DIR" "$@"
   _apply_managed_springsettings "$BAR_DATA_DIR/springsettings.cfg" "$@"
 
   # Strip --debug-gl: the Windows-side launcher would choke on it.

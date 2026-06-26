@@ -54,7 +54,10 @@ services:
       start_period: 180s
 
   spads:
-    image: badosu/spads:latest
+    image: bar-devtools-spads:dev
+    build:
+      context: ./docker
+      dockerfile: spads.dev.Dockerfile
     profiles: ["spads"]
     depends_on:
       teiserver:
@@ -65,23 +68,24 @@ services:
       SPADS_LOBBY_HOST: "127.0.0.1"
       SPADS_LOBBY_LOGIN: spadsbot
       SPADS_LOBBY_PASSWORD: password
-      SPADS_REGISTRATION_EMAIL: spads@spads.local
-      SPADS_BASEAUTOHOST_PORT: "54200"
-      SPADS_BATTLENAME_PREFIX: '"DEV - "'
-      SPADS_LAN_IP: "127.0.0.1"
-      SPADS_PLUGINS: '"AutoRegister;BarManager;RatingManager"'
-      SPRING_DATADIR: /spring-data
-      SPRING_WRITEDIR: /spring-data
-      SPRING_HOSTIP: ""
-      SPADS_ARGS: "--tls-cert-trust"
+      SPADS_PLUGINS: "BarChobby;ModeCommand"
+      # byar:test is on the BAR CDN, not pr-downloader's springrts default; the
+      # streamer endpoint 500s here, so pull pool files individually.
+      PRD_RAPID_REPO_MASTER: "https://repos-cdn.beyondallreason.dev/repos.gz"
+      PRD_RAPID_USE_STREAMER: "false"
+      # SPADS_LOCAL_MODES=1 (via `just spads::stage-modes`) makes ModeCommand serve
+      # docker/spads-modes/game_modes-local.json over the published asset.
+      MODECOMMAND_RELEASE_BASE: "${SPADS_LOCAL_MODES:+file:///spads-modes}"
+      MODECOMMAND_MODES_VERSION: "${SPADS_LOCAL_MODES:+local}"
     volumes:
       - ./docker/spads-dev-entrypoint.sh:/dev-entrypoint.sh:ro,z
-      - ./docker/spads_dev.conf:/spads_dev.conf:ro,z
-      - ./spads_config_bar/etc:/spads_etc:ro,z
-      - ./spads_config_bar/var:/spads_var:ro,z
-      - spring_data:/spring-data
-      - spads_cache:/opt/spads/var
-      - spring_engines:/spring-engines
+      - ./BYAR-Chobby/spads-plugins:/spads_plugins:ro,z
+      - ./docker/spads-modes:/spads-modes:ro,z
+      - spads_dev_data:/opt/spads/var/spring/data
+      # Share the client's maps with the autohost so its map list matches yours and
+      # real BAR maps (which carry their own start boxes) can be hosted. Overlays the
+      # named volume's stock installer maps. Override the source with BAR_DATA_DIR.
+      - "${BAR_DATA_DIR:-/home/daniel/.local/state/Beyond All Reason}/maps:/opt/spads/var/spring/data/maps:ro,z"
 
   recoil-docs:
     build:
@@ -98,6 +102,4 @@ services:
 volumes:
   pgdata:
   devtools_state:
-  spring_data:
-  spads_cache:
-  spring_engines:
+  spads_dev_data:

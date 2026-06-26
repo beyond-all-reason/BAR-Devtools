@@ -1,42 +1,77 @@
 #!/bin/bash
+# Dev entrypoint for the from-scratch SPADS image (docker/spads.dev.Dockerfile).
+# The installer set SPADS up as a LAN autohost against springrts; override the
+# lobby config for the dockerized teiserver, drop in the BAR plugins, provision
+# the game, then launch.
 set -e
 
-_term() {
-  echo "Caught termination signal"
-  kill -TERM "$child" 2>/dev/null
-  wait "$child"
-}
+_term() { kill -TERM "$child" 2>/dev/null; wait "$child"; }
 trap _term SIGTERM SIGINT
 
-cp -R /spads_etc/* /opt/spads/etc/ 2>/dev/null || true
-cp -R /spads_var/* /opt/spads/var/ 2>/dev/null || true
+cd /opt/spads
+conf=etc/spads.conf
 
-# Use the dev config instead of production config
-cp /spads_dev.conf /opt/spads/etc/spads_dev.conf
+# teiserver advertises STLS as an accepted command even with no cert, so lobbyTls:auto
+# tries (and fails) TLS. Plain is fine on localhost dev -> force lobbyTls:off.
+sed -i \
+  -e "s|^lobbyHost:.*|lobbyHost:${SPADS_LOBBY_HOST:-127.0.0.1}|" \
+  -e "s|^lobbyLogin:.*|lobbyLogin:${SPADS_LOBBY_LOGIN:-spadsbot}|" \
+  -e "s|^lobbyPassword:.*|lobbyPassword:${SPADS_LOBBY_PASSWORD:-password}|" \
+  -e "s|^lobbyTls:.*|lobbyTls:${SPADS_LOBBY_TLS:-off}|" \
+  -e "s|^autoLoadPlugins:.*|autoLoadPlugins:${SPADS_PLUGINS:-BarChobby;ModeCommand}|" \
+  "$conf"
 
-mkdir -p /opt/spads/var/log
-mkdir -p /opt/spads/var/plugins
-mkdir -p /opt/spads/var/spring
-mkdir -p /opt/spads/var/spads_dev/log
+# teiserver's lobby-name rule forbids parentheses; the default preset names have them.
+sed -i 's|^battleName:.*|battleName:BAR Dev autohost|' etc/hostingPresets.conf 2>/dev/null || true
 
-pidfiles=$(find /opt/spads/var -name "*.pid" -type f 2>/dev/null)
-if [ -n "$pidfiles" ]; then
-  echo "Cleaning stale pid files"
-  echo "$pidfiles" | xargs rm -f
+# Host the dev's local game checkout (mounted at games/Beyond-All-Reason.sdd) instead
+# of byar:test, so the autohost serves the same archive -- and modes -- as a byar-dev
+# client. The archive name is modinfo's "<name> <version>"; the dev version is the
+# literal "$VERSION", so it's stable and matches the client loading the same .sdd.
+local_sdd=var/spring/data/games/Beyond-All-Reason.sdd
+host_local_game=0
+if [ "${SPADS_LOCAL_GAME:-}" = "1" ] && [ -f "$local_sdd/modinfo.lua" ]; then
+  host_local_game=1
+  name=$(sed -n "s/.*name *= *['\"]\([^'\"]*\)['\"].*/\1/p" "$local_sdd/modinfo.lua" | head -1)
+  ver=$(sed -n "s/.*version *= *['\"]\([^'\"]*\)['\"].*/\1/p" "$local_sdd/modinfo.lua" | head -1)
+  echo "Hosting the local game checkout (archive: $name $ver)."
+  sed -i "s|^modName:.*|modName:$name $ver|" etc/hostingPresets.conf
 fi
 
-if [ ! -d "${SPRING_DATADIR}/games" ] || [ -z "$(ls -A ${SPRING_DATADIR}/games/ 2>/dev/null)" ]; then
-  echo "Downloading BAR game data (first run only)..."
-  /spring-engines/latest/pr-downloader \
-    --filesystem-writepath "${SPRING_DATADIR}" \
-    --download-game byar:test 2>&1 || echo "WARNING: Game download failed. SPADS may not start properly."
+# Host on the dev's local RecoilEngine build (matches bar::launch --engine local-build)
+# instead of the installer's auto-managed engine, for engine-matched end-to-end testing.
+if [ "${SPADS_LOCAL_ENGINE:-}" = "1" ] && [ -x /local-engine/spring-dedicated ]; then
+  echo "Using mounted local RecoilEngine build for hosting."
+  sed -i \
+    -e "s|^autoManagedSpringVersion:.*|autoManagedSpringVersion:|" \
+    -e "s|^unitsyncDir:.*|unitsyncDir:/local-engine|" \
+    -e "s|^springServer:.*|springServer:/local-engine/spring-dedicated|" \
+    "$conf"
 fi
 
-echo "Starting SPADS with dev config, connecting to ${SPADS_LOBBY_HOST:-127.0.0.1}:8200..."
+# BAR autohost plugins (ModeCommand) from the mounted BYAR-Chobby checkout.
+if [ -d /spads_plugins ]; then
+  # pluginsDir:plugins resolves relative to varDir (-> var/plugins).
+  mkdir -p var/plugins
+  for d in /spads_plugins/*/; do
+    cp "$d"*.py "$d"*.pm "$d"*.dat var/plugins/ 2>/dev/null || true
+    cp "$d"*.conf etc/ 2>/dev/null || true
+  done
+fi
 
-perl /opt/spads/spads.pl /opt/spads/etc/spads_dev.conf \
-  ${SPADS_ARGS} &
+# The engine is auto-managed; the rapid game is not -- provision byar:test once
+# (skipped when we're hosting the local checkout instead).
+prd="$(find var/spring/recoil -name pr-downloader -type f 2>/dev/null | head -1)"
+data="$(pwd)/var/spring/data"
+if [ "$host_local_game" -eq 0 ] && [ -n "$prd" ] && [ ! -f "$data/.byar-provisioned" ]; then
+  echo "Downloading byar:test from the BAR CDN (first run only)..."
+  if "$prd" --filesystem-writepath "$data" --download-game byar:test; then
+    touch "$data/.byar-provisioned"
+  else
+    echo "WARNING: game download failed. SPADS may not open a battle."
+  fi
+fi
 
+perl spads.pl "$conf" &
 child=$!
-echo "SPADS PID: $child"
 wait "$child"
