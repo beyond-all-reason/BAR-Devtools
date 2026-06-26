@@ -46,6 +46,8 @@ services:
       - ./teiserver/test:/app/test:z
       - ./teiserver/assets:/app/assets:ro,z
       - ./teiserver/.formatter.exs:/app/.formatter.exs:ro,z
+      - ./teiserver/.dialyzer_ignore.exs:/app/.dialyzer_ignore.exs:ro,z
+      - ./teiserver/.credo.exs:/app/.credo.exs:ro,z
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:4000/ || exit 1"]
       interval: 10s
