@@ -108,9 +108,10 @@ check_doctor_flatpak() {
     return
   fi
 
-  local ver
+  local ver install_mode
   ver="$(flatpak --version 2>/dev/null || echo "unknown")"
-  _pass "$ver, info.beyondallreason.bar installed"
+  install_mode="$(flatpak info info.beyondallreason.bar 2>/dev/null | sed -n 's/^Installation: //p')"
+  _pass "$ver, info.beyondallreason.bar installed ($install_mode)"
 
   # Flatpak data dir where devtools symlinks would sit
   local flatpak_data_dir="$HOME/.var/app/info.beyondallreason.bar/data"
@@ -183,7 +184,11 @@ check_doctor_flatpak() {
     warn "The Flatpak sandbox blocks the Spring engine from following symlinks"
     warn "into folders it hasn't been granted access to."
     warn "Please grant access to these folders with:"
-    warn "  flatpak override --user info.beyondallreason.bar --filesystem=$DEVTOOLS_DIR"
+    if [ "$install_mode" = "system" ]; then
+      warn "  sudo flatpak override info.beyondallreason.bar --filesystem=$DEVTOOLS_DIR"
+    else
+      warn "  flatpak override --user info.beyondallreason.bar --filesystem=$DEVTOOLS_DIR"
+    fi
   fi
 
   echo ""
