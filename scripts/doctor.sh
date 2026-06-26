@@ -95,6 +95,106 @@ check_doctor_wsl() {
 }
 
 
+check_doctor_flatpak() {
+  if ! command -v flatpak &>/dev/null; then
+    _pass "flatpak not installed"
+    echo ""
+    return
+  fi
+
+  if ! flatpak info info.beyondallreason.bar &>/dev/null; then
+    _pass "flatpak installed, BAR not installed via flatpak"
+    echo ""
+    return
+  fi
+
+  local ver install_mode
+  ver="$(flatpak --version 2>/dev/null || echo "unknown")"
+  install_mode="$(flatpak info info.beyondallreason.bar 2>/dev/null | sed -n 's/^Installation: //p')"
+  _pass "$ver, info.beyondallreason.bar installed ($install_mode)"
+
+  # Flatpak data dir where devtools symlinks would sit
+  local flatpak_data_dir="$HOME/.var/app/info.beyondallreason.bar/data"
+  [ -d "$flatpak_data_dir" ] || {
+    echo ""
+    return
+  }
+
+  # Collect permitted filesystem paths from Flatpak permissions (merged).
+  # Extract the line: filesystems=path:flag;path;path:ro;...
+  # then split on semicolons and strip trailing access-mode flags (:create, :ro, etc).
+  local -a permitted=("$flatpak_data_dir")
+  local perms_line
+  perms_line="$(flatpak info --show-permissions info.beyondallreason.bar 2>/dev/null | sed -n 's/^filesystems=//p')"
+  if [ -n "$perms_line" ]; then
+    local IFS=';'
+    local -a entries=($perms_line)
+    local e stripped
+    for e in "${entries[@]}"; do
+      [ -z "$e" ] && continue
+      # Strip access-mode flag after trailing colon
+      stripped="${e%:*}"
+      # Resolve tilde for ~/ paths and store as-is for absolute paths
+      case "$stripped" in
+        "~"/*) stripped="$HOME/${stripped#~/}" ;;
+        "~")   stripped="$HOME" ;;
+      esac
+      permitted+=("$stripped")
+    done
+  fi
+
+  # Check each devtools symlink: is its target inside a permitted path?
+  local linked_outside=0
+  local -A link_map=(
+    [bar]="$flatpak_data_dir/games/Beyond-All-Reason.sdd"
+    [chobby]="$flatpak_data_dir/games/BYAR-Chobby.sdd"
+    [engine]="$flatpak_data_dir/engine/local-build"
+  )
+  local name link_path target perm
+  for name in bar chobby engine; do
+    link_path="${link_map[$name]}"
+    [ -L "$link_path" ] || continue
+
+    target="$(readlink "$link_path")"
+
+    # No warning needed if the symlink target is in a flatpak-permitted path
+    local covered=0
+    for perm in "${permitted[@]}"; do
+      case "$target" in
+        "$perm"/*|"$perm")
+          covered=1
+          break
+          ;;
+      esac
+    done
+
+    [ "$covered" -eq 1 ] && continue
+
+    if [ "$linked_outside" -eq 0 ]; then
+      _warn "$name symlink target is outside Flatpak sandbox"
+      info "  $link_path -> $target"
+      linked_outside=1
+    else
+      info "  $name -> $target (also outside)"
+    fi
+  done
+
+  if [ "$linked_outside" -gt 0 ]; then
+    echo ""
+    warn "The Flatpak sandbox blocks the Spring engine from following symlinks"
+    warn "into folders it hasn't been granted access to."
+    warn "Please grant access to these folders with:"
+    if [ "$install_mode" = "system" ]; then
+      warn "  sudo flatpak override info.beyondallreason.bar --filesystem=$DEVTOOLS_DIR"
+    else
+      warn "  flatpak override --user info.beyondallreason.bar --filesystem=$DEVTOOLS_DIR"
+    fi
+  fi
+
+  echo ""
+}
+
+
 check_doctor_ports() {
   echo -e "${BOLD}Ports${NC}"
 
@@ -308,6 +408,7 @@ cmd_doctor() {
   check_doctor_deps
   check_doctor_env
   check_doctor_wsl
+  check_doctor_flatpak
   check_doctor_modules
   check_doctor_ports
   check_doctor_repos
