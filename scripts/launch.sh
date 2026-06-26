@@ -96,20 +96,12 @@ preflight_chobby_channel() {
 }
 
 run_linux() {
-  if ! command -v bar-launch &>/dev/null; then
-    err "bar-launch not on PATH"
-    info "Run 'just setup::init' (pipx-installs the launcher), or run 'pipx ensurepath' if it's already installed."
-    exit 1
-  fi
   local repo_path
   repo_path="$(bar_launch_repo_path)"
-
-  # Editable installs pick up .py edits, but a new pinned dep needs a reinstall.
-  local marker="${XDG_STATE_HOME:-$HOME/.local/state}/bar-devtools/bar-launch-installed"
-  local pyproject="$repo_path/pyproject.toml"
-  if [ -f "$pyproject" ] && [ -f "$marker" ] && [ "$pyproject" -nt "$marker" ]; then
-    info "$(basename "$repo_path")/pyproject.toml is newer than the bar-launch install -- reinstalling"
-    ensure_bar_launch_installed "$repo_path" || exit 1
+  if [ ! -f "$repo_path/bar_launch/__main__.py" ]; then
+    err "bar_debug_launcher not found at $repo_path"
+    info "Run 'just repos::clone bar' (or 'just setup::init')."
+    exit 1
   fi
 
   preflight_symlinks
@@ -134,11 +126,14 @@ run_linux() {
 
   preflight_appimage "${user_args[@]}"
 
-  # Launcher autodetect anchors on cwd; point it at the managed checkout.
-  cd "$repo_path"
-
-  info "Running: bar-launch ${injected[*]:-} ${user_args[*]:-}"
-  exec bar-launch "${injected[@]}" "${user_args[@]}"
+  # GUI/CLI run inside bar-dev (Fedora Tk: real fonts + antialiasing); the engine
+  # is launched back on the host via host_cmd_prefix(). Run from source so repo
+  # edits stay live -- no install, no shared ~/.local/bin pipx conflict.
+  local box="${DEVTOOLS_DISTROBOX:-bar-dev}"
+  cd "$repo_path"   # launcher autodetect anchors on cwd
+  info "Running in ${box}: bar_launch ${injected[*]:-} ${user_args[*]:-}"
+  exec distrobox enter "$box" -- \
+    env PYTHONPATH="$repo_path" python3 -m bar_launch "${injected[@]}" "${user_args[@]}"
 }
 
 # Matches both "--engine X" and "--engine=X" forms.
@@ -301,7 +296,13 @@ run_wsl() {
     launch_args=("$@")
   fi
 
-  local shim_wsl="$BAR_DATA_DIR/bin/bar-launch.cmd"
+  local debug_dir="${BAR_DEBUG_DIR:-$(bar_debug_dir_get)}"
+  if [ -z "$debug_dir" ]; then
+    err "BAR_DEBUG_DIR not set -- run 'just bar::regen-shim' or 'just setup::init' first."
+    exit 1
+  fi
+
+  local shim_wsl="$debug_dir/bin/bar-launch.cmd"
   if [ ! -f "$shim_wsl" ]; then
     err "Launcher shim missing at $shim_wsl"
     info "Regenerate: just bar::regen-shim"
@@ -315,14 +316,20 @@ run_wsl() {
   local shim_win
   shim_win="$(wslpath -w "$shim_wsl")"
 
+  # Capture the detached launcher's output -- else a Windows-side crash vanishes.
+  local launch_log="$debug_dir/.bar-launch/launcher.log"
+  mkdir -p "$(dirname "$launch_log")"
+  : >"$launch_log"
+
   # printf, not info: `echo -e` interprets \b in ...\bin\... as backspace.
   printf '\033[0;34m[info]\033[0m  Launching detached: %s %s\n' "$shim_win" "${launch_args[*]}"
   printf '\033[0;34m[info]\033[0m  logs:  just bar::log -- -F      (engine infolog)\n'
   printf '\033[0;34m[info]\033[0m         just bar::sync-logs            (cold-copy log)\n'
+  printf '\033[0;34m[info]\033[0m         %s   (launcher stdout/stderr)\n' "$launch_log"
 
   # Plain `cmd.exe /c` -- `start "" /B` gets its "" double-escaped by WSL2
   # interop. cd /mnt/c gives cmd.exe a drive-letter cwd (avoids UNC warning).
-  ( cd /mnt/c && nohup cmd.exe /c "$shim_win" "${launch_args[@]}" </dev/null >/dev/null 2>&1 & )
+  ( cd /mnt/c && nohup cmd.exe /c "$shim_win" "${launch_args[@]}" </dev/null >"$launch_log" 2>&1 & )
   return 0
 }
 
@@ -378,11 +385,12 @@ stop_wsl() {
     fi
   fi
 
-  if [ -n "${BAR_DATA_DIR:-}" ] \
-     && [ -f "$BAR_DATA_DIR/.bar-launch/sync.pid" ]; then
+  local debug_dir="${BAR_DEBUG_DIR:-$(bar_debug_dir_get)}"
+  if [ -n "$debug_dir" ] \
+     && [ -f "$debug_dir/.bar-launch/sync.pid" ]; then
     bash "$DEVTOOLS_DIR/scripts/sync.sh" stop \
       && killed_any=1 \
-      || warn "sync daemon stop returned non-zero (see $BAR_DATA_DIR/.bar-launch/sync.log)"
+      || warn "sync daemon stop returned non-zero (see $debug_dir/.bar-launch/sync.log)"
   fi
 
   if [ "$killed_any" = "0" ]; then

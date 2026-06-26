@@ -4,7 +4,7 @@ Local development environment for [Beyond All Reason](https://www.beyondallreaso
 
 Everything server-side runs in Docker. The game client runs natively.
 
-## Quick Start
+## Quickstart (Linux)
 
 ```bash
 git clone https://github.com/beyond-all-reason/BAR-Devtools.git
@@ -18,14 +18,25 @@ just services::up                 # start Postgres + Teiserver
 
 Teiserver comes up at http://localhost:4000 — log in with `root@localhost` / `password`. (Full port list under [Ports](#ports).)
 
-## Quick Setup (Windows)
+## Quickstart (Windows)
 
-The whole stack runs inside WSL2 — nothing needs native Windows. From a **PowerShell** prompt, install the VS Code WSL bridge, cap WSL2's resource use, and pull a distro:
+The whole stack runs inside WSL2 — nothing needs native Windows. Run these from a **PowerShell** prompt (the first two are optional):
+
+VS Code's WSL bridge, if you use [Visual Studio Code](https://code.visualstudio.com/):
 
 ```powershell
 code --install-extension ms-vscode-remote.remote-wsl
-winget install --id DEVCOM.JetBrainsMonoNerdFont   # optional — Nerd Font for the starship prompt (see Nice-to-haves)
+```
 
+A Nerd Font for the starship prompt (see [Nice-to-haves](#starship)):
+
+```powershell
+winget install --id DEVCOM.JetBrainsMonoNerdFont
+```
+
+WSL2 config and the Ubuntu distro:
+
+```powershell
 # Leave ~5-6 GB for Windows; tune to your machine:
 @"
 [wsl2]
@@ -37,17 +48,12 @@ processors=4
 wsl --install -d Ubuntu-24.04
 ```
 
-In **Windows Terminal**, set Ubuntu as your default profile (and, if you installed the Nerd Font above, pick *JetBrainsMono Nerd Font* under that profile's *Appearance → Font face*). Open a fresh Ubuntu terminal and follow the [Linux Quick Start](#quick-start) — it's identical:
+Use **Windows Terminal** (preinstalled on Windows 11; on Windows 10 install it from the Microsoft Store). Open it and press `Ctrl+,` to open Settings:
 
-```bash
-git clone https://github.com/beyond-all-reason/BAR-Devtools.git
-cd BAR-Devtools
-bash scripts/bootstrap.sh
-exec "$SHELL" -l
+- **Default terminal & profile** — set *Startup → Default profile → Ubuntu-24.04* so new windows open straight into WSL. To also make Windows Terminal the system-wide default (so VS Code, `wsl`, etc. open in it), set *Startup → Default terminal application → Windows Terminal*.
+- **Font** — if you installed the Nerd Font above, set *Profiles → Ubuntu-24.04 → Appearance → Font face → JetBrainsMono Nerd Font*. Without it the starship prompt renders as boxes (see [Nice-to-haves](#starship)).
 
-just setup::init
-just services::up
-```
+Open a fresh Ubuntu tab and follow the [Quickstart (Linux)](#quickstart-linux) — the steps are identical.
 
 On WSL, `setup::init` additionally prompts for a `BAR_DATA_DIR` and wires up the native-Windows launch path — the engine runs as a Windows process for performance. See [Launching from WSL2](#launching-from-wsl2) for how `just bar::launch` crosses the WSL/Windows boundary.
 
@@ -55,6 +61,7 @@ On WSL, `setup::init` additionally prompts for a `BAR_DATA_DIR` and wires up the
 
 Optional — none of this is needed to build or run BAR.
 
+<a id="starship"></a>
 <details>
 <summary><strong>A more beautiful shell prompt (starship)</strong></summary>
 
@@ -67,7 +74,7 @@ echo 'eval "$(starship init bash)"' >> ~/.bashrc && exec bash
 
 Targeting `~/.local/bin` — rather than the installer's default `/usr/local/bin`, or a distro package's `/usr/bin` — is what makes the prompt follow you into the dev container: distrobox shares your home dir and `~/.bashrc`, not host system dirs, so `distrobox enter bar-dev` picks up the same binary and init line for free.
 
-Starship's defaults use Nerd Font glyphs. In the Windows terminal — including WSL, which renders through it — they show as boxes until you install a Nerd Font: use the `winget` line in [Quick Setup (Windows)](#quick-setup-windows), or strip the glyphs with `starship preset plain-text-symbols -o ~/.config/starship.toml`. Native Linux terminals usually have a capable font already.
+Starship's defaults use Nerd Font glyphs. In the Windows terminal — including WSL, which renders through it — they show as boxes until you install a Nerd Font: use the `winget` line in [Quickstart (Windows)](#quickstart-windows), or strip the glyphs with `starship preset plain-text-symbols -o ~/.config/starship.toml`. Native Linux terminals usually have a capable font already.
 
 </details>
 

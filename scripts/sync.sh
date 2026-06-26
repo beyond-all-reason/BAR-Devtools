@@ -17,6 +17,11 @@ if [ -z "${BAR_DATA_DIR:-}" ]; then
   exit 1
 fi
 
+if [ -z "${BAR_DEBUG_DIR:-}" ]; then
+  err "BAR_DEBUG_DIR not set. Run 'just setup::init' on WSL2 first."
+  exit 1
+fi
+
 if ! grep -qi microsoft /proc/version 2>/dev/null; then
   err "scripts/sync.sh only runs on WSL2 (target is a Windows-side data dir)."
   exit 1
@@ -34,7 +39,7 @@ _require_sync_distrobox() {
   fi
 }
 
-STATE_DIR="$BAR_DATA_DIR/.bar-launch"
+STATE_DIR="$BAR_DEBUG_DIR/.bar-launch"
 LOG_FILE="$STATE_DIR/sync.log"
 PID_FILE="$STATE_DIR/sync.pid"
 READY_FILE="$STATE_DIR/sync.ready"
@@ -143,26 +148,22 @@ cmd_start() {
     expected_pairs="$(echo "$pair_lines" | sort -u)"
 
     if [ "$live_pairs" != "$expected_pairs" ]; then
-      warn "sync daemon (PID $existing_pid) was started with a different set of pairs than the current config:"
+      warn "sync daemon (PID $existing_pid) pairs drifted from current config -- restarting:"
       warn "  live pairs:"
       while IFS= read -r line; do [ -n "$line" ] && warn "    $line"; done <<<"$live_pairs"
       warn "  expected pairs (per current symlinks / repos.conf):"
       while IFS= read -r line; do [ -n "$line" ] && warn "    $line"; done <<<"$expected_pairs"
-      err "Edits to paths in the expected list will NOT propagate -- the running daemon doesn't watch them."
-      err "Restart to pick up the new config:"
-      err "  bash $DEVTOOLS_DIR/scripts/sync.sh stop"
-      err "  bash $DEVTOOLS_DIR/scripts/sync.sh start --wait-ready"
-      return 1
-    fi
-
-    if [ -f "$READY_FILE" ]; then
+      cmd_stop
+      # fall through to (re)start with the current pairs
+    elif [ -f "$READY_FILE" ]; then
       info "sync daemon already running and ready (PID $existing_pid)"
+      return 0
     else
       warn "sync daemon running (PID $existing_pid) but ready-flag missing"
       info "  (likely an orphan from a prior version; continuing without re-verify)"
       info "  to refresh: bash $DEVTOOLS_DIR/scripts/sync.sh stop && ... start --wait-ready"
+      return 0
     fi
-    return 0
   fi
 
   _require_sync_distrobox || return 1

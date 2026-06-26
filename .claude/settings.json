@@ -5,7 +5,18 @@
       "Bash(just --list)",
       "Bash(just --list *)",
       "Bash(just --evaluate)",
-      "Bash(just doctor)"
+      "Bash(just doctor)",
+      "Bash(just repos::status)",
+      "Bash(just link::status)",
+      "Bash(just services::status)",
+      "Bash(just ssh::doctor)",
+      "Bash(just services::logs)",
+      "Bash(just services::logs *)",
+      "Bash(just bar::log *)",
+      "Bash(just bar::sync-logs)",
+      "Bash(just bar::sync-logs *)",
+      "Bash(just bar::logs)",
+      "Bash(just bar::logs *)"
     ]
   }
 }

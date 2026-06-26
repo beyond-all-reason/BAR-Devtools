@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Expects DEVTOOLS_DIR, COMPOSE, REPOS_CONF (exported by Justfile); source common.sh + repos.sh first.
 
+source "$DEVTOOLS_DIR/scripts/wsl.sh"
+
 detect_distro() {
   if command -v pacman &>/dev/null; then
     echo "arch"
@@ -11,6 +13,10 @@ detect_distro() {
   else
     echo "unknown"
   fi
+}
+
+_is_ostree() {
+  [ -f /run/ostree-booted ] || command -v rpm-ostree &>/dev/null
 }
 
 _version_ge() {
@@ -204,73 +210,6 @@ ensure_wsl_setup() {
   echo ""
 }
 
-# True if $1 is a real Windows Python, not the Microsoft Store stub under WindowsApps.
-_is_real_windows_python() {
-  local p="$1"
-  [ -n "$p" ] || return 1
-  case "$p" in
-    *WindowsApps*python.exe|*WindowsApps*py.exe) return 1 ;;
-  esac
-  return 0
-}
-
-# Install Python on the Windows host via winget. WSL-only; skips if a real Windows Python exists.
-ensure_windows_python() {
-  is_wsl || return 0
-
-  local py_path python_path
-  py_path="$(command -v py.exe 2>/dev/null || true)"
-  python_path="$(command -v python.exe 2>/dev/null || true)"
-
-  if _is_real_windows_python "$py_path"; then
-    ok "Windows Python already installed: $py_path"
-    ensure_bar_launch_python_persisted
-    return 0
-  fi
-  if _is_real_windows_python "$python_path"; then
-    ok "Windows Python already installed: $python_path"
-    ensure_bar_launch_python_persisted
-    return 0
-  fi
-
-  if [ -n "$python_path" ]; then
-    info "Detected Microsoft Store python.exe stub at $python_path -- not a real install."
-  fi
-
-  if ! command -v winget.exe &>/dev/null; then
-    warn "winget.exe not found on the Windows PATH -- can't auto-install Python."
-    warn "Install manually from https://www.python.org/downloads/ and re-open the WSL shell."
-    return 0
-  fi
-
-  echo ""
-  info "The Windows-side cold-copy mirror needs py.exe / python.exe on Windows."
-  read -rp "Install Python 3.12 via winget on Windows now? [Y/n] " ans
-  if [[ "$ans" =~ ^[Nn]$ ]]; then
-    info "Skipped. Run later: winget install Python.Python.3.12"
-    return 0
-  fi
-
-  step "Installing Python 3.12 on Windows via winget..."
-  winget.exe install Python.Python.3.12 \
-    --silent \
-    --accept-source-agreements \
-    --accept-package-agreements \
-    || warn "winget exited non-zero. Check the output above; Python may still be installed."
-
-  hash -r
-  py_path="$(command -v py.exe 2>/dev/null || true)"
-  python_path="$(command -v python.exe 2>/dev/null || true)"
-  if _is_real_windows_python "$py_path" || _is_real_windows_python "$python_path"; then
-    ok "Windows Python installed."
-    ensure_bar_launch_python_persisted
-  else
-    warn "winget finished but a real py.exe / python.exe still isn't on PATH."
-    warn "Open a new WSL shell (Windows PATH is re-imported at WSL shell start)."
-    warn "If it still isn't visible, check: winget list Python.Python.3.12 (from cmd/PowerShell)."
-  fi
-}
-
 # Install distrobox from upstream; need >= 1.8.2.3 for the chpasswd fix against shadow-utils 4.13+.
 install_distrobox_upstream() {
   local current=""
@@ -313,7 +252,7 @@ install_compose_upstream() {
   local symlink="/usr/local/bin/docker-compose"
   local url="https://github.com/docker/compose/releases/download/v${pin_version}/docker-compose-linux-${arch}"
 
-  info "Installing docker-compose v${pin_version} from upstream releases (apt's is ${current:-missing})..."
+  info "Installing docker-compose v${pin_version} from upstream releases (current: ${current:-missing})..."
   sudo mkdir -p "$plugin_dir"
   sudo curl -fsSL "$url" -o "$target"
   sudo chmod +x "$target"
@@ -340,7 +279,10 @@ cmd_install_deps() {
     exit 1
   fi
 
-  info "Detected distro: ${BOLD}${distro}${NC}"
+  local ostree=0
+  _is_ostree && ostree=1
+
+  info "Detected distro: ${BOLD}${distro}${NC}$([ "$ostree" -eq 1 ] && echo " (rpm-ostree)")"
   echo ""
 
   local missing=()
@@ -355,20 +297,30 @@ cmd_install_deps() {
   if ! command -v curl &>/dev/null; then
     missing+=("curl")
   fi
-  # Debian gets compose from install_compose_upstream below, never from apt.
-  if [ "$distro" != "debian" ] && ! command -v docker-compose &>/dev/null; then
+  # Debian and rpm-ostree get compose from install_compose_upstream below, never from the package manager.
+  if [ "$distro" != "debian" ] && [ "$ostree" -eq 0 ] && ! command -v docker-compose &>/dev/null; then
     missing+=("container-compose")
   fi
   if ! command -v distrobox &>/dev/null; then
     missing+=("distrobox")
   fi
 
-  # Debian gets distrobox from upstream; drop it from the apt list.
+  # Debian and rpm-ostree get distrobox from upstream; drop it from the package-manager list.
   local apt_missing=()
   for tool in "${missing[@]}"; do
-    if [ "$distro" = "debian" ] && [ "$tool" = "distrobox" ]; then continue; fi
+    if [ "$tool" = "distrobox" ] && { [ "$distro" = "debian" ] || [ "$ostree" -eq 1 ]; }; then continue; fi
     apt_missing+=("$tool")
   done
+
+  # rpm-ostree's package layer is read-only at runtime; base-layer tools must be layered manually.
+  if [ "$ostree" -eq 1 ] && [ "${#apt_missing[@]}" -gt 0 ]; then
+    local pkgs=""
+    for dep in "${apt_missing[@]}"; do pkgs+=" $(pkg_name "$dep")"; done
+    err "rpm-ostree system: cannot install${pkgs} at runtime."
+    info "  Layer them, then reboot:  rpm-ostree install${pkgs}"
+    info "  (compose and distrobox are handled automatically and don't need this.)"
+    return 1
+  fi
 
   if [ "${#apt_missing[@]}" -gt 0 ]; then
     local packages=""
@@ -385,7 +337,7 @@ cmd_install_deps() {
     echo ""
   fi
 
-  if [ "$distro" = "debian" ]; then
+  if [ "$distro" = "debian" ] || [ "$ostree" -eq 1 ]; then
     install_distrobox_upstream || return 1
     echo ""
   fi
@@ -440,121 +392,18 @@ bar_launch_repo_path() {
   echo "$DEVTOOLS_DIR/bar_debug_launcher"
 }
 
-# True on rpm-ostree systems, where the package layer is read-only at runtime.
-_is_ostree() {
-  command -v rpm-ostree &>/dev/null && [ -e /run/ostree-booted ]
-}
-
-# Install pipx if missing. On rpm-ostree, bootstrap it via `pip install --user`.
-_ensure_pipx() {
-  if command -v pipx &>/dev/null; then return 0; fi
-
-  if _is_ostree; then
-    info "rpm-ostree system detected -- bootstrapping pipx via 'pip install --user'"
-    if ! command -v python3 &>/dev/null; then
-      err "python3 not found on PATH"
-      return 1
-    fi
-    # --break-system-packages: PEP 668 EXTERNALLY-MANAGED; only touches ~/.local site-packages.
-    python3 -m pip install --user --break-system-packages --quiet pipx \
-      || { err "pip install --user pipx failed"; return 1; }
-    python3 -m pipx ensurepath >/dev/null 2>&1 || true
-    export PATH="$HOME/.local/bin:$PATH"
-    hash -r
-    command -v pipx &>/dev/null && return 0
-    err "pipx installed to ~/.local/bin but still not on PATH"
-    info "Open a new shell, or add ~/.local/bin to PATH"
-    return 1
-  fi
-
-  local distro install_cmd
-  distro="$(detect_distro)"
-  case "$distro" in
-    arch)   install_cmd="sudo pacman -S --needed python-pipx" ;;
-    debian) install_cmd="sudo apt install -y pipx" ;;
-    fedora) install_cmd="sudo dnf install -y pipx" ;;
-    *)      install_cmd="" ;;
-  esac
-
-  if [ -z "$install_cmd" ]; then
-    err "pipx is not installed and your distro is unknown. Install pipx manually:"
-    info "  https://pipx.pypa.io/stable/installation/"
-    return 1
-  fi
-
-  info "pipx not found. Installing: $install_cmd"
-  $install_cmd || { err "pipx install failed"; return 1; }
-  pipx ensurepath >/dev/null 2>&1 || true
-  hash -r
-  command -v pipx &>/dev/null
-}
-
-# Find a Python >= 3.10 that can `import tkinter`. Probes /usr/bin paths so a pyenv shim can't shadow it.
-_pick_tkinter_python() {
-  local cand
-  for cand in \
-      /usr/bin/python3.13 /usr/bin/python3.12 /usr/bin/python3.11 /usr/bin/python3.10 /usr/bin/python3 \
-      python3.13 python3.12 python3.11 python3.10 python3; do
-    local resolved
-    resolved="$(command -v "$cand" 2>/dev/null)" || continue
-    "$resolved" - <<'PY' 2>/dev/null && { echo "$resolved"; return 0; }
-import sys
-if sys.version_info < (3, 10):
-    sys.exit(1)
-import tkinter  # noqa: F401  -- imports _tkinter as a side effect
-PY
-  done
-  return 1
-}
-
-# Editable-install the launcher with pipx, exposing the `bar-launch` entry point on PATH.
-ensure_bar_launch_installed() {
-  local repo_path="$1"
-  if [ ! -f "$repo_path/pyproject.toml" ]; then
-    err "bar_debug_launcher pyproject.toml missing at $repo_path"
-    return 1
-  fi
-
-  _ensure_pipx || return 1
-
-  local target_py
-  target_py="$(_pick_tkinter_python || true)"
-  if [ -z "$target_py" ]; then
-    err "No Python ≥ 3.10 with a working tkinter found."
-    info "The launcher's GUI imports tkinter; pipx will not auto-fix this."
-    info "Fedora:  sudo dnf install python3-tkinter   (or rpm-ostree install)"
-    info "Debian:  sudo apt install python3-tk"
-    info "Arch:    sudo pacman -S tk"
-    info "pyenv:   install tk-devel (Fedora) / tk-dev (Debian) and rebuild Python"
-    return 1
-  fi
-
-  step "Installing bar_debug_launcher via pipx (editable, --python $target_py)"
-  # Uninstall first: `pipx install --force` ignores --python when reusing an existing venv.
-  pipx uninstall bar-launch >/dev/null 2>&1 || true
-  pipx uninstall bar_launch >/dev/null 2>&1 || true
-  pipx install --editable --python "$target_py" "$repo_path"
-
-  # Marker lets launch.sh detect pyproject.toml manifest changes and trigger a reinstall.
-  mkdir -p "${XDG_STATE_HOME:-$HOME/.local/state}/bar-devtools"
-  touch "${XDG_STATE_HOME:-$HOME/.local/state}/bar-devtools/bar-launch-installed"
-
-  ok "bar-launch installed (entry point: $(command -v bar-launch || echo "~/.local/bin/bar-launch"))"
-
-  if ! command -v bar-launch &>/dev/null; then
-    warn "bar-launch isn't on PATH yet. Open a new shell, or run: pipx ensurepath"
-  fi
-}
-
+# The launcher runs from source inside bar-dev (Fedora Tk + deps come from
+# dev.Containerfile), so there's nothing to install on the host -- just confirm
+# the checkout and that the AppImage path is set.
 cmd_setup_bar_launch() {
   local repo_path
   repo_path="$(bar_launch_repo_path)"
-  if [ ! -d "$repo_path/bar_launch" ]; then
-    info "bar_debug_launcher not checked out at $repo_path -- skipping bar-launch install."
+  if [ ! -f "$repo_path/bar_launch/__main__.py" ]; then
+    info "bar_debug_launcher not checked out at $repo_path -- skipping."
     info "Add it via: just repos::clone bar (or set local_path in repos.local.conf)."
     return 0
   fi
-  ensure_bar_launch_installed "$repo_path"
+  ok "bar-launch runs from ${repo_path} inside ${DEVTOOLS_DISTROBOX:-bar-dev}"
   ensure_bar_appimage_path_set
 }
 
@@ -652,61 +501,6 @@ ensure_bar_appimage_path_set() {
   fi
 }
 
-# BAR_DATA_DIR: the engine's data dir. WSL2 mirrors sources into it; Linux symlinks into it.
-
-bar_data_dir_get() {
-  local env_file="$DEVTOOLS_DIR/.env"
-  if [ -f "$env_file" ]; then
-    local val
-    val="$(grep -E '^BAR_DATA_DIR=' "$env_file" 2>/dev/null | tail -n1 | cut -d= -f2-)"
-    if [ -n "$val" ]; then
-      val="${val%\"}"; val="${val#\"}"
-      echo "$val"
-      return 0
-    fi
-  fi
-  echo "${BAR_DATA_DIR:-}"
-}
-
-_to_windows_path() {
-  local p="$1"
-  if command -v wslpath &>/dev/null; then
-    wslpath -w "$p" 2>/dev/null || echo "$p"
-  else
-    echo "$p"
-  fi
-}
-
-_to_wsl_path() {
-  local p="$1"
-  if command -v wslpath &>/dev/null; then
-    wslpath -u "$p" 2>/dev/null || echo "$p"
-  else
-    echo "$p"
-  fi
-}
-
-# Default to the BAR launcher's own data dir: spring's archive scanner won't traverse junctions.
-_default_bar_data_dir() {
-  is_wsl || return 0
-  command -v cmd.exe &>/dev/null || return 0
-  command -v wslpath &>/dev/null || return 0
-  local localappdata
-  localappdata="$(cmd.exe /c 'echo %LOCALAPPDATA%' 2>/dev/null | tr -d '\r\n')"
-  [ -z "$localappdata" ] && return 0
-  case "$localappdata" in
-    *%LOCALAPPDATA%*) return 0 ;;
-  esac
-  local wsl_path
-  wsl_path="$(wslpath -u "$localappdata" 2>/dev/null)" || return 0
-  local launcher_data="$wsl_path/Programs/Beyond-All-Reason/data"
-  if [ -d "$launcher_data" ]; then
-    echo "$launcher_data"
-  else
-    echo "$wsl_path/BAR-DevSync"
-  fi
-}
-
 # Idempotently set `<key> = <value>` in a springsettings.cfg. The engine rewrites the cfg on
 # shutdown, so callers should re-apply on every launch.
 springsettings_set() {
@@ -743,202 +537,6 @@ ensure_devmode_marker() {
   else
     warn "Couldn't create $marker (continuing without dev mode)"
   fi
-}
-
-# Persist BAR_DATA_DIR in WSL path form; the Windows shim converts it. WSL-only.
-ensure_bar_data_dir() {
-  is_wsl || return 0
-
-  local env_file="$DEVTOOLS_DIR/.env"
-  touch "$env_file"
-
-  local current
-  current="$(bar_data_dir_get)"
-  if [ -n "$current" ]; then
-    info "BAR_DATA_DIR already set: $current"
-  else
-    echo ""
-    info "WSL2 detected. Linux↔Windows symlinks aren't fast enough for runtime"
-    info "game-Lua reads, so BAR-Devtools mirrors your Devtools checkouts to a"
-    info "Windows-side data directory the engine reads from. The recommended"
-    info "target is the BAR launcher's own data dir -- spring then sees our"
-    info "synced bar/chobby/engine alongside its own cache/demos/settings"
-    info "without any junctions in the path."
-    echo ""
-    echo "  Recommended:  %LOCALAPPDATA%\\Programs\\Beyond-All-Reason\\data\\"
-    echo "                (the data dir Beyond-All-Reason.exe already writes to)"
-    echo "  Avoid:        %USERPROFILE%\\Documents\\... (OneDrive redirection)"
-    echo "                %TEMP%\\...                  (cleared on reboot)"
-    echo "                \\\\wsl\$\\<distro>\\...        (defeats the whole point)"
-    echo ""
-    local default_path
-    default_path="$(_default_bar_data_dir)"
-
-    local response
-    if [ -t 0 ]; then
-      if [ -n "$default_path" ]; then
-        read -rp "BAR data dir [$(_to_windows_path "$default_path")]: " response
-      else
-        read -rp "BAR data dir (WSL path or Windows path): " response
-      fi
-    else
-      response=""
-    fi
-
-    if [ -z "$response" ]; then
-      if [ -z "$default_path" ]; then
-        err "No BAR_DATA_DIR provided and couldn't compute a default (cmd.exe / wslpath unavailable)."
-        info "Edit BAR-Devtools/.env directly:  BAR_DATA_DIR=/mnt/c/Users/<you>/AppData/Local/BAR-DevSync"
-        return 1
-      fi
-      current="$default_path"
-    else
-      case "$response" in
-        /mnt/*|/home/*|/root/*) current="${response/#\~/$HOME}" ;;
-        *)
-          local converted
-          converted="$(_to_wsl_path "$response")"
-          if [ -z "$converted" ] || [ "$converted" = "$response" ]; then
-            warn "Couldn't convert '$response' via wslpath -- saving as-is."
-            current="$response"
-          else
-            current="$converted"
-          fi
-          ;;
-      esac
-    fi
-
-    echo "BAR_DATA_DIR=$current" >> "$env_file"
-    ok "Added BAR_DATA_DIR=$current to .env"
-  fi
-
-  local sub
-  for sub in engine/local-build games/Beyond-All-Reason.sdd games/BYAR-Chobby.sdd bin; do
-    mkdir -p "$current/$sub" 2>/dev/null || {
-      err "Couldn't mkdir $current/$sub -- check that the path is reachable from WSL."
-      return 1
-    }
-  done
-
-  ensure_devmode_marker "$current"
-
-  ok "BAR data dir ready: $current"
-
-  export BAR_DATA_DIR="$current"
-}
-
-# Persist BAR_LAUNCH_PYTHON=<py.exe path> to .env. WSL-only.
-ensure_bar_launch_python_persisted() {
-  is_wsl || return 0
-  local env_file="$DEVTOOLS_DIR/.env"
-  touch "$env_file"
-
-  if grep -q "^BAR_LAUNCH_PYTHON=" "$env_file" 2>/dev/null; then
-    return 0
-  fi
-
-  local py_path
-  py_path="$(command -v py.exe 2>/dev/null || true)"
-  if ! _is_real_windows_python "$py_path"; then
-    py_path="$(command -v python.exe 2>/dev/null || true)"
-  fi
-  if ! _is_real_windows_python "$py_path"; then
-    return 0
-  fi
-
-  local win_py
-  win_py="$(_to_windows_path "$py_path")"
-  # Single-quote: just's dotenv parser would treat backslashes in C:\... as escapes.
-  echo "BAR_LAUNCH_PYTHON='$win_py'" >> "$env_file"
-  ok "Added BAR_LAUNCH_PYTHON=$win_py to .env"
-}
-
-# Build a Windows venv (not WSL): the launcher spawns the native Windows engine, avoiding a WSL hop.
-ensure_bar_launch_venv_windows() {
-  is_wsl || return 0
-
-  local data_dir_wsl="${BAR_DATA_DIR:-$(bar_data_dir_get)}"
-  if [ -z "$data_dir_wsl" ]; then
-    warn "BAR_DATA_DIR not set -- skipping Windows venv bootstrap."
-    return 0
-  fi
-
-  local py_path
-  py_path="$(command -v py.exe 2>/dev/null || true)"
-  if ! _is_real_windows_python "$py_path"; then
-    py_path="$(command -v python.exe 2>/dev/null || true)"
-  fi
-  if ! _is_real_windows_python "$py_path"; then
-    warn "No real Windows Python found -- skipping venv bootstrap."
-    info "Run 'just setup::init' again after installing Python on Windows."
-    return 0
-  fi
-
-  local venv_wsl="$data_dir_wsl/.venv"
-  local venv_python_wsl="$venv_wsl/Scripts/python.exe"
-
-  if [ ! -x "$venv_python_wsl" ] && [ ! -f "$venv_python_wsl" ]; then
-    step "Creating Windows venv at $venv_wsl"
-    "$py_path" -3 -m venv "$(_to_windows_path "$venv_wsl")" \
-      || { err "Failed to create venv at $venv_wsl"; return 1; }
-  fi
-
-  if [ ! -f "$venv_python_wsl" ]; then
-    err "venv created but $venv_python_wsl is missing -- aborting."
-    return 1
-  fi
-
-  local repo_path
-  repo_path="$(bar_launch_repo_path)"
-  if [ ! -f "$repo_path/pyproject.toml" ]; then
-    err "bar_debug_launcher checkout missing at $repo_path -- skipping venv install."
-    return 1
-  fi
-
-  step "Installing bar_debug_launcher into Windows venv"
-  local repo_unc
-  repo_unc="$(_to_windows_path "$repo_path")"
-  "$venv_python_wsl" -m pip install --upgrade pip --quiet \
-    || warn "pip self-upgrade failed; continuing"
-  "$venv_python_wsl" -m pip install --quiet --editable "$repo_unc" \
-    || { err "pip install bar_debug_launcher failed"; return 1; }
-
-  ok "Windows venv ready: $venv_wsl"
-  export BAR_LAUNCH_VENV="$venv_wsl"
-}
-
-# Generate <BAR_DATA_DIR>/bin/bar-launch.cmd with absolute Windows paths baked in.
-regenerate_bar_launch_cmd_shim() {
-  is_wsl || return 0
-
-  local data_dir_wsl="${BAR_DATA_DIR:-$(bar_data_dir_get)}"
-  if [ -z "$data_dir_wsl" ]; then
-    err "BAR_DATA_DIR not set -- run 'just setup::init' on WSL first."
-    return 1
-  fi
-
-  local venv_python_wsl="$data_dir_wsl/.venv/Scripts/python.exe"
-  if [ ! -f "$venv_python_wsl" ]; then
-    err "Windows venv python not found at $venv_python_wsl"
-    info "Run 'just setup::init' to create it."
-    return 1
-  fi
-
-  local shim_wsl="$data_dir_wsl/bin/bar-launch.cmd"
-  mkdir -p "$(dirname "$shim_wsl")"
-
-  local venv_python_win data_dir_win
-  venv_python_win="$(_to_windows_path "$venv_python_wsl")"
-  data_dir_win="$(_to_windows_path "$data_dir_wsl")"
-
-  cat > "$shim_wsl" <<EOF
-@echo off
-REM Generated by BAR-Devtools setup. Edit via: just bar::regen-shim
-"$venv_python_win" -m bar_launch --data-dir "$data_dir_win" %*
-EOF
-  sed -i 's/$/\r/' "$shim_wsl"
-
-  ok "Generated $shim_wsl"
 }
 
 # Show every decision + the work ahead, then gate on a single Y/n.
@@ -1162,7 +760,7 @@ cmd_setup_distrobox() {
   fi
   echo ""
 
-  export_dev_binaries || warn "Some dev binaries failed to export; recipes / editor that depend on them will need 'just setup::distrobox' rerun."
+  export_dev_binaries || return 1
   echo ""
 
   if is_wsl; then
@@ -1701,6 +1299,7 @@ cmd_init() {
   echo ""
   if is_wsl; then
     ensure_bar_data_dir || warn "Skipping BAR data dir setup (set BAR_DATA_DIR in .env to retry)."
+    ensure_bar_debug_dir || warn "Skipping BAR debug dir setup (set BAR_DEBUG_DIR in .env to retry)."
   fi
 
   ensure_module_by_name features || true
@@ -1839,15 +1438,21 @@ cmd_init() {
 
   step "7/8  bar-launch venv (just bar::launch)"
   echo ""
+  # Only regenerate the shim when the venv was actually built; a skipped venv
+  # (no Windows Python) must not cascade into regenerate's hard "not found".
   if is_wsl; then
-    ensure_bar_launch_venv_windows && regenerate_bar_launch_cmd_shim
+    if ensure_bar_launch_venv_windows; then
+      if regenerate_bar_launch_cmd_shim; then
+        recap "bar-launch venv" ok "ready"
+      else
+        recap "bar-launch venv" warn "shim regen failed -- see output above"
+      fi
+    else
+      recap "bar-launch venv" warn "not built -- install Windows Python, then re-run from a fresh WSL shell"
+    fi
   else
-    cmd_setup_bar_launch
-  fi
-  if [ $? -eq 0 ]; then
+    cmd_setup_bar_launch || { err "bar-launch setup failed."; exit 1; }
     recap "bar-launch venv" ok "ready"
-  else
-    recap "bar-launch venv" warn "failed -- see output above"
   fi
   echo ""
 
@@ -1859,7 +1464,18 @@ cmd_init() {
 
   local feat_n
   feat_n="$(awk -F, '{print NF}' <<<"$features")"
-  echo -e "${GREEN}${BOLD}✔ Setup complete${NC} ${DIM}— ${feat_n} feature(s) ready${NC}"
+
+  local problems=0 _entry _status
+  for _entry in "${SETUP_RECAP[@]}"; do
+    IFS='|' read -r _ _status _ <<<"$_entry"
+    [ "$_status" = warn ] && problems=$((problems + 1))
+  done
+
+  if [ "$problems" -gt 0 ]; then
+    echo -e "${YELLOW}${BOLD}⚠ Setup finished with ${problems} problem(s)${NC} ${DIM}— fix the ⚠ items below and re-run 'just setup::init'${NC}"
+  else
+    echo -e "${GREEN}${BOLD}✔ Setup complete${NC} ${DIM}— ${feat_n} feature(s) ready${NC}"
+  fi
   echo ""
   render_setup_recap
   echo ""
@@ -1916,6 +1532,8 @@ cmd_init() {
   echo "  To use your own forks, add the rows you want to change to"
   echo "  repos.local.conf (directory/url/branch). Then run: just repos::clone"
   echo ""
+  [ "$problems" -gt 0 ] && return 1
+  return 0
 }
 
 cmd_setup() {
@@ -1992,6 +1610,12 @@ detect_game_dir() {
 }
 
 cmd_link() {
+  # multiple targets (e.g. `link::create bar chobby engine`): link each in turn.
+  if [ "$#" -gt 1 ]; then
+    local t
+    for t in "$@"; do cmd_link "$t"; done
+    return 0
+  fi
   local target="${1:-}"
   local game_dir
   game_dir="$(detect_game_dir 2>/dev/null)" || true

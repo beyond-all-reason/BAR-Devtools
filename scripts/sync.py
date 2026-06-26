@@ -104,8 +104,14 @@ def _apply_files(src_root: Path, dst_root: Path,
     copied = 0
     if changed:
         try:
+            # /mnt/c drvfs without `metadata` rejects every POSIX metadata op
+            # (chgrp/chown/chmod/utime) -> "Operation not permitted", rsync
+            # exit 23. Drop owner/group/perms/times; watchman drives the change
+            # list, so we don't rely on dst mtimes for delta detection.
             subprocess.run(
-                ["rsync", "-a", "--inplace", "--files-from=-",
+                ["rsync", "-a", "--inplace",
+                 "--no-owner", "--no-group", "--no-perms", "--no-times",
+                 "--files-from=-",
                  f"{src_root}/", f"{dst_root}/"],
                 input="\n".join(changed) + "\n",
                 text=True,
