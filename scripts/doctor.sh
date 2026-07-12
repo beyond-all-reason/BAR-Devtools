@@ -458,7 +458,8 @@ check_doctor_game_dir() {
   local collision=0
   for name in "${!by_name[@]}"; do
     local IFS="$US"
-    local -a members=("${by_name[$name]}")
+    local -a members
+    read -r -a members <<< "${by_name[$name]}"
     if [ "${#members[@]}" -lt 2 ]; then
       continue
     fi
