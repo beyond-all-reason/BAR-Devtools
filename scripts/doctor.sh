@@ -431,16 +431,16 @@ check_doctor_game_dir() {
     return 0
   fi
 
-  # Engine keys games by the `name` in modinfo.lua, NOT the folder name.
-  local US=$'\x01'  # unit separator between paths sharing a name
   modinfo_name() {
     local f="$1/modinfo.lua"
     [ -f "$f" ] || return 1
     sed -n "s/^[[:space:]]*name[[:space:]]*=[[:space:]]*[\"']\([^\"']*\)[\"']/\1/p" "$f" | head -n1
   }
 
-  # name -> "path1<US>path2..."  (unit separator between paths)
-  local -A by_name=()
+  # First pass: collect (path, name) pairs and count occurrences per name
+  local -a paths=()
+  local -a names=()
+  local -A name_count=()
   local path name
   for path in "${sdd_paths[@]}"; do
     name="$(modinfo_name "$path")"
@@ -448,28 +448,38 @@ check_doctor_game_dir() {
       info "  $path has no modinfo.lua name (engine will skip it)"
       continue
     fi
-    if [ -n "${by_name[$name]+x}" ]; then
-      by_name[$name]="${by_name[$name]}${US}${path}"
-    else
-      by_name[$name]="$path"
-    fi
+    paths+=("$path")
+    names+=("$name")
+    name_count[$name]=$(( ${name_count[$name]:-0} + 1 ))
   done
 
   local collision=0
-  for name in "${!by_name[@]}"; do
-    local IFS="$US"
-    local -a members
-    read -r -a members <<< "${by_name[$name]}"
-    if [ "${#members[@]}" -lt 2 ]; then
+  local -A reported=()
+  local i j
+  for i in "${!paths[@]}"; do
+    name="${names[$i]}"
+    if [ "${name_count[$name]}" -lt 2 ]; then
       continue
     fi
+    if [ -n "${reported[$name]+x}" ]; then
+      continue
+    fi
+    reported[$name]=1
     collision=1
+
+    # Collect all members sharing this name
+    local -a members=()
+    for j in "${!paths[@]}"; do
+      if [ "${names[$j]}" = "$name" ]; then
+        members+=("${paths[$j]}")
+      fi
+    done
 
     # Check 3: generic same-name collision — engine loads only one by scan order.
     _warn "Multiple .sdd folders share the game name \"$name\":"
     local m
     for m in "${members[@]}"; do
-      info "    $m"
+      warn "    $m"
     done
     info "  Recoil loads only ONE of these (by scan order); the rest are ignored."
 
