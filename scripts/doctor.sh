@@ -395,9 +395,16 @@ check_doctor_services() {
 check_doctor_game_dir() {
   echo -e "${BOLD}Game directory (.sdd conflicts)${NC}"
 
-  # Same resolution path as `just link` / `just bar` (detect_game_dir).
+  # Same resolution path as `just link` / `just bar` (detect_game_dir),
+  # plus the Flatpak data dir fallback (detect_game_dir doesn't know about it).
   local game_dir
   game_dir="$(detect_game_dir 2>/dev/null)" || true
+  if [ -z "$game_dir" ]; then
+    local flatpak_data_dir="$HOME/.var/app/info.beyondallreason.bar/data"
+    if [ -d "$flatpak_data_dir" ]; then
+      game_dir="$flatpak_data_dir"
+    fi
+  fi
   if [ -z "$game_dir" ]; then
     info "  Game directory not detected (set BAR_DATA_DIR or run just setup::init)."
     echo ""
