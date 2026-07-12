@@ -1682,6 +1682,12 @@ detect_game_dir() {
     fi
   fi
 
+  local flatpak_dir="$HOME/.var/app/info.beyondallreason.bar/data"
+  if [ -d "$flatpak_dir" ]; then
+    echo "$flatpak_dir"
+    return 0
+  fi
+
   local xdg_state="${XDG_STATE_HOME:-$HOME/.local/state}"
   local candidate="$xdg_state/Beyond All Reason"
   if [ -d "$candidate" ]; then
