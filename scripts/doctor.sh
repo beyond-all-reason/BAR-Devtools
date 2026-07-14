@@ -498,8 +498,8 @@ check_doctor_game_dir() {
     if [ "$dev_shadowed" -eq 1 ]; then
       warn "Your devtools symlink ($dev_symlink) is competing with another copy."
       warn "The engine may load the OTHER copy, so branch/feature changes in your"
-      warn "linked repo will appear ignored. Delete the competing .sdd (e.g. a"
-      warn "nested copy like tmp_archive/BAR.sdd) and re-run the game."
+      warn "linked repo may appear ignored."
+      warn "Delete or move the competing .sdd folder and re-run the game."
     fi
     echo ""
   done
