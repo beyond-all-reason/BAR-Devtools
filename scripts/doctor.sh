@@ -397,6 +397,7 @@ check_doctor_game_dir() {
 
   local game_dir
   game_dir="$(detect_game_dir 2>/dev/null)" || true
+  game_dir="${game_dir%/}"
   if [ -z "$game_dir" ]; then
     info "  Game directory not detected (set BAR_DATA_DIR or run just setup::init)."
     echo ""
