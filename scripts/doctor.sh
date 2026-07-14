@@ -434,7 +434,7 @@ check_doctor_game_dir() {
   modinfo_name() {
     local f="$1/modinfo.lua"
     [ -f "$f" ] || return 1
-    sed -n "s/^[[:space:]]*name[[:space:]]*=[[:space:]]*[\"']\([^\"']*\)[\"']/\1/p" "$f" | tr -d '\r' | head -n1
+    sed -n "s/^[[:space:]]*name[[:space:]]*=[[:space:]]*[\"']\([^\"',\r]*\)[\"'],*/\1/p" "$f" | tr -d '\r' | head -n1
   }
 
   # First pass: collect (path, name) pairs and count occurrences per name
