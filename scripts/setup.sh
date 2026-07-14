@@ -1682,6 +1682,17 @@ detect_game_dir() {
     fi
   fi
 
+  # Flatpak install: ask the app where its data lives rather than hardcoding the path.
+  if command -v flatpak >/dev/null 2>&1; then
+    local flatpak_data_dir
+    flatpak_data_dir="$(flatpak run --command=sh info.beyondallreason.bar -c 'echo "$XDG_DATA_HOME"' 2>/dev/null)"
+    if [ -n "$flatpak_data_dir" ] && [ -d "$flatpak_data_dir" ]; then
+      echo "$flatpak_data_dir"
+      return 0
+    fi
+  fi
+
+  # Fallback if flatpak is not installed or the run command failed.
   local flatpak_dir="$HOME/.var/app/info.beyondallreason.bar/data"
   if [ -d "$flatpak_dir" ]; then
     echo "$flatpak_dir"
