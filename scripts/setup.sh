@@ -1027,6 +1027,9 @@ confirm_setup_plan() {
     if feature_selected recoil; then echo "    engine/local-build"; fi
     if feature_selected chobby; then echo "    games/BYAR-Chobby.sdd"; fi
     if feature_selected bar;    then echo "    games/Beyond-All-Reason.sdd"; fi
+    if flatpak_needs_override; then
+      echo "    grant Flatpak filesystem access (needs sudo)"
+    fi
     echo ""
   fi
 
@@ -1040,6 +1043,7 @@ confirm_setup_plan() {
     exit 0
   fi
   sudo -v 2>/dev/null || warn "Could not pre-cache sudo; later steps may prompt for your password."
+
   echo ""
 }
 
@@ -1744,6 +1748,7 @@ cmd_init() {
 
   step "1/8  Checking & installing dependencies"
   echo ""
+
   if check_git &>/dev/null && check_podman &>/dev/null; then
     ok "Core dependencies (git, podman) already installed."
     recap "Dependencies" ok "already installed"
@@ -1753,6 +1758,9 @@ cmd_init() {
   fi
   ensure_windows_python
   ensure_sync_daemon_deps_wsl
+  if [ -n "$game_dir" ] && [ "$do_link" = "yes" ]; then
+    flatpak_set_permissions || true
+  fi
   echo ""
 
   step "2/8  Dev environment (distrobox -- required)"
@@ -1966,6 +1974,92 @@ cmd_setup() {
   echo -e "    ${BOLD}just services::up${NC}       Start all services"
   echo -e "    ${BOLD}just services::up lobby${NC} Start all services + bar-lobby"
   echo ""
+}
+
+flatpak_can_access_devtools_dir() {
+  local fp_data="$HOME/.var/app/info.beyondallreason.bar/data"
+
+  # DEVTOOLS_DIR inside the sandbox → engine can follow the symlink
+  case "$DEVTOOLS_DIR" in
+    "$fp_data"|"$fp_data"/*) return 0 ;;
+  esac
+
+  # collect permitted filesystem paths from flatpak overrides
+  local -a permitted=("$fp_data")
+  local perms_line
+  if flatpak info --user info.beyondallreason.bar &>/dev/null; then
+    perms_line="$(flatpak info --show-permissions info.beyondallreason.bar 2>/dev/null | sed -n 's/^filesystems=//p')"
+  elif flatpak info --system info.beyondallreason.bar &>/dev/null; then
+    perms_line="$(sudo flatpak info --show-permissions info.beyondallreason.bar 2>/dev/null | sed -n 's/^filesystems=//p')"
+  fi
+
+  if [ -n "$perms_line" ]; then
+    local -a entries
+    IFS=';' read -ra entries <<< "$perms_line"
+    local e stripped
+    for e in "${entries[@]}"; do
+      [ -z "$e" ] && continue
+      stripped="${e%:*}"
+      case "$stripped" in
+        "~"/*)  stripped="$HOME/${stripped#~/}" ;;
+        "~")    stripped="$HOME" ;;
+        "home") stripped="$HOME" ;;
+        "host") stripped="/" ;;
+      esac
+      permitted+=("$stripped")
+    done
+  fi
+
+  local perm
+  for perm in "${permitted[@]}"; do
+    case "$DEVTOOLS_DIR" in
+      "$perm"|"$perm"/*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+flatpak_needs_override() {
+  command -v flatpak &>/dev/null || return 1
+  flatpak info info.beyondallreason.bar &>/dev/null || return 1
+  ! flatpak_can_access_devtools_dir
+}
+
+flatpak_set_permissions() {
+  command -v flatpak &>/dev/null || return 0
+  flatpak info info.beyondallreason.bar &>/dev/null || return 0
+
+  if flatpak_can_access_devtools_dir; then
+    ok "Flatpak filesystem access already granted for $DEVTOOLS_DIR"
+    return 0
+  fi
+
+  local install_mode=""
+  if flatpak info --user info.beyondallreason.bar &>/dev/null; then
+    install_mode="user"
+  elif flatpak info --system info.beyondallreason.bar &>/dev/null; then
+    install_mode="system"
+  fi
+
+  info "Granting Flatpak filesystem access to $DEVTOOLS_DIR"
+  if [ "$install_mode" = "system" ]; then
+    if ! sudo flatpak override info.beyondallreason.bar --filesystem="$DEVTOOLS_DIR"; then
+      warn "Failed to grant system-wide Flatpak access to $DEVTOOLS_DIR"
+      warn "  Re-run manually: sudo flatpak override info.beyondallreason.bar --filesystem=$DEVTOOLS_DIR"
+      return 1
+    fi
+  elif [ "$install_mode" = "user" ]; then
+    if ! flatpak override --user info.beyondallreason.bar --filesystem="$DEVTOOLS_DIR"; then
+      warn "Failed to grant user Flatpak access to $DEVTOOLS_DIR"
+      warn "  Re-run manually: flatpak override --user info.beyondallreason.bar --filesystem=$DEVTOOLS_DIR"
+      return 1
+    fi
+  else
+    warn "Could not determine Flatpak install mode; skipping automatic filesystem permissioning"
+    warn "  Grant access manually, e.g.: flatpak override --user info.beyondallreason.bar --filesystem=$DEVTOOLS_DIR"
+    return 1
+  fi
+  ok "Flatpak filesystem access granted for $DEVTOOLS_DIR"
 }
 
 detect_game_dir() {
