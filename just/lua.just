@@ -11,8 +11,10 @@ build-lde:
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
     require_repo recoil lua-doc-extractor "lua-doc-extractor"
+    enter_distrobox
     cd "$LDE_DIR"
-    npm ci && npm run build
+    npm ci
+    npm run build
     ok "lua-doc-extractor built"
 
 # Resolve the lux-installed path for recoil-lua-library

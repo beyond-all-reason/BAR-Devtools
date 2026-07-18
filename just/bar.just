@@ -4,7 +4,6 @@ DEVTOOLS_DIR        := justfile_directory()
 COMPOSE_FILE        := DEVTOOLS_DIR / "docker-compose.dev.yml"
 COMPOSE             := "podman compose -f " + COMPOSE_FILE
 BAR_DIR             := DEVTOOLS_DIR / "Beyond-All-Reason"
-INTEGRATION_COMPOSE := "podman compose -f " + BAR_DIR / "tools" / "headless_testing" / "docker-compose.yml"
 
 [private]
 require-bar:
@@ -29,32 +28,26 @@ launch *FLAGS:
 stop:
     @BAR_LAUNCH_MODE=stop bash "$DEVTOOLS_DIR/scripts/launch.sh"
 
-# Switch Chobby to byar-dev so the local .sdd loads (idempotent)
+# Switch Chobby to byar-dev so the local .sdd loads (alias for chobby::dev-mode on)
 dev-mode:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    source "$DEVTOOLS_DIR/scripts/common.sh"
-    source "$DEVTOOLS_DIR/scripts/setup.sh"
-    game_dir="${BAR_DATA_DIR:-$(detect_game_dir 2>/dev/null || true)}"
-    if [ -z "$game_dir" ]; then
-      err "Could not resolve BAR data dir. Set BAR_DATA_DIR or run 'just setup::init' first."
-      exit 1
-    fi
-    write_env_key BAR_CHOBBY_CHANNEL "byar-dev"
-    apply_chobby_channel
-    ensure_devmode_marker "$game_dir"
-    info "Relaunch Chobby (or run 'just bar::launch') to pick up the change."
+    @just chobby::dev-mode on
 
-# Regenerate the Windows-side launcher shim from current .env values (WSL2-only)
+# Build the Windows venv if missing, then regenerate the launcher shim (WSL2-only)
 regen-shim:
     #!/usr/bin/env bash
     set -euo pipefail
+    : "${REPOS_CONF:=$DEVTOOLS_DIR/repos.conf}"
+    : "${REPOS_LOCAL:=$DEVTOOLS_DIR/repos.local.conf}"
+    export REPOS_CONF REPOS_LOCAL
     source "$DEVTOOLS_DIR/scripts/common.sh"
     source "$DEVTOOLS_DIR/scripts/setup.sh"
+    source "$DEVTOOLS_DIR/scripts/repos.sh"
     if ! is_wsl; then
       err "regen-shim is WSL2-only -- on Linux, 'just bar::launch' runs bar-launch directly."
       exit 1
     fi
+    ensure_bar_debug_dir || exit 1
+    ensure_bar_launch_venv_windows || exit 1
     regenerate_bar_launch_cmd_shim
 
 # Tail the WSL sync daemon log (WSL2-only)
@@ -66,11 +59,11 @@ sync-logs *TAIL_FLAGS:
       err "sync-logs is WSL2-only (Linux uses symlinks; nothing to log)."
       exit 1
     fi
-    if [ -z "${BAR_DATA_DIR:-}" ]; then
-      err "BAR_DATA_DIR not set. Run 'just setup::init' on WSL2 first."
+    if [ -z "${BAR_DEBUG_DIR:-}" ]; then
+      err "BAR_DEBUG_DIR not set. Run 'just setup::init' on WSL2 first."
       exit 1
     fi
-    logfile="$BAR_DATA_DIR/.bar-launch/sync.log"
+    logfile="$BAR_DEBUG_DIR/.bar-launch/sync.log"
     if [ ! -f "$logfile" ]; then
       err "No sync log at $logfile yet -- has 'just bar::launch' or 'sync.sh start' run?"
       exit 1
@@ -201,10 +194,13 @@ integrations *args: require-bar
         exit 1
     fi
 
+    # realpath so podman's ,z relabel follows a symlinked repo instead of the link node.
+    compose="podman compose -f $(realpath "$BAR_DIR/tools/headless_testing/docker-compose.yml")"
+
     # Prefer a local Recoil build over the stock engine download if one exists.
-    compose="{{INTEGRATION_COMPOSE}}"
     local_engine="$DEVTOOLS_DIR/RecoilEngine/build-amd64-linux/install"
     if [ -x "$local_engine/spring-headless" ]; then
+        local_engine="$(realpath "$local_engine")"
         info "Using local engine: $local_engine"
         export BAR_LOCAL_ENGINE="$local_engine"
         export BAR_DEVTOOLS_DIR="$DEVTOOLS_DIR"

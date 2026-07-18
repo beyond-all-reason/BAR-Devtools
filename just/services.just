@@ -23,7 +23,7 @@ up *args:
 
     if [ "$with_spads" -eq 1 ]; then
         info "Starting PostgreSQL, Teiserver, and SPADS..."
-        $COMPOSE --profile spads up -d --build
+        $(spads_compose) --profile spads up -d --build
     else
         info "Starting PostgreSQL and Teiserver..."
         $COMPOSE up -d --build
@@ -163,10 +163,10 @@ build:
     require_host
     info "Building Docker images..."
     info "  - Teiserver: compiling Elixir deps + generating TLS certs"
-    info "  - SPADS: pulling pre-built image (badosu/spads:latest)"
+    info "  - SPADS: from-scratch image (debian + spadsInstaller + current Recoil engine)"
     echo ""
     $COMPOSE build teiserver
-    $COMPOSE --profile spads pull spads
+    $COMPOSE --profile spads build spads
     echo ""
     ok "Images built successfully."
 
@@ -181,5 +181,5 @@ reset:
     $COMPOSE --profile spads down -v
     info "Rebuilding images from scratch..."
     $COMPOSE build --no-cache teiserver
-    $COMPOSE --profile spads pull spads
+    $COMPOSE --profile spads build --no-cache spads
     ok "Reset complete. Run 'just services::up' to start fresh."

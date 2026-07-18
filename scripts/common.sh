@@ -35,7 +35,7 @@ read_env_key() {
     printf '%s' "$val"
 }
 
-# append a newline when $1 has content but no trailing newline
+# append a newline when $1 has content but no trailing newline; best-effort
 _ensure_trailing_newline() {
     local file="$1"
     if [ -s "$file" ] && [ -n "$(tail -c1 "$file")" ]; then
@@ -207,6 +207,19 @@ require_host() {
         info "  Exit the container ('exit' or Ctrl-D), then re-run."
         exit 1
     fi
+}
+
+# echo the `podman compose` invocation for the spads stack, adding overlays so the
+# autohost matches a byar-dev client: the local game checkout when Beyond-All-Reason
+# is cloned, and the local RecoilEngine build when it's built (same engine as
+# bar::launch --engine local-build) rather than the installer's published one.
+spads_compose() {
+    local cmd="podman compose -f $DEVTOOLS_DIR/docker-compose.dev.yml"
+    [ -f "$DEVTOOLS_DIR/Beyond-All-Reason/modinfo.lua" ] \
+        && cmd="$cmd -f $DEVTOOLS_DIR/docker-compose.spads-game.yml"
+    [ -x "$DEVTOOLS_DIR/RecoilEngine/build-amd64-linux/install/spring-dedicated" ] \
+        && cmd="$cmd -f $DEVTOOLS_DIR/docker-compose.spads-engine.yml"
+    echo "$cmd"
 }
 
 # re-exec the calling script inside DEVTOOLS_DISTROBOX (fed via stdin, since

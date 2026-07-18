@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-BAR-Devtools is an **orchestrator**, not an application. It clones several sibling repositories (`Beyond-All-Reason`, `RecoilEngine`, `teiserver`, `bar-lobby`, `BYAR-Chobby`, `spads_config_bar`, `lua-doc-extractor`) into this directory (gitignored) and provides `just` recipes that operate across them. Most "BAR-Devtools" work is touching scripts that drive the cloned repos, not editing the cloned repos themselves.
+BAR-Devtools is a thin bash layer devs work from. It clones several sibling repositories (`Beyond-All-Reason`, `RecoilEngine`, `teiserver`, `bar-lobby`, `BYAR-Chobby`, `spads_config_bar`, `lua-doc-extractor`) into this directory (gitignored) and provides `just` recipes that operate across them. Working across the cloned repos is expected — edit them directly when fixing a bug or feature that lives there; don't confine changes to the devtools scripts.
 
 Many recipes assume the bar-dev distrobox container exists. `dev.Containerfile` is the canonical manifest of dev-tool dependencies — Lua 5.1, lx (lumen-oss/lux), Node, Cargo, clangd, StyLua, EmmyLua. Recipes that need those tools call `enter_distrobox` from `scripts/common.sh` to re-exec inside the container.
 

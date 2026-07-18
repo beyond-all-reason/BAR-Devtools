@@ -3,10 +3,6 @@
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
-is_wsl() {
-    [ -n "${WSL_DISTRO_NAME:-}" ] || [ -f /proc/sys/fs/binfmt_misc/WSLInterop ]
-}
-
 # Sets OP_SSH_ENV to one of: wsl, fedora-atomic, linux-arch, linux-debian, linux-fedora, unknown.
 detect_env() {
     if is_wsl; then

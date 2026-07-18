@@ -8,6 +8,8 @@ mod link     'just/link.just'
 mod lua      'just/lua.just'
 mod docs     'just/docs.just'
 mod bar      'just/bar.just'
+mod chobby   'just/chobby.just'
+mod spads    'just/spads.just'
 mod tei      'just/tei.just'
 mod ssh      'just/ssh.just'
 

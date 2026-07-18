@@ -11,7 +11,6 @@ export REPOS_CONF REPOS_LOCAL
 source "$DEVTOOLS_DIR/scripts/common.sh"
 source "$DEVTOOLS_DIR/scripts/setup.sh"
 source "$DEVTOOLS_DIR/scripts/repos.sh"
-source "$DEVTOOLS_DIR/scripts/chobby-channel.sh"
 
 require_host
 
@@ -37,79 +36,13 @@ preflight_symlinks() {
   info "(continuing; bar-launch will still work for non-local sources like 'rapid://...:test')"
 }
 
-# Only relevant when chobby drives game selection and a local BAR.sdd exists.
-preflight_chobby_channel() {
-  local data_dir="$1"; shift
-  [ -n "$data_dir" ] || return 0
-
-  if _has_flag --play "$@"; then
-    local play_val
-    play_val="$(_flag_value --play "$@")"
-    [ "$play_val" = "chobby" ] || return 0
-  fi
-
-  if [ ! -L "$data_dir/games/Beyond-All-Reason.sdd" ] && \
-     [ ! -d "$data_dir/games/Beyond-All-Reason.sdd" ]; then
-    return 0
-  fi
-
-  local desired="${BAR_CHOBBY_CHANNEL:-}"
-  if [ -z "$desired" ]; then
-    desired="$(read_env_key BAR_CHOBBY_CHANNEL 2>/dev/null || true)"
-  fi
-
-  local cfg_current widget_current
-  cfg_current="$(_chobby_game_field "$data_dir/chobby_config.json")"
-  widget_current="$(_chobby_widget_game_field "$data_dir")"
-  # IGL_data.lua's saved value overrides chobby_config.json's default.
-  local effective="${widget_current:-$cfg_current}"
-
-  if [ "$desired" = "byar-dev" ]; then
-    if [ "$cfg_current" = "byar-dev" ] && \
-       { [ -z "$widget_current" ] || [ "$widget_current" = "byar-dev" ]; }; then
-      return 0
-    fi
-
-    warn "Chobby channel drifted from byar-dev:"
-    warn "  chobby_config.json:   ${cfg_current:-<unset>}"
-    warn "  IGL_data.lua widget:  ${widget_current:-<unset>}  <-- this is what the dropdown will use"
-    warn "Your local Beyond-All-Reason.sdd edits will NOT load until this is fixed."
-
-    if [ ! -t 0 ]; then
-      warn "(non-interactive shell -- not prompting; run 'just bar::dev-mode' to fix)"
-      return 0
-    fi
-    local ans
-    read -rp "Reset Chobby channel to dev mode (byar-dev) now? [Y/n] " ans
-    if [ -z "$ans" ] || [[ "$ans" =~ ^[Yy] ]]; then
-      set_chobby_channel "$data_dir" "byar-dev"
-      ok "Chobby channel reset to byar-dev"
-    else
-      warn "Continuing without fix; Chobby will load the rapid build for this run."
-    fi
-    return 0
-  fi
-
-  warn "bar::launch found a local Beyond-All-Reason.sdd but Chobby channel = '${effective:-<unset>}', NOT byar-dev."
-  warn "Your local edits will NOT load and dev-mode is OFF."
-  warn "Fix: just bar::dev-mode   (or set BAR_CHOBBY_CHANNEL=byar-dev in .env)"
-}
-
 run_linux() {
-  if ! command -v bar-launch &>/dev/null; then
-    err "bar-launch not on PATH"
-    info "Run 'just setup::init' (pipx-installs the launcher), or run 'pipx ensurepath' if it's already installed."
-    exit 1
-  fi
   local repo_path
   repo_path="$(bar_launch_repo_path)"
-
-  # Editable installs pick up .py edits, but a new pinned dep needs a reinstall.
-  local marker="${XDG_STATE_HOME:-$HOME/.local/state}/bar-devtools/bar-launch-installed"
-  local pyproject="$repo_path/pyproject.toml"
-  if [ -f "$pyproject" ] && [ -f "$marker" ] && [ "$pyproject" -nt "$marker" ]; then
-    info "$(basename "$repo_path")/pyproject.toml is newer than the bar-launch install -- reinstalling"
-    ensure_bar_launch_installed "$repo_path" || exit 1
+  if [ ! -f "$repo_path/bar_launch/__main__.py" ]; then
+    err "bar_debug_launcher not found at $repo_path"
+    info "Run 'just repos::clone bar' (or 'just setup::init')."
+    exit 1
   fi
 
   preflight_symlinks
@@ -121,7 +54,6 @@ run_linux() {
   game_dir="$(detect_game_dir 2>/dev/null)" || true
   if [ -n "$game_dir" ]; then
     ensure_devmode_marker "$game_dir"
-    preflight_chobby_channel "$game_dir" "${user_args[@]}"
     _apply_managed_springsettings "$game_dir/springsettings.cfg" "${user_args[@]}"
     if [ -e "$game_dir/engine/local-build" ] && ! _has_flag --engine "${user_args[@]}"; then
       injected+=(--engine local-build)
@@ -134,11 +66,14 @@ run_linux() {
 
   preflight_appimage "${user_args[@]}"
 
-  # Launcher autodetect anchors on cwd; point it at the managed checkout.
-  cd "$repo_path"
-
-  info "Running: bar-launch ${injected[*]:-} ${user_args[*]:-}"
-  exec bar-launch "${injected[@]}" "${user_args[@]}"
+  # GUI/CLI run inside bar-dev (Fedora Tk: real fonts + antialiasing); the engine
+  # is launched back on the host via host_cmd_prefix(). Run from source so repo
+  # edits stay live -- no install, no shared ~/.local/bin pipx conflict.
+  local box="${DEVTOOLS_DISTROBOX:-bar-dev}"
+  cd "$repo_path"   # launcher autodetect anchors on cwd
+  info "Running in ${box}: bar_launch ${injected[*]:-} ${user_args[*]:-}"
+  exec distrobox enter "$box" -- \
+    env PYTHONPATH="$repo_path" python3 -m bar_launch "${injected[@]}" "${user_args[@]}"
 }
 
 # Matches both "--engine X" and "--engine=X" forms.
@@ -290,7 +225,6 @@ run_wsl() {
   fi
 
   ensure_devmode_marker "$BAR_DATA_DIR"
-  preflight_chobby_channel "$BAR_DATA_DIR" "$@"
   _apply_managed_springsettings "$BAR_DATA_DIR/springsettings.cfg" "$@"
 
   # Strip --debug-gl: the Windows-side launcher would choke on it.
@@ -301,7 +235,13 @@ run_wsl() {
     launch_args=("$@")
   fi
 
-  local shim_wsl="$BAR_DATA_DIR/bin/bar-launch.cmd"
+  local debug_dir="${BAR_DEBUG_DIR:-$(bar_debug_dir_get)}"
+  if [ -z "$debug_dir" ]; then
+    err "BAR_DEBUG_DIR not set -- run 'just bar::regen-shim' or 'just setup::init' first."
+    exit 1
+  fi
+
+  local shim_wsl="$debug_dir/bin/bar-launch.cmd"
   if [ ! -f "$shim_wsl" ]; then
     err "Launcher shim missing at $shim_wsl"
     info "Regenerate: just bar::regen-shim"
@@ -315,14 +255,20 @@ run_wsl() {
   local shim_win
   shim_win="$(wslpath -w "$shim_wsl")"
 
+  # Capture the detached launcher's output -- else a Windows-side crash vanishes.
+  local launch_log="$debug_dir/.bar-launch/launcher.log"
+  mkdir -p "$(dirname "$launch_log")"
+  : >"$launch_log"
+
   # printf, not info: `echo -e` interprets \b in ...\bin\... as backspace.
   printf '\033[0;34m[info]\033[0m  Launching detached: %s %s\n' "$shim_win" "${launch_args[*]}"
   printf '\033[0;34m[info]\033[0m  logs:  just bar::log -- -F      (engine infolog)\n'
   printf '\033[0;34m[info]\033[0m         just bar::sync-logs            (cold-copy log)\n'
+  printf '\033[0;34m[info]\033[0m         %s   (launcher stdout/stderr)\n' "$launch_log"
 
   # Plain `cmd.exe /c` -- `start "" /B` gets its "" double-escaped by WSL2
   # interop. cd /mnt/c gives cmd.exe a drive-letter cwd (avoids UNC warning).
-  ( cd /mnt/c && nohup cmd.exe /c "$shim_win" "${launch_args[@]}" </dev/null >/dev/null 2>&1 & )
+  ( cd /mnt/c && nohup cmd.exe /c "$shim_win" "${launch_args[@]}" </dev/null >"$launch_log" 2>&1 & )
   return 0
 }
 
@@ -378,11 +324,12 @@ stop_wsl() {
     fi
   fi
 
-  if [ -n "${BAR_DATA_DIR:-}" ] \
-     && [ -f "$BAR_DATA_DIR/.bar-launch/sync.pid" ]; then
+  local debug_dir="${BAR_DEBUG_DIR:-$(bar_debug_dir_get)}"
+  if [ -n "$debug_dir" ] \
+     && [ -f "$debug_dir/.bar-launch/sync.pid" ]; then
     bash "$DEVTOOLS_DIR/scripts/sync.sh" stop \
       && killed_any=1 \
-      || warn "sync daemon stop returned non-zero (see $BAR_DATA_DIR/.bar-launch/sync.log)"
+      || warn "sync daemon stop returned non-zero (see $debug_dir/.bar-launch/sync.log)"
   fi
 
   if [ "$killed_any" = "0" ]; then

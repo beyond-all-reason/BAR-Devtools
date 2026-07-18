@@ -191,6 +191,16 @@ fetch_all_remotes() {
   done < <(git -C "$target" remote)
 }
 
+# bring submodules to the gitlinks recorded in $target's tree. force=1 also
+# discards divergent submodule working trees (matches a --force superproject reset).
+update_submodules() {
+  local dir="$1" target="$2" force="${3:-}"
+  [ -f "$target/.gitmodules" ] || return 0
+  git -C "$target" submodule sync --recursive --quiet 2>/dev/null || true
+  git -C "$target" submodule update --init --recursive ${force:+--force} --quiet 2>/dev/null \
+    || warn "  ${dir}: submodule update failed (offline or auth?)"
+}
+
 # fresh checkouts only
 do_clone() {
   local dir="$1" url="$2" branch="$3" upstream_url="$4" target="$5"
@@ -238,6 +248,11 @@ normalize_remotes() {
     if [ "$n_origin" = "$n_url" ] && [ -z "$upstream_remote_url" ]; then
       info "  ${dir}: adding upstream=${upstream_url}"
       git -C "$target" remote add upstream "$upstream_url"
+    elif [ -z "$origin_url" ] && [ "$n_upstream" = "$n_upstream_url" ]; then
+      info "  ${dir}: adding origin=${url}"
+      git -C "$target" remote add origin "$url"
+      git -C "$target" fetch origin --tags --quiet 2>/dev/null \
+        || warn "  ${dir}: origin fetch failed (offline or auth?)"
     elif [ "$n_origin" = "$n_upstream_url" ] && [ -z "$upstream_remote_url" ]; then
       info "  ${dir}: renaming origin -> upstream and adding origin=${url}"
       git -C "$target" remote rename origin upstream
@@ -341,8 +356,7 @@ clone_or_update_repo() {
     verify_remotes "$dir" "$target" "$url" "$upstream_url"
     info "  ${dir}: fetching latest..."
     fetch_all_remotes "$dir" "$target"
-    git -C "$target" submodule update --init --recursive --quiet 2>/dev/null \
-      || warn "  ${dir}: submodule sync failed (offline or auth?)"
+    update_submodules "$dir" "$target"
     local current_branch
     current_branch="$(git -C "$target" branch --show-current 2>/dev/null)"
     if [ -n "$current_branch" ] && [ "$current_branch" != "$branch" ]; then
@@ -496,4 +510,130 @@ cmd_normalize_remotes() {
   done
   echo ""
   ok "Fixup complete."
+}
+
+# Apply repos.local.conf to an existing checkout: ensure the fork remote
+# exists (normalize_remotes) and switch to the configured branch. Won't
+# switch away from a dirty tree. force=1 hard-resets to the remote.
+sync_repo() {
+  local dir="$1" url="$2" branch="$3" upstream_url="$4" local_path="${5:-}" force="${6:-}"
+  local target="$DEVTOOLS_DIR/$dir"
+  [ -n "$local_path" ] && target="$local_path"
+
+  if [ ! -d "$target/.git" ]; then
+    clone_or_update_repo "$dir" "$url" "$branch" "$upstream_url" "$local_path"
+    return
+  fi
+
+  normalize_remotes "$dir" "$target" "$url" "$upstream_url"
+  fetch_all_remotes "$dir" "$target"
+
+  local current
+  current="$(git -C "$target" branch --show-current 2>/dev/null)"
+  if [ "$current" != "$branch" ]; then
+    if [ -n "$(git -C "$target" status --porcelain 2>/dev/null)" ]; then
+      warn "  ${dir}: working tree dirty -- not switching ${current:-detached} -> ${branch}"
+      warn "    commit or stash, then re-run: just repos::sync ${dir}"
+      return
+    fi
+    if git -C "$target" checkout "$branch" 2>/dev/null \
+       || git -C "$target" checkout -b "$branch" --track "origin/${branch}" 2>/dev/null; then
+      ok "  ${dir}: ${current:-detached} -> ${branch}"
+    else
+      warn "  ${dir}: no branch '${branch}' on origin -- left on ${current:-detached}"
+      return
+    fi
+  else
+    info "  ${dir}: already on ${branch}"
+  fi
+  advance_branch "$dir" "$target" "$branch" "$force"
+}
+
+# bring the current branch up to its tracking upstream; never touches a dirty tree.
+# default fast-forwards (bails on divergence); force=1 hard-resets onto the upstream.
+advance_branch() {
+  local dir="$1" target="$2" branch="$3" force="${4:-}"
+  if [ -n "$(git -C "$target" status --porcelain 2>/dev/null)" ]; then
+    warn "  ${dir}: working tree dirty -- not updating ${branch} (commit or stash, then re-run)"
+    return 0
+  fi
+  # the branch's tracking upstream: origin/<branch> with a fork, upstream/<branch> without one
+  local upstream
+  upstream="$(git -C "$target" rev-parse --abbrev-ref '@{u}' 2>/dev/null || true)"
+  if [ -z "$upstream" ]; then
+    local remote
+    for remote in origin upstream; do
+      if git -C "$target" rev-parse --verify --quiet "${remote}/${branch}" >/dev/null 2>&1; then
+        upstream="${remote}/${branch}"
+        git -C "$target" branch --set-upstream-to="$upstream" "$branch" >/dev/null 2>&1 || true
+        break
+      fi
+    done
+  fi
+  if [ -z "$upstream" ]; then
+    warn "  ${dir}: ${branch} has no tracking upstream on any remote -- can't update"
+    return 0
+  fi
+  local before after
+  before="$(git -C "$target" rev-parse HEAD 2>/dev/null)"
+  if [ -n "$force" ]; then
+    if ! git -C "$target" reset --hard "$upstream" >/dev/null 2>&1; then
+      warn "  ${dir}: reset --hard ${upstream} failed"
+      return 0
+    fi
+    update_submodules "$dir" "$target" 1
+    after="$(git -C "$target" rev-parse HEAD 2>/dev/null)"
+    [ "$before" != "$after" ] && ok "  ${dir}: reset ${branch} to ${upstream}"
+    return 0
+  fi
+  if ! git -C "$target" merge --ff-only --quiet "$upstream" 2>/dev/null; then
+    warn "  ${dir}: behind ${upstream} but can't fast-forward (diverged?) -- re-run with --force"
+    return 0
+  fi
+  update_submodules "$dir" "$target"
+  after="$(git -C "$target" rev-parse HEAD 2>/dev/null)"
+  [ "$before" != "$after" ] && ok "  ${dir}: fast-forwarded ${branch} to ${upstream}"
+  return 0
+}
+
+cmd_sync() {
+  local only="all" force="" a
+  for a in "$@"; do
+    case "$a" in
+      --force) force=1 ;;
+      *)       only="$a" ;;
+    esac
+  done
+  load_repos_conf
+
+  if [ "${#REPO_DIRS[@]}" -eq 0 ]; then
+    err "No repositories found in repos.conf"
+    exit 1
+  fi
+
+  echo -e "${BOLD}=== Syncing Repositories to repos.local.conf ===${NC}"
+  echo ""
+  if [ -f "$REPOS_LOCAL" ]; then
+    info "Using overrides from repos.local.conf"
+  else
+    info "No repos.local.conf -- syncing to repos.conf defaults"
+  fi
+  echo ""
+
+  local i matched=0
+  for i in "${!REPO_DIRS[@]}"; do
+    local dir="${REPO_DIRS[$i]}"
+    [ "$only" != "all" ] && [ "$only" != "$dir" ] && continue
+    matched=1
+    sync_repo "$dir" "${REPO_URLS[$i]}" "${REPO_BRANCHES[$i]}" \
+              "${REPO_UPSTREAM_URLS[$i]}" "${REPO_LOCAL_PATHS[$i]}" "$force" \
+      || warn "  ${dir}: sync failed -- skipping"
+  done
+
+  if [ "$only" != "all" ] && [ "$matched" = 0 ]; then
+    err "No repo named '${only}' in repos.conf"
+    exit 1
+  fi
+  echo ""
+  ok "Sync complete."
 }

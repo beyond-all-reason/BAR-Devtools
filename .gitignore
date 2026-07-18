@@ -29,3 +29,4 @@ bar-lua-codemod/target/
 .claude/todos/
 .claude/cache/
 __pycache__/
+docker/spads-modes/*.json
