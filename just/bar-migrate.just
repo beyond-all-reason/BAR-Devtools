@@ -32,12 +32,16 @@ stylua-cleanup: require-bar require-codemod
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
     enter_distrobox
+    # Same skip set as .styluaignore: vendored utils, lux/library tool dirs,
+    # and mapgenerator (mapinfo_template.lua is a ${}-placeholder template,
+    # not valid Lua).
+    excludes=(--exclude common/luaUtilities --exclude .lux --exclude recoil-lua-library --exclude mapgenerator)
     step "bracket-to-dot transform..."
-    "{{CODEMOD_BIN}}" bracket-to-dot --path "$BAR_DIR" --exclude common/luaUtilities
+    "{{CODEMOD_BIN}}" bracket-to-dot --path "$BAR_DIR" "${excludes[@]}"
     step "rename-aliases transform..."
-    "{{CODEMOD_BIN}}" rename-aliases --path "$BAR_DIR" --exclude common/luaUtilities
+    "{{CODEMOD_BIN}}" rename-aliases --path "$BAR_DIR" "${excludes[@]}"
     step "detach-bar-modules transform..."
-    "{{CODEMOD_BIN}}" detach-bar-modules --path "$BAR_DIR" --exclude common/luaUtilities
+    "{{CODEMOD_BIN}}" detach-bar-modules --path "$BAR_DIR" "${excludes[@]}"
     step "stylua..."
     (cd "$BAR_DIR" && lx --lua-version 5.1 exec stylua .)
     ok "stylua-cleanup complete"
