@@ -54,7 +54,7 @@ remote_for() {
 # not valid Lua).
 CODEMOD_EXCLUDES=(--exclude common/luaUtilities --exclude .lux --exclude recoil-lua-library --exclude mapgenerator)
 
-MIG_PR="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7229"
+MIG_PR="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/8396"
 
 # Tracking issue that ties all of the type-cleanup PRs together. Each leaf,
 # the mig rollup, and the LLM capstone link to it as "Part of <issue>" so
@@ -94,11 +94,11 @@ SKILL_MD_URL="https://github.com/beyond-all-reason/BAR-Devtools/pull/17/changes#
 # shows just the LLM commit, because build_fmt_llm branches $LLM_BRANCH off
 # $LLM_SOURCE_BRANCH rather than cherry-picking onto mig.
 LLM_SOURCE_BRANCH="${LLM_SOURCE_BRANCH:-fmt-llm-source}"
-LLM_SOURCE_PR="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7447"
+LLM_SOURCE_PR="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/8397"
 LLM_SOURCE_PR_TITLE="[Types] LLM env layer (emmylua config, type stubs, manual fixes)"
 LLM_BRANCH="fmt-llm"
 LLM_COMMIT_PREFIX="gen(llm): type-error triage"
-LLM_PR="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/8235"
+LLM_PR="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/8398"
 LLM_PR_TITLE="[Types] LLM-driven type-error transform capstone"
 
 # ─── Stacked-PR base overrides ──────────────────────────────────────────────
@@ -145,7 +145,7 @@ TRANSFORMS=("fmt" "bracket_to_dot" "rename_aliases" "detach_bar_modules" "integr
 
 fmt_branch="fmt"
 fmt_commit="gen(stylua): initial formatting of entire codebase"
-fmt_pr="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7199"
+fmt_pr="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/8395"
 fmt_pr_title="[Style] stylua format entire codebase"
 fmt_prereq=""
 fmt_description=""
