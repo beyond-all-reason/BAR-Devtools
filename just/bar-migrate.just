@@ -45,3 +45,49 @@ stylua-cleanup: require-bar require-codemod
     step "stylua..."
     (cd "$BAR_DIR" && lx --lua-version 5.1 exec stylua .)
     ok "stylua-cleanup complete"
+
+[private]
+require-library:
+    just lua::library
+
+# $CREDENTIALS_RUNNER is an opaque command prefix that loads secrets into
+# the environment of whatever it wraps. When set, stylua-cleanup-generate runs
+# generate-branches.sh through it so subprocesses (notably the parallel
+# `claude --print` workers spawned by scripts/codemod/llm-type-triage.sh) inherit
+# the loaded credentials. Without this, the workers would run with the
+# credential-less env that just/bash inherits and fail at auth.
+#
+# Write the prefix however your secrets store wants. Tilde expansion is
+# applied. Examples:
+#
+#   # 1Password CLI
+#   CREDENTIALS_RUNNER="op run --env-file=~/code/ai.env.op --"
+#
+#   # Bitwarden CLI
+#   CREDENTIALS_RUNNER="bw run --envfile ~/secrets/ai.env --"
+#
+#   # direnv loader (treats first arg as a directory whose .envrc to apply)
+#   CREDENTIALS_RUNNER="direnv exec ~/code/secrets"
+#
+#   # raw env injection from a sourceable .env-style file
+#   CREDENTIALS_RUNNER="env $(grep -v '^#' ~/.config/anthropic/key.env | xargs)"
+#
+# When unset, the script runs unwrapped — fine for non-AI invocations
+# (e.g. `--push` only) where no subprocess actually needs credentials.
+
+# Regenerate fmt, mig-*, and mig branches from origin/master (uses $CREDENTIALS_RUNNER for AI auth)
+[private]
+stylua-cleanup-generate *args: require-bar require-codemod require-library
+    #!/usr/bin/env bash
+    set -euo pipefail
+    script="$DEVTOOLS_DIR/scripts/codemod/generate-branches.sh"
+    if [[ -n "${CREDENTIALS_RUNNER:-}" ]]; then
+        # Expand ~ in the prefix (most secrets-wrapper tools don't expand
+        # it themselves when invoked through a non-interactive shell).
+        expanded="${CREDENTIALS_RUNNER//\~/$HOME}"
+        echo "[info] wrapping stylua-cleanup-generate with: $expanded" >&2
+        # eval re-parses the prefix so multi-token wrappers like
+        # `op run --env-file=path --` keep their structure when prepended.
+        eval "exec $expanded bash \"\$script\" {{args}}"
+    fi
+    exec bash "$script" {{args}}
