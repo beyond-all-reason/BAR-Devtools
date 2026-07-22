@@ -19,7 +19,8 @@ repos.local.conf
 .env
 
 # Build artifacts
-bar-lua-codemod/target/
+target/
+bar-mission-kit/vscode/server/bar-mission-kit
 
 # Runtime / editor state
 tasks/
