@@ -169,6 +169,8 @@ just bar::lx-shell      # interactive lx shell for package work
 > git merge origin/master                 # conflicts are now real conflicts only
 > ```
 > This is idempotent — safe to run multiple times. Includes `bar::fmt`, so no need to run it separately.
+>
+> Not set up for local development? Ask a maintainer to comment `/migrate` on your PR — the [Bulk Migration action](https://github.com/beyond-all-reason/Beyond-All-Reason/blob/master/.github/workflows/bulk_migration.yml) replays every migration listed under `bar::migrate`, oldest first, then merges and pushes the result back. It reads that list from this justfile, so a migration is available to it the moment it is declared here, and stops being replayed once it is retired to `[private]`. If the merge conflicts for reasons the transforms can't explain, it stops and says so rather than guessing.
 
 ### Teiserver development
 
