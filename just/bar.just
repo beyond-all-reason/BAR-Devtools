@@ -271,6 +271,14 @@ mission-serve *args: require-bar
     source "$DEVTOOLS_DIR/scripts/common.sh"
     bash "$DEVTOOLS_DIR/scripts/mission-kit-cargo.sh" build --release
     args="{{args}}"
+    # The editor dir must live in the ENGINE WRITE DIR (the widget reads the
+    # artifact and writes intents there via VFS/io; VFS searches it first).
+    # Override with BAR_WRITE_DIR if your install writes elsewhere.
+    write_dir="${BAR_WRITE_DIR:-$HOME/.local/state/Beyond All Reason}"
+    if [ ! -d "$write_dir" ]; then
+        write_dir="$BAR_DIR"
+        info "engine write dir not found; falling back to the repo"
+    fi
     exec "$DEVTOOLS_DIR/bar-mission-kit/target/release/bar-mission-kit" serve \
         ${args:-"$BAR_DIR/modules/missions/hello_pawns"} \
-        --editor-dir "$BAR_DIR/modules/missions/editor"
+        --editor-dir "$write_dir/modules/missions/editor"
