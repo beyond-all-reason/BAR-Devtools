@@ -1,12 +1,14 @@
-//! The subset recognizer: classifies full_moon CST nodes into the decorated
-//! mission AST. This walk IS the DSL grammar in the meaningful sense — the
-//! single definition of what's form-editable — defined over a mature lossless
-//! parse instead of a bespoke one. Check mode is the same walk with findings.
+//! The subset recognizer: classifies emmylua_parser CST nodes into the
+//! decorated mission AST. This walk IS the DSL grammar in the meaningful
+//! sense — the single definition of what's form-editable — defined over the
+//! same Lua front-end the repo's type checker and language server use
+//! (emmylua-analyzer-rust). Check mode is the same walk with findings.
 
 use crate::model::*;
-use full_moon::ast;
-use full_moon::node::Node;
-use full_moon::tokenizer::{TokenReference, TokenType};
+use emmylua_parser::{
+    LuaAstNode, LuaCallExpr, LuaChunk, LuaExpr, LuaIndexKey, LuaLiteralToken, LuaParser,
+    LuaStat, LuaTableExpr, ParserConfig,
+};
 
 /// Chain verbs the framework grammar admits, in the only legal shape:
 /// When first, Register last.
@@ -18,13 +20,15 @@ pub struct Recognized {
 }
 
 pub fn recognize_file(path: &str, source: &str) -> Result<Recognized, String> {
-    let parsed = full_moon::parse(source).map_err(|errors| {
-        errors
+    let tree = LuaParser::parse(source, ParserConfig::default());
+    let errors = tree.get_errors();
+    if !errors.is_empty() {
+        return Err(errors
             .iter()
-            .map(|e| e.to_string())
+            .map(|e| e.message.to_string())
             .collect::<Vec<_>>()
-            .join("; ")
-    })?;
+            .join("; "));
+    }
 
     let mut rec = Rec {
         path: path.to_string(),
@@ -35,8 +39,11 @@ pub fn recognize_file(path: &str, source: &str) -> Result<Recognized, String> {
         order: 0,
     };
 
-    for stmt in parsed.nodes().stmts() {
-        rec.statement(stmt);
+    let chunk: LuaChunk = tree.get_chunk_node();
+    if let Some(block) = chunk.get_block() {
+        for stat in block.get_stats() {
+            rec.statement(&stat);
+        }
     }
 
     // Drop an empty unlabeled leading section if grouped chains exist.
@@ -60,6 +67,15 @@ struct Rec<'s> {
     order: usize,
 }
 
+/// A verb expression unrolled from the nested call CST:
+/// base dotted path + invocations in source order.
+struct Unrolled {
+    path: Vec<String>,
+    calls: Vec<Invocation>,
+    /// A chained `.Name` seen after a call, waiting for its CallExpr.
+    pending: Option<String>,
+}
+
 impl<'s> Rec<'s> {
     fn line_of(&self, byte: usize) -> usize {
         self.source[..byte.min(self.source.len())]
@@ -80,10 +96,10 @@ impl<'s> Rec<'s> {
         self.opaque.push(Opaque { span, reason: reason.to_string() });
     }
 
-    fn statement(&mut self, stmt: &ast::Stmt) {
-        let span = node_span(stmt);
-        // Decorators ride the statement's leading trivia.
-        let decorators = leading_decorators(stmt);
+    fn statement(&mut self, stat: &LuaStat) {
+        let span = node_span(stat);
+        // Decorators ride the comment lines directly above the statement.
+        let decorators = self.leading_decorators(span.0);
         for d in &decorators {
             if d.name == "group" {
                 self.groups.push(Group {
@@ -97,13 +113,16 @@ impl<'s> Rec<'s> {
             .find(|d| d.name == "label")
             .and_then(|d| d.args.first().cloned());
 
-        match stmt {
-            ast::Stmt::FunctionCall(call) => match self.trigger_chain(call, span, label) {
-                Some(trigger) => {
-                    self.groups.last_mut().unwrap().triggers.push(trigger)
+        match stat {
+            LuaStat::CallExprStat(call_stat) => {
+                let Some(call) = call_stat.get_call_expr() else {
+                    self.mark_opaque(span, "unreadable call statement");
+                    return;
+                };
+                if let Some(trigger) = self.trigger_chain(&call, span, label) {
+                    self.groups.last_mut().unwrap().triggers.push(trigger);
                 }
-                None => {}
-            },
+            }
             _ => {
                 self.mark_opaque(
                     span,
@@ -117,43 +136,32 @@ impl<'s> Rec<'s> {
     /// statement is not a trigger chain (already reported).
     fn trigger_chain(
         &mut self,
-        call: &ast::FunctionCall,
+        call: &LuaCallExpr,
         span: Span,
         label: Option<String>,
     ) -> Option<Trigger> {
-        let base = match call.prefix() {
-            ast::Prefix::Name(token) => token.token().to_string(),
-            _ => String::new(),
-        };
-        if base != "T" {
+        let unrolled = self.unroll(&LuaExpr::CallExpr(call.clone()), span)?;
+        if unrolled.path.len() != 2 || unrolled.path[0] != "T" {
             self.mark_opaque(span, "statement is not a T.When trigger chain");
             return None;
         }
 
+        // The first invocation's verb is the second path segment (T.When);
+        // later invocations carry their own names.
         let mut steps = Vec::new();
-        let mut pending: Option<(String, Span)> = None;
-        for suffix in call.suffixes() {
-            match suffix {
-                ast::Suffix::Index(ast::Index::Dot { name, .. }) => {
-                    if pending.is_some() {
-                        self.mark_opaque(span, "chain step without a call — every step needs parens");
-                        return None;
-                    }
-                    pending = Some((name.token().to_string(), node_span(name)));
-                }
-                ast::Suffix::Call(ast::Call::AnonymousCall(args)) => {
-                    let Some((verb, verb_span)) = pending.take() else {
+        for (i, invocation) in unrolled.calls.into_iter().enumerate() {
+            let verb = if i == 0 {
+                unrolled.path[1].clone()
+            } else {
+                match invocation.name.clone() {
+                    Some(name) => name,
+                    None => {
                         self.mark_opaque(span, "call without a step name in chain");
                         return None;
-                    };
-                    let values = self.call_args(args);
-                    steps.push(Step { verb, span: verb_span, args: values });
+                    }
                 }
-                _ => {
-                    self.mark_opaque(span, "unsupported call shape in chain (method call?)");
-                    return None;
-                }
-            }
+            };
+            steps.push(Step { verb, span: invocation.span, args: invocation.args });
         }
 
         // Grammar checks (also the validator's rules).
@@ -167,7 +175,11 @@ impl<'s> Rec<'s> {
             if !CHAIN_VERBS.contains(&step.verb.as_str()) {
                 self.finding(
                     step.span,
-                    format!("unknown chain verb '{}' (framework grammar: {})", step.verb, CHAIN_VERBS.join("/")),
+                    format!(
+                        "unknown chain verb '{}' (framework grammar: {})",
+                        step.verb,
+                        CHAIN_VERBS.join("/")
+                    ),
                 );
             }
         }
@@ -181,52 +193,102 @@ impl<'s> Rec<'s> {
         })
     }
 
-    fn call_args(&mut self, args: &ast::FunctionArgs) -> Vec<Value> {
-        match args {
-            ast::FunctionArgs::Parentheses { arguments, .. } => {
-                arguments.iter().map(|e| self.value(e)).collect()
+    /// Unroll a nested call/index expression into base path + invocations.
+    /// Returns None (with a finding) when the shape leaves the subset.
+    fn unroll(&mut self, expr: &LuaExpr, span: Span) -> Option<Unrolled> {
+        match expr {
+            LuaExpr::NameExpr(name) => {
+                let text = name.get_name_text()?;
+                Some(Unrolled { path: vec![text.to_string()], calls: Vec::new(), pending: None })
+            }
+            LuaExpr::IndexExpr(index) => {
+                let prefix = index.get_prefix_expr()?;
+                let mut unrolled = self.unroll(&prefix, span)?;
+                let key = match index.get_index_key() {
+                    Some(LuaIndexKey::Name(token)) => token.get_name_text().to_string(),
+                    _ => {
+                        self.mark_opaque(span, "computed index in reference");
+                        return None;
+                    }
+                };
+                if unrolled.calls.is_empty() && unrolled.pending.is_none() {
+                    unrolled.path.push(key);
+                } else if unrolled.pending.is_none() {
+                    unrolled.pending = Some(key);
+                } else {
+                    self.mark_opaque(span, "nested index between chained calls");
+                    return None;
+                }
+                Some(unrolled)
+            }
+            LuaExpr::CallExpr(call) => {
+                if call.is_colon_call() {
+                    self.mark_opaque(span, "method (colon) call — the surface is dot-only");
+                    return None;
+                }
+                let prefix = call.get_prefix_expr()?;
+                let mut unrolled = self.unroll(&prefix, span)?;
+                let args = self.call_args(call);
+                let call_span = node_span(call);
+                let name = unrolled.pending.take();
+                unrolled.calls.push(Invocation { name, args, span: call_span });
+                Some(unrolled)
             }
             _ => {
-                let span = node_span(args);
-                self.finding(span, "call arguments must use parentheses".into());
-                vec![Value::Opaque { span, reason: "non-parenthesized call arguments".into() }]
+                self.mark_opaque(span, "expression outside the mission subset");
+                None
             }
         }
     }
 
+    fn call_args(&mut self, call: &LuaCallExpr) -> Vec<Value> {
+        let Some(list) = call.get_args_list() else {
+            return Vec::new();
+        };
+        list.get_args().map(|arg| self.value(&arg)).collect()
+    }
+
     /// Classify one expression into the subset's value vocabulary.
-    fn value(&mut self, expr: &ast::Expression) -> Value {
+    fn value(&mut self, expr: &LuaExpr) -> Value {
         let span = node_span(expr);
         match expr {
-            ast::Expression::Number(token) => {
-                let value = token.token().to_string().trim().parse::<f64>().unwrap_or(f64::NAN);
-                Value::Number { value, span }
-            }
-            ast::Expression::String(token) => Value::String {
-                value: string_token_value(token),
-                span,
-            },
-            ast::Expression::Symbol(token) => {
-                let text = token.token().to_string();
-                match text.trim() {
-                    "true" => Value::Boolean { value: true, span },
-                    "false" => Value::Boolean { value: false, span },
-                    other => self.opaque_value(span, &format!("unsupported symbol '{other}'")),
+            LuaExpr::LiteralExpr(literal) => match literal.get_literal() {
+                Some(LuaLiteralToken::Number(number)) => {
+                    use emmylua_parser::NumberResult;
+                    let value = match number.get_number_value() {
+                        NumberResult::Int(i) => i as f64,
+                        NumberResult::Uint(u) => u as f64,
+                        NumberResult::Float(f) => f,
+                        NumberResult::Number => f64::NAN,
+                    };
+                    Value::Number { value, span }
                 }
-            }
-            ast::Expression::TableConstructor(table) => self.table(table, span),
-            ast::Expression::Var(var) => match var {
-                ast::Var::Name(token) => Value::Name {
-                    path: token.token().to_string(),
+                Some(LuaLiteralToken::String(string)) => Value::String {
+                    value: string.get_value(),
                     span,
                 },
-                ast::Var::Expression(var_expr) => self.dotted(var_expr.prefix(), var_expr.suffixes(), span),
-                _ => self.opaque_value(span, "unsupported variable shape"),
+                Some(LuaLiteralToken::Bool(b)) => Value::Boolean {
+                    value: b.is_true(),
+                    span,
+                },
+                _ => self.opaque_value(span, "unsupported literal"),
             },
-            ast::Expression::FunctionCall(call) => {
-                self.verb_call(call.prefix(), call.suffixes(), span)
+            LuaExpr::TableExpr(table) => self.table(table, span),
+            LuaExpr::NameExpr(_) | LuaExpr::IndexExpr(_) | LuaExpr::CallExpr(_) => {
+                let Some(unrolled) = self.unroll(expr, span) else {
+                    return Value::Opaque { span, reason: "unrecognized reference".into() };
+                };
+                if unrolled.pending.is_some() {
+                    return self.opaque_value(span, "dangling index after a call");
+                }
+                let path = unrolled.path.join(".");
+                if unrolled.calls.is_empty() {
+                    Value::Name { path, span }
+                } else {
+                    Value::Verb { path, calls: unrolled.calls, span }
+                }
             }
-            ast::Expression::Function(_) => self.opaque_value(
+            LuaExpr::ClosureExpr(_) => self.opaque_value(
                 span,
                 "function body in a trigger file — build the effect with a named verb (closure-free surface)",
             ),
@@ -239,117 +301,41 @@ impl<'s> Rec<'s> {
         Value::Opaque { span, reason: reason.to_string() }
     }
 
-    /// A dotted reference with no call: Team.Player
-    fn dotted<'a>(
-        &mut self,
-        prefix: &ast::Prefix,
-        suffixes: impl Iterator<Item = &'a ast::Suffix>,
-        span: Span,
-    ) -> Value {
-        let mut path = match prefix {
-            ast::Prefix::Name(token) => token.token().to_string(),
-            _ => return self.opaque_value(span, "computed base in reference"),
-        };
-        for suffix in suffixes {
-            match suffix {
-                ast::Suffix::Index(ast::Index::Dot { name, .. }) => {
-                    path.push('.');
-                    path.push_str(&name.token().to_string());
-                }
-                _ => return self.opaque_value(span, "computed index in reference"),
-            }
-        }
-        Value::Name { path, span }
-    }
-
-    /// A verb expression: dotted path, then invocations, optionally chained.
-    fn verb_call<'a>(
-        &mut self,
-        prefix: &ast::Prefix,
-        suffixes: impl Iterator<Item = &'a ast::Suffix>,
-        span: Span,
-    ) -> Value {
-        let mut path = match prefix {
-            ast::Prefix::Name(token) => token.token().to_string(),
-            _ => return self.opaque_value(span, "computed base in verb call"),
-        };
-        let mut calls: Vec<Invocation> = Vec::new();
-        let mut chain_name: Option<String> = None;
-        for suffix in suffixes {
-            match suffix {
-                ast::Suffix::Index(ast::Index::Dot { name, .. }) => {
-                    let segment = name.token().to_string();
-                    if calls.is_empty() {
-                        path.push('.');
-                        path.push_str(&segment);
-                    } else if chain_name.is_none() {
-                        chain_name = Some(segment);
-                    } else {
-                        return self.opaque_value(span, "nested index between chained calls");
-                    }
-                }
-                ast::Suffix::Call(ast::Call::AnonymousCall(args)) => {
-                    let arg_span = node_span(args);
-                    let values = self.call_args(args);
-                    calls.push(Invocation {
-                        name: chain_name.take(),
-                        args: values,
-                        span: arg_span,
-                    });
-                }
-                _ => return self.opaque_value(span, "method (colon) call in verb chain — the surface is dot-only"),
-            }
-        }
-        if calls.is_empty() {
-            return Value::Name { path, span };
-        }
-        Value::Verb { path, calls, span }
-    }
-
-    fn table(&mut self, table: &ast::TableConstructor, span: Span) -> Value {
+    fn table(&mut self, table: &LuaTableExpr, span: Span) -> Value {
         let mut fields = Vec::new();
         let mut index = 0usize;
-        for field in table.fields() {
-            match field {
-                ast::Field::NameKey { key, value, .. } => {
-                    let v = self.value(value);
-                    fields.push(Field { key: key.token().to_string(), value: v });
-                }
-                ast::Field::NoKey(value) => {
+        for field in table.get_fields() {
+            let value = match field.get_value_expr() {
+                Some(expr) => self.value(&expr),
+                None => self.opaque_value(node_span(&field), "table field without a value"),
+            };
+            let key = match field.get_field_key() {
+                Some(LuaIndexKey::Name(token)) => token.get_name_text().to_string(),
+                Some(LuaIndexKey::String(s)) => s.get_value(),
+                None => {
                     index += 1;
-                    let v = self.value(value);
-                    fields.push(Field { key: index.to_string(), value: v });
+                    index.to_string()
                 }
-                _ => {
-                    let fspan = node_span(field);
-                    let v = self.opaque_value(fspan, "computed table key outside the subset");
-                    fields.push(Field { key: String::from("?"), value: v });
-                }
-            }
+                _ => String::from("?"),
+            };
+            fields.push(Field { key, value });
         }
         Value::Table { fields, span }
     }
-}
 
-struct Decorator {
-    name: String,
-    args: Vec<String>,
-}
-
-/// Parse `---@group("Wave timing")` style decorators from a statement's
-/// leading trivia. Comment decorators are grammar, not hints — but unknown
-/// names are ignored here (forward compatibility); the vocabulary lives in
-/// one place, the consumers of the AST.
-fn leading_decorators(stmt: &ast::Stmt) -> Vec<Decorator> {
-    let mut out = Vec::new();
-    let Some(first_token) = stmt.tokens().next() else {
-        return out;
-    };
-    for trivia in first_token.leading_trivia() {
-        if let TokenType::SingleLineComment { comment } = trivia.token_type() {
-            let text = comment.to_string();
-            let Some(rest) = text.trim().strip_prefix("-@") else {
-                continue; // `---@x` tokenizes as comment text `-@x`
+    /// Parse `---@group("Wave timing")` style decorators from the comment
+    /// lines directly above `start_byte`. Comment decorators are grammar, not
+    /// hints — but unknown names are ignored (forward compatibility).
+    fn leading_decorators(&self, start_byte: usize) -> Vec<Decorator> {
+        let head = &self.source[..start_byte.min(self.source.len())];
+        let mut out = Vec::new();
+        for line in head.lines().rev() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let Some(rest) = trimmed.strip_prefix("---@") else {
+                break; // first non-decorator line ends the run
             };
             let (name, args_text) = match rest.split_once('(') {
                 Some((n, a)) => (n.trim(), a.trim_end_matches(')')),
@@ -362,24 +348,17 @@ fn leading_decorators(stmt: &ast::Stmt) -> Vec<Decorator> {
                 .collect();
             out.push(Decorator { name: name.to_string(), args });
         }
+        out.reverse();
+        out
     }
-    out
 }
 
-fn string_token_value(token: &TokenReference) -> String {
-    let text = token.token().to_string();
-    let trimmed = text.trim();
-    trimmed
-        .trim_matches('"')
-        .trim_matches('\'')
-        .to_string()
+struct Decorator {
+    name: String,
+    args: Vec<String>,
 }
 
-fn node_span<N: Node>(node: &N) -> Span {
-    let start = node
-        .start_position()
-        .map(|p| p.bytes())
-        .unwrap_or(0);
-    let end = node.end_position().map(|p| p.bytes()).unwrap_or(start);
-    (start, end)
+fn node_span<N: LuaAstNode>(node: &N) -> Span {
+    let range = node.get_range();
+    (usize::from(range.start()), usize::from(range.end()))
 }
