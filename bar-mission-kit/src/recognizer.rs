@@ -53,7 +53,7 @@ pub fn recognize_file(path: &str, source: &str) -> Result<Recognized, String> {
     }
 
     Ok(Recognized {
-        file: FileAst { path: rec.path, groups, opaque: rec.opaque },
+        file: FileAst { path: rec.path, hash: fnv1a(source.as_bytes()), groups, opaque: rec.opaque },
         findings: rec.findings,
     })
 }
@@ -357,6 +357,16 @@ impl<'s> Rec<'s> {
 struct Decorator {
     name: String,
     args: Vec<String>,
+}
+
+/// Stable content hash (FNV-1a 64) for the CAS precondition on edits.
+pub fn fnv1a(bytes: &[u8]) -> String {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
 }
 
 fn node_span<N: LuaAstNode>(node: &N) -> Span {

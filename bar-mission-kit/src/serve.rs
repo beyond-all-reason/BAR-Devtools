@@ -25,6 +25,11 @@ pub struct EditIntent {
     pub start: usize,
     pub end: usize,
     pub new_text: String,
+    /// Hash of the file content the edit was computed against (FileAst.hash).
+    /// The write is refused if the file changed since — compare-and-swap;
+    /// the regeneration loop then refreshes the stale view.
+    #[serde(default)]
+    pub base_hash: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -187,6 +192,15 @@ fn resolve_mission_file(missions_dir: &Path, rel: &str) -> Result<PathBuf, Strin
 pub fn apply_edit(missions_dir: &Path, intent: &EditIntent) -> Result<(), String> {
     let path = resolve_mission_file(missions_dir, &intent.file)?;
     let source = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    if let Some(base_hash) = &intent.base_hash {
+        let current = recognizer::fnv1a(source.as_bytes());
+        if &current != base_hash {
+            return Err(format!(
+                "file changed on disk since the view was built ({}) — refreshing view instead of writing",
+                intent.file
+            ));
+        }
+    }
     if intent.start > intent.end || intent.end > source.len() {
         return Err(format!(
             "edit span [{}, {}) out of bounds for {} ({} bytes)",
@@ -266,6 +280,7 @@ mod tests {
             start: at,
             end: at + 1,
             new_text: "5".into(),
+            base_hash: Some(crate::recognizer::fnv1a(source.as_bytes())),
         };
         apply_edit(&dir, &intent).unwrap();
         let edited = std::fs::read_to_string(dir.join("hello/triggers/win.lua")).unwrap();
@@ -283,6 +298,7 @@ mod tests {
             start: at,
             end: at + 1,
             new_text: "function() end".into(),
+            base_hash: None,
         };
         let err = apply_edit(&dir, &intent).unwrap_err();
         assert!(err.contains("closure-free"), "{err}");
@@ -299,8 +315,28 @@ mod tests {
             start: 0,
             end: 1,
             new_text: ")(".into(),
+            base_hash: None,
         };
         assert!(apply_edit(&dir, &intent).is_err());
+    }
+
+    #[test]
+    fn a_stale_base_hash_is_refused_without_writing() {
+        let dir = tmpdir("cas");
+        setup(&dir);
+        let source = std::fs::read_to_string(dir.join("hello/triggers/win.lua")).unwrap();
+        let at = source.find(", 3)").unwrap() + 2;
+        let intent = EditIntent {
+            file: "hello/triggers/win.lua".into(),
+            start: at,
+            end: at + 1,
+            new_text: "5".into(),
+            base_hash: Some("0000000000000000".into()),
+        };
+        let err = apply_edit(&dir, &intent).unwrap_err();
+        assert!(err.contains("changed on disk"), "{err}");
+        let after = std::fs::read_to_string(dir.join("hello/triggers/win.lua")).unwrap();
+        assert_eq!(source, after);
     }
 
     #[test]
@@ -312,6 +348,7 @@ mod tests {
             start: 0,
             end: 0,
             new_text: "x".into(),
+            base_hash: None,
         };
         assert!(apply_edit(&dir, &intent).is_err());
     }

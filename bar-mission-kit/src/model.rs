@@ -20,6 +20,10 @@ pub struct MissionAst {
 pub struct FileAst {
     /// Path as given on the command line (mission-relative when a dir walk).
     pub path: String,
+    /// FNV-1a hash of the source bytes this AST was built from. Edit intents
+    /// carry it back as base_hash: compare-and-swap against clobbering a file
+    /// that changed since the view was built.
+    pub hash: String,
     /// Sections in file order. Chains before any `---@group` land in an
     /// unlabeled leading section.
     pub groups: Vec<Group>,
