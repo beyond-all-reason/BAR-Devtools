@@ -4,11 +4,11 @@
 
 Stacked — merge bottom-up. Each PR's own diff is scoped to its layer; stack navigation is on each PR.
 
-- [ ] [**fmt** — StyLua formatting](https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7199)
-- [ ] [**mig** — combined deterministic transforms](https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7229)
-- [ ] [**fmt-llm-source** — hand-curated env layer (emmylua config, types, manual fixes)](https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7447)
-- [ ] [**fmt-llm** — LLM type-fix capstone](https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7407)
-- [ ] [Script / tooling PR (BAR-Devtools)](https://github.com/beyond-all-reason/BAR-Devtools/pull/17)
+- [ ] [**fmt** — StyLua formatting](https://github.com/beyond-all-reason/Beyond-All-Reason/pull/8395)
+- [ ] [**mig** — combined deterministic transforms](https://github.com/beyond-all-reason/Beyond-All-Reason/pull/8396)
+- [ ] [**fmt-llm-source** — hand-curated env layer (emmylua config, types, manual fixes)](https://github.com/beyond-all-reason/Beyond-All-Reason/pull/8397)
+- [ ] [**fmt-llm** — LLM type-fix capstone](https://github.com/beyond-all-reason/Beyond-All-Reason/pull/8398)
+- [ ] Tooling stack (BAR-Devtools): [1/3 codemod](https://github.com/keithharvey/BAR-Devtools/pull/2) · [2/3 workspace integration](https://github.com/keithharvey/BAR-Devtools/pull/3) · [3/3 LLM + generation](https://github.com/keithharvey/BAR-Devtools/pull/4) — entry point [beyond-all-reason/BAR-Devtools#17](https://github.com/beyond-all-reason/BAR-Devtools/pull/17)
 - [ ] [Recoil PR (lua-doc-extractor wiring + missing type decorators)](https://github.com/beyond-all-reason/RecoilEngine/pull/2799)
     - [ ] [CircuitAI — `zk` branch](https://github.com/rlcevg/CircuitAI/pull/136)
     - [ ] [CircuitAI — `barbarian` branch](https://github.com/rlcevg/CircuitAI/pull/137)

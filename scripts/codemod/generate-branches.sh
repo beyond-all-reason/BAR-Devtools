@@ -66,7 +66,7 @@ BULK_MIGRATIONS_DOC="https://github.com/beyond-all-reason/Beyond-All-Reason/pull
 
 # Tooling PR — the BAR-Devtools side that ships generate-branches.sh,
 # llm-type-triage.sh, the codemod transforms, SKILL.md, and the just recipes.
-DEVTOOLS_PR="https://github.com/beyond-all-reason/BAR-Devtools/pull/17"
+DEVTOOLS_PR="https://github.com/keithharvey/BAR-Devtools/pull/4"
 
 # SKILL.md on the BAR-Devtools tooling PR (stays live as the PR updates,
 # unlike a commit-pinned fork URL).
