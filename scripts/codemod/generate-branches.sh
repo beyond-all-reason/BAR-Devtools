@@ -20,13 +20,11 @@ FORK_REMOTE="${FORK_REMOTE:-origin}"
 UPSTREAM_REPO="beyond-all-reason/Beyond-All-Reason"
 FORK_OWNER="${FORK_OWNER:-$(git -C "$BAR" remote get-url "$FORK_REMOTE" 2>/dev/null | sed -n 's|.*[:/]\([^/]*\)/.*|\1|p')}"
 
-# Branches hosted directly on the canonical repo ($UPSTREAM_REMOTE,
-# beyond-all-reason), with same-repo PRs. Everything else lives on the fork
-# ($FORK_REMOTE) and its PRs are cross-repo.
-# fmt-llm-source must be in this set: PR #8235's base is
-# beyond-all-reason:fmt-llm-source, so the canonical copy has to track local or
-# the capstone PR goes DIRTY against a stale base even when topology is sound.
-UPSTREAM_BRANCHES_RE='^(fmt|mig|fmt-llm|fmt-llm-source)$'
+# Every pipeline branch hosts directly on the canonical repo
+# ($UPSTREAM_REMOTE, beyond-all-reason), with same-repo PRs — GitHub's native
+# stacked PRs reject fork-headed PRs, and reviewers live upstream. The fork
+# ($FORK_REMOTE) only carries mirror pushes.
+UPSTREAM_BRANCHES_RE='.'
 
 # Return the --head value for a gh pr create invocation: bare branch name for
 # same-repo PRs, owner:branch for cross-repo PRs from the fork.
