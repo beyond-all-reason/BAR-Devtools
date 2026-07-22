@@ -1157,6 +1157,19 @@ EOF
         "$template"
 }
 
+# GitHub rejects --base edits on PRs that belong to a native stack (the stack
+# owns the base) — send --base only when the base actually needs to move.
+edit_pr() {
+    local pr_url="$1" body_file="$2" base="$3"
+    local current
+    current=$(gh_host pr view "$pr_url" --json baseRefName -q .baseRefName)
+    if [[ "$current" == "$base" ]]; then
+        gh_host pr edit "$pr_url" --body-file "$body_file"
+    else
+        gh_host pr edit "$pr_url" --body-file "$body_file" --base "$base"
+    fi
+}
+
 update_prs() {
     if [[ "${DO_LLM_ONLY:-false}" != "true" ]]; then
         for transform in "${TRANSFORMS[@]}"; do
@@ -1170,7 +1183,7 @@ update_prs() {
             local base="${PR_BASE[$branch]:-master}"
             if [[ -n "$pr_url" ]]; then
                 step "Updating PR $pr_url..."
-                gh_host pr edit "$pr_url" --body-file "$pr_body_file" --base "$base"
+                edit_pr "$pr_url" "$pr_body_file" "$base"
                 ok "PR updated"
             else
                 step "Creating PR for $branch..."
@@ -1189,7 +1202,7 @@ update_prs() {
 
         if [[ -n "$MIG_PR" ]]; then
             step "Updating mig PR $MIG_PR..."
-            gh_host pr edit "$MIG_PR" --body-file "$BAR/.git/mig-pr-body.md" --base "${PR_BASE[mig]:-master}"
+            edit_pr "$MIG_PR" "$BAR/.git/mig-pr-body.md" "${PR_BASE[mig]:-master}"
             ok "mig PR updated"
         fi
     fi
@@ -1262,7 +1275,7 @@ update_capstone_pr() {
 
     if [[ -n "$pr_url" ]]; then
         step "Updating PR $pr_url..."
-        gh_host pr edit "$pr_url" --body-file "$pr_body_file" --base "$base"
+        edit_pr "$pr_url" "$pr_body_file" "$base"
         ok "$branch PR updated"
     else
         step "Creating PR for $branch (base: $base)..."
