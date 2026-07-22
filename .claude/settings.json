@@ -16,7 +16,10 @@
       "Bash(just bar::sync-logs)",
       "Bash(just bar::sync-logs *)",
       "Bash(just bar::logs)",
-      "Bash(just bar::logs *)"
+      "Bash(just bar::logs *)",
+      "Bash(podman ps)",
+      "Bash(podman ps *)",
+      "Bash(podman logs *)"
     ]
   }
 }

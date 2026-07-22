@@ -4,6 +4,9 @@ DEVTOOLS_DIR        := justfile_directory()
 COMPOSE_FILE        := DEVTOOLS_DIR / "docker-compose.dev.yml"
 COMPOSE             := "podman compose -f " + COMPOSE_FILE
 BAR_DIR             := DEVTOOLS_DIR / "Beyond-All-Reason"
+# Batch check uses `emmylua_check` (Rust EmmyLua analyzer), baked into the dev
+# container image. `emmylua_ls` is LSP-only (no --check) and lives on the host
+# for editor integration — see `just setup::editor`.
 
 [private]
 require-bar:
@@ -108,15 +111,35 @@ log *TAIL_FLAGS:
 logs *TAIL_FLAGS:
     @just bar::log {{TAIL_FLAGS}}
 
-# Type-check BAR Lua code (EmmyLua analyzer CLI)
-check *args: require-bar require-emmylua-check
+# Type-check BAR Lua code (EmmyLua analyzer CLI — `-c .emmyrc.json` avoids LuaLS-only keys in `.luarc.json`)
+check *args: require-bar
     #!/usr/bin/env bash
     set -euo pipefail
     source "$DEVTOOLS_DIR/scripts/common.sh"
+    enter_distrobox
     step "Running emmylua_check (EmmyLua analyzer)..."
     cd "$BAR_DIR"
     emmylua_check -c .emmyrc.json . {{args}}
     ok "Type check complete"
+
+# Type-check but only surface errors — warnings/hints dropped. Exits 0 iff no errors
+# (emmylua_check itself exits non-zero on any diagnostic, so we re-derive exit code from the error count).
+check-errors: require-bar
+    #!/usr/bin/env bash
+    set -uo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    enter_distrobox
+    step "Running emmylua_check (errors only)..."
+    cd "$BAR_DIR"
+    json="$(emmylua_check -c .emmyrc.json -f json . 2>/dev/null || true)"
+    printf '%s\n' "$json" | jq -r '.[] | . as $f | .diagnostics[] | select(.severity == 1) |
+        "\($f.file):\(.range.start.line + 1):\(.range.start.character + 1): \(.code): \(.message)"'
+    count="$(printf '%s\n' "$json" | jq '[.[] | .diagnostics[] | select(.severity == 1)] | length')"
+    if [[ "$count" -gt 0 ]]; then
+        err "$count error(s)"
+        exit 1
+    fi
+    ok "No errors"
 
 # Lint BAR Lua code (luacheck via lux)
 lint *args: require-bar
