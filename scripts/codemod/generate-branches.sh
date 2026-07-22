@@ -62,7 +62,7 @@ TRACKING_ISSUE="https://github.com/beyond-all-reason/Beyond-All-Reason/issues/74
 # Bulk-migration workflow docs (how to run the migration, the dated migration log).
 # Points at the docs PR until it lands on master; then swap to the README anchor
 # (…/blob/master/README.md#bulk-migrations). Linked from every PR body.
-BULK_MIGRATIONS_DOC="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/8237"
+BULK_MIGRATIONS_DOC="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/8410"
 
 # Tooling PR — the BAR-Devtools side that ships generate-branches.sh,
 # llm-type-triage.sh, the codemod transforms, SKILL.md, and the just recipes.
