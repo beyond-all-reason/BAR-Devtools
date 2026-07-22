@@ -282,3 +282,14 @@ mission-serve *args: require-bar
     exec "$DEVTOOLS_DIR/bar-mission-kit/target/release/bar-mission-kit" serve \
         ${args:-"$BAR_DIR/modules/missions/hello_pawns"} \
         --editor-dir "$write_dir/modules/missions/editor"
+
+# Mission-dev session: mission-serve in the background + game launch; serve dies with the session
+mission-dev *args: require-bar
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    step "Starting mission-serve..."
+    just bar::mission-serve &
+    serve_pid=$!
+    trap 'kill "$serve_pid" 2>/dev/null || true' EXIT
+    just bar::launch {{args}}
