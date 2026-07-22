@@ -4,9 +4,19 @@ DEVTOOLS_DIR        := justfile_directory()
 COMPOSE_FILE        := DEVTOOLS_DIR / "docker-compose.dev.yml"
 COMPOSE             := "podman compose -f " + COMPOSE_FILE
 BAR_DIR             := DEVTOOLS_DIR / "Beyond-All-Reason"
+CODEMOD_DIR         := DEVTOOLS_DIR / "bar-lua-codemod"
+# `set export` puts this in the environment of every recipe here, so a recipe
+# that shells out to `just bar::migrate::*` would otherwise override the
+# CODEMOD_BIN its caller set -- silently sending CI back to a 2.5-minute cargo
+# build instead of the binary baked into the migration image. Honouring the
+# environment keeps the two in agreement; see bar-migrate.just.
+CODEMOD_BIN         := env('CODEMOD_BIN', CODEMOD_DIR / "target" / "release" / "bar-lua-codemod")
 # Batch check uses `emmylua_check` (Rust EmmyLua analyzer), baked into the dev
 # container image. `emmylua_ls` is LSP-only (no --check) and lives on the host
 # for editor integration — see `just setup::editor`.
+
+# Versioned bulk migrations (adoption-dated, listed in order)
+mod migrate 'bar-migrate.just'
 
 [private]
 require-bar:
@@ -235,6 +245,24 @@ integrations *args: require-bar
 
 # Run all BAR tests (unit + integrations)
 test: units integrations
+
+# Build bar-lua-codemod binary
+codemod-build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    step "Building bar-lua-codemod..."
+    bash "$DEVTOOLS_DIR/scripts/codemod-cargo.sh" build --release
+    ok "Built: {{CODEMOD_BIN}}"
+
+# Run bar-lua-codemod unit tests
+codemod-test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    step "Testing bar-lua-codemod..."
+    bash "$DEVTOOLS_DIR/scripts/codemod-cargo.sh" test
+    ok "All tests passed"
 
 # Install git pre-commit hook in the BAR repo
 setup-hooks:
