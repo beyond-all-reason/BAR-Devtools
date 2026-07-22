@@ -49,6 +49,11 @@ remote_for() {
     fi
 }
 
+# Codemod skip set — mirrors .styluaignore: vendored utils, lux/library tool
+# dirs, and mapgenerator (mapinfo_template.lua is a ${}-placeholder template,
+# not valid Lua).
+CODEMOD_EXCLUDES=(--exclude common/luaUtilities --exclude .lux --exclude recoil-lua-library --exclude mapgenerator)
+
 MIG_PR="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7229"
 
 # Tracking issue that ties all of the type-cleanup PRs together. Each leaf,
@@ -175,13 +180,13 @@ bracket_to_dot_description=""
 bracket_to_dot_summary='Rewrites identifier-keyed string access to dot notation — `x["y"]` → `x.y` and `["y"] =` → `y =` — so the analyzer can resolve field types through the access.'
 
 run_bracket_to_dot() {
-    "$CODEMOD" bracket-to-dot --path "$BAR" --exclude common/luaUtilities
+    "$CODEMOD" bracket-to-dot --path "$BAR" "${CODEMOD_EXCLUDES[@]}"
 }
 
 describe_bracket_to_dot() {
     cat <<'EOF'
 # bracket-to-dot - convert x["y"] to x.y and ["y"] = to y =
-bar-lua-codemod bracket-to-dot --path "$BAR_DIR" --exclude common/luaUtilities
+bar-lua-codemod bracket-to-dot --path "$BAR_DIR" --exclude common/luaUtilities --exclude .lux --exclude recoil-lua-library --exclude mapgenerator
 EOF
 }
 
@@ -195,13 +200,13 @@ rename_aliases_description=""
 rename_aliases_summary='Renames deprecated Spring method aliases to their canonical names (e.g. `Spring.GetMyTeamID` → `Spring.GetLocalTeamID`) so call sites line up with the names the engine type stubs declare.'
 
 run_rename_aliases() {
-    "$CODEMOD" rename-aliases --path "$BAR" --exclude common/luaUtilities
+    "$CODEMOD" rename-aliases --path "$BAR" "${CODEMOD_EXCLUDES[@]}"
 }
 
 describe_rename_aliases() {
     cat <<'EOF'
 # rename-aliases -- deprecated aliases, e.g. GetMyTeamID -> GetLocalTeamID
-bar-lua-codemod rename-aliases --path "$BAR_DIR" --exclude common/luaUtilities
+bar-lua-codemod rename-aliases --path "$BAR_DIR" --exclude common/luaUtilities --exclude .lux --exclude recoil-lua-library --exclude mapgenerator
 EOF
 }
 
@@ -215,13 +220,13 @@ detach_bar_modules_summary='Moves BAR-added helpers off the `Spring` table into 
 detach_bar_modules_description='The `detach-bar-modules-env` prereq exposes `BAR` to the widget/gadget sandbox (`luarules/system.lua`, `luaui/system.lua`), bootstraps `BAR = BAR or {}` in `init.lua`/`springOverrides.lua` before the detached defs, adds the consolidated `types/BAR.lua` stub, and lists `BAR` as a global in `.emmyrc.json`. Cherry-picked on top of `fmt` before the codemod runs.'
 
 run_detach_bar_modules() {
-    "$CODEMOD" detach-bar-modules --path "$BAR" --exclude common/luaUtilities
+    "$CODEMOD" detach-bar-modules --path "$BAR" "${CODEMOD_EXCLUDES[@]}"
 }
 
 describe_detach_bar_modules() {
     cat <<'EOF'
 # detach-bar-modules -- moves I18N, Utilities, Debug, Lava, GetModOptionsCopy off the Spring table
-bar-lua-codemod detach-bar-modules --path "$BAR_DIR" --exclude common/luaUtilities
+bar-lua-codemod detach-bar-modules --path "$BAR_DIR" --exclude common/luaUtilities --exclude .lux --exclude recoil-lua-library --exclude mapgenerator
 EOF
 }
 
