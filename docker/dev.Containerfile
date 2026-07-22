@@ -9,6 +9,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
         just \
         gcc gcc-c++ make git curl jq unzip binutils \
         gawk \
+        python3-pip \
         gpgme \
         python3-tkinter python3-requests python3-six \
         SDL2-devel DevIL-devel glew-devel openal-soft-devel \
