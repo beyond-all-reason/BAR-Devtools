@@ -181,7 +181,7 @@ impl<'s> Rec<'s> {
                     }
                 }
             };
-            steps.push(Step { verb, span: invocation.span, args: invocation.args });
+            steps.push(Step { verb, span: invocation.span, args: invocation.args, remove_span: (0, 0) });
         }
 
         // Grammar checks (also the validator's rules).
@@ -205,6 +205,9 @@ impl<'s> Rec<'s> {
         }
 
         self.order += 1;
+        for step in &mut steps {
+            step.remove_span = line_bounds(self.source, step.span.0, step.span.1);
+        }
         let insert_effect_at = steps
             .last()
             .filter(|s| s.verb == "Register")
@@ -220,6 +223,7 @@ impl<'s> Rec<'s> {
             span,
             line: self.line_of(span.0),
             insert_effect_at,
+            remove_span: line_bounds(self.source, span.0, span.1),
             label,
             steps,
         })
@@ -394,6 +398,16 @@ impl<'s> Rec<'s> {
 struct Decorator {
     name: String,
     args: Vec<String>,
+}
+
+/// Line bounds around a byte span: (start of first line, past the newline
+/// of the last line). The unit of statement/step removal.
+fn line_bounds(source: &str, start: usize, end: usize) -> (usize, usize) {
+    let s = start.min(source.len());
+    let e = end.min(source.len());
+    let line_start = source[..s].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let line_end = source[e..].find('\n').map(|i| e + i + 1).unwrap_or(source.len());
+    (line_start, line_end)
 }
 
 /// The domain annotator: stamp literals with what they MEAN, from the verb

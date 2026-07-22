@@ -56,6 +56,9 @@ pub struct Trigger {
     /// Byte offset where a new `.Do(...)` line can be inserted (start of the
     /// Register step's line). Insert intents use start == end == this.
     pub insert_effect_at: usize,
+    /// Whole-statement removal span: chain's first line start to past the
+    /// Register line's newline. Replace with "" to delete the trigger.
+    pub remove_span: Span,
     /// From a `---@label("...")` directly above the chain.
     pub label: Option<String>,
     pub steps: Vec<Step>,
@@ -65,8 +68,13 @@ pub struct Trigger {
 pub struct Step {
     /// Chain verb: When, AndWhen, Debounce, Once, Do, Register.
     pub verb: String,
+    /// The args list INCLUDING parens — replacing it swaps the step's
+    /// content: new_text = "(" + template + ")".
     pub span: Span,
     pub args: Vec<Value>,
+    /// This step's whole source line (with newline). Replace with "" to
+    /// remove the step; the grammar gate protects chain legality.
+    pub remove_span: Span,
 }
 
 /// An argument node. `kind` discriminates for JSON consumers.
