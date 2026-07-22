@@ -122,7 +122,11 @@ check_doctor_flatpak() {
     return
   fi
 
-  # If the flatpak already has access to DEVTOOLS_DIR, nothing to warn about
+  # If the flatpak already has access to DEVTOOLS_DIR, nothing to warn about.
+  # System installs need sudo to read overrides; warn the user first.
+  if [ "$install_mode" = "system" ]; then
+    info "  Checking system Flatpak permissions (may prompt for sudo)..."
+  fi
   if flatpak_can_access_devtools_dir; then
     echo ""
     return
