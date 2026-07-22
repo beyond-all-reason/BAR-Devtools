@@ -29,6 +29,8 @@ pub struct FileAst {
     pub hash: String,
     /// Every Objective("name") seen in this file — dropdown fodder.
     pub objectives: Vec<String>,
+    /// Byte offset where a whole new trigger chain can be appended (EOF).
+    pub insert_trigger_at: usize,
     /// Sections in file order. Chains before any `---@group` land in an
     /// unlabeled leading section.
     pub groups: Vec<Group>,

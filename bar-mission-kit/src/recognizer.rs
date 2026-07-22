@@ -70,6 +70,7 @@ pub fn recognize_file(path: &str, source: &str) -> Result<Recognized, String> {
             path: rec.path,
             hash: fnv1a(source.as_bytes()),
             objectives,
+            insert_trigger_at: source.len(),
             groups,
             opaque: rec.opaque,
         },

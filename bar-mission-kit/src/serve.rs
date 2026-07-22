@@ -342,6 +342,26 @@ mod tests {
     }
 
     #[test]
+    fn an_appended_trigger_chain_passes_the_gate() {
+        let dir = tmpdir("append");
+        setup(&dir);
+        let source = std::fs::read_to_string(dir.join("hello/triggers/win.lua")).unwrap();
+        let at = source.len();
+        let intent = EditIntent {
+            file: "hello/triggers/win.lua".into(),
+            start: at,
+            end: at,
+            new_text: "\nT.When(Objective(\"x\").IsComplete())\n\t.Do(Objective(\"y\").Complete())\n\t.Register()\n".into(),
+            base_hash: Some(crate::recognizer::fnv1a(source.as_bytes())),
+        };
+        apply_edit(&dir, &intent).unwrap();
+        let edited = std::fs::read_to_string(dir.join("hello/triggers/win.lua")).unwrap();
+        let rec = crate::recognizer::recognize_file("t.lua", &edited).unwrap();
+        assert!(rec.findings.is_empty());
+        assert_eq!(rec.file.groups[0].triggers.len(), 2);
+    }
+
+    #[test]
     fn paths_cannot_escape_the_missions_dir() {
         let dir = tmpdir("escape");
         setup(&dir);
