@@ -237,3 +237,29 @@ setup-hooks:
         git -C "$BAR_DIR" config blame.ignoreRevsFile .git-blame-ignore-revs
         ok "Configured git blame to ignore formatting commits"
     fi
+
+# Run bar-mission-kit unit tests (mission DSL recognizer)
+mission-kit-test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    step "Testing bar-mission-kit..."
+    bash "$DEVTOOLS_DIR/scripts/mission-kit-cargo.sh" test
+    ok "All tests passed"
+
+# Validate mission trigger files (default: hello_pawns)
+mission-check *args: require-bar
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    args="{{args}}"
+    bash "$DEVTOOLS_DIR/scripts/mission-kit-cargo.sh" run -q -- check ${args:-"$BAR_DIR/modules/missions/hello_pawns"}
+
+# Regenerate the mission AST artifact the in-game editor view renders
+mission-ast: require-bar
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    mkdir -p "$BAR_DIR/modules/missions/editor"
+    bash "$DEVTOOLS_DIR/scripts/mission-kit-cargo.sh" run -q -- parse "$BAR_DIR/modules/missions/hello_pawns" --out "$BAR_DIR/modules/missions/editor/mission_ast.json"
+    ok "Wrote modules/missions/editor/mission_ast.json"
