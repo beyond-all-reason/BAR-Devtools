@@ -18,12 +18,14 @@ bar_debug_launcher
 repos.local.conf
 .env
 
+# Build artifacts
+bar-lua-codemod/target/
+
 # Runtime / editor state
 tasks/
 .devtools/
 .backups/
 *.log
-bar-lua-codemod/target/
 .claude/settings.local.json
 .claude/projects/
 .claude/todos/
