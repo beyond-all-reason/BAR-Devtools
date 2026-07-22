@@ -1219,7 +1219,9 @@ update_prs() {
 # No new PRs are created: branches with existing PRs are reused, per
 # `gh stack link --help`.
 link_gh_stack() {
-    if ! command -v gh >/dev/null 2>&1 || ! gh extension list 2>/dev/null | grep -q 'gh-stack'; then
+    local ghbin
+    ghbin="$(resolve_host_gh)"
+    if [[ -z "$ghbin" ]] || ! host_exec "$ghbin" extension list 2>/dev/null | grep -q 'gh-stack'; then
         info "gh-stack extension not installed — skipping stack linking"
         info "  (install with: gh extension install github/gh-stack)"
         return 0
@@ -1237,7 +1239,7 @@ link_gh_stack() {
     fi
 
     step "Linking stack on GitHub: ${chain[*]}"
-    if (cd "$BAR" && gh stack link --remote "$UPSTREAM_REMOTE" --base master "${chain[@]}"); then
+    if (cd "$BAR" && host_exec "$ghbin" stack link --remote "$UPSTREAM_REMOTE" --base master "${chain[@]}"); then
         ok "Stack linked"
     else
         warn "gh stack link failed — PRs are still individually correct, just no stack comment"
