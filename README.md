@@ -162,6 +162,14 @@ just bar::lx-shell      # interactive lx shell for package work
                         #   (`lx add <pkg>`, `lx sync`, `lx install`, etc.)
 ```
 
+> **⚠️ Merge conflicts with master?** The project ships deterministic code transforms (formatting, API renames, Spring split) that can be replayed onto any branch. Transform your branch first, then merge:
+> ```bash
+> just bar::migrate::stylua-cleanup      # transform your branch first
+> git commit -am "apply code transforms"  # squashed away when PR merges
+> git merge origin/master                 # conflicts are now real conflicts only
+> ```
+> This is idempotent — safe to run multiple times. Includes `bar::fmt`, so no need to run it separately.
+
 ### Teiserver development
 
 Tests run in a separate container with `MIX_ENV=test`, so they work whether or not `services::up` is running. The test database is independent from the dev database.
