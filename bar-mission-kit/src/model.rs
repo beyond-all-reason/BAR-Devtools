@@ -14,6 +14,9 @@ pub struct MissionAst {
     /// Monotonic regeneration counter (serve mode); consumers poll this.
     pub generation: u64,
     pub files: Vec<FileAst>,
+    /// The authoring surface schema (curated overlay; annotation-derived
+    /// later): condition/effect templates the form's add-palette offers.
+    pub surface: serde_json::Value,
 }
 
 #[derive(Serialize, Debug)]
@@ -24,6 +27,8 @@ pub struct FileAst {
     /// carry it back as base_hash: compare-and-swap against clobbering a file
     /// that changed since the view was built.
     pub hash: String,
+    /// Every Objective("name") seen in this file — dropdown fodder.
+    pub objectives: Vec<String>,
     /// Sections in file order. Chains before any `---@group` land in an
     /// unlabeled leading section.
     pub groups: Vec<Group>,
@@ -46,6 +51,9 @@ pub struct Trigger {
     pub span: Span,
     /// 1-based source line of the chain start (for open-in-editor).
     pub line: usize,
+    /// Byte offset where a new `.Do(...)` line can be inserted (start of the
+    /// Register step's line). Insert intents use start == end == this.
+    pub insert_effect_at: usize,
     /// From a `---@label("...")` directly above the chain.
     pub label: Option<String>,
     pub steps: Vec<Step>,
@@ -66,10 +74,16 @@ pub enum Value {
     Number {
         value: f64,
         span: Span,
+        /// Domain meaning ("count", ...) stamped by the annotator.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        semantic: Option<String>,
     },
     String {
         value: String,
         span: Span,
+        /// Domain meaning ("unit_def_name", "objective_name", ...).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        semantic: Option<String>,
     },
     Boolean {
         value: bool,

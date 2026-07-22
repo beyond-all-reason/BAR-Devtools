@@ -75,9 +75,12 @@ fn display_path(file: &Path, roots: &[PathBuf]) -> String {
     file.display().to_string()
 }
 
+const MISSION_SURFACE: &str = include_str!("../surfaces/missions.json");
+
 pub fn collect_ast(paths: &[PathBuf], generation: u64) -> (model::MissionAst, Vec<model::Finding>) {
     let files = collect_lua_files(paths);
-    let mut ast = model::MissionAst { version: 1, generation, files: Vec::new() };
+    let surface = serde_json::from_str(MISSION_SURFACE).expect("valid surface overlay");
+    let mut ast = model::MissionAst { version: 1, generation, files: Vec::new(), surface };
     let mut findings = Vec::new();
     for file in &files {
         let rel = display_path(file, paths);
@@ -249,6 +252,37 @@ T.When(C()).Do(E()).Register()
             rec.file.groups[0].triggers[0].label.as_deref(),
             Some("First blood")
         );
+    }
+
+    #[test]
+    fn semantics_objectives_and_insert_points_are_stamped() {
+        let rec = crate::recognizer::recognize_file("triggers/win.lua", WIN).unwrap();
+        assert_eq!(rec.file.objectives, vec!["build_pawns".to_string()]);
+        let t1 = &rec.file.groups[0].triggers[0];
+        // UnitDef("armpw") arg is unit-typed; the Has count is count-typed
+        match &t1.steps[0].args[0] {
+            Value::Verb { calls, .. } => {
+                match &calls[0].args[0] {
+                    Value::Verb { calls, .. } => match &calls[0].args[0] {
+                        Value::String { semantic, .. } => {
+                            assert_eq!(semantic.as_deref(), Some("unit_def_name"))
+                        }
+                        other => panic!("expected unit string, got {other:?}"),
+                    },
+                    other => panic!("expected UnitDef verb, got {other:?}"),
+                }
+                match &calls[0].args[1] {
+                    Value::Number { semantic, .. } => {
+                        assert_eq!(semantic.as_deref(), Some("count"))
+                    }
+                    other => panic!("expected count, got {other:?}"),
+                }
+            }
+            other => panic!("expected Has verb, got {other:?}"),
+        }
+        // insert point sits at the start of the Register line
+        let at = t1.insert_effect_at;
+        assert!(WIN[at..].trim_start().starts_with(".Register"), "{}", &WIN[at..at + 20]);
     }
 
     #[test]

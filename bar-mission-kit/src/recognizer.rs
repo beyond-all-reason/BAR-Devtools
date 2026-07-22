@@ -52,8 +52,27 @@ pub fn recognize_file(path: &str, source: &str) -> Result<Recognized, String> {
         groups.remove(0);
     }
 
+    let mut objectives: Vec<String> = Vec::new();
+    for group in &mut groups {
+        for trigger in &mut group.triggers {
+            for step in &mut trigger.steps {
+                for arg in &mut step.args {
+                    annotate(arg, &mut objectives);
+                }
+            }
+        }
+    }
+    objectives.sort();
+    objectives.dedup();
+
     Ok(Recognized {
-        file: FileAst { path: rec.path, hash: fnv1a(source.as_bytes()), groups, opaque: rec.opaque },
+        file: FileAst {
+            path: rec.path,
+            hash: fnv1a(source.as_bytes()),
+            objectives,
+            groups,
+            opaque: rec.opaque,
+        },
         findings: rec.findings,
     })
 }
@@ -185,10 +204,21 @@ impl<'s> Rec<'s> {
         }
 
         self.order += 1;
+        let insert_effect_at = steps
+            .last()
+            .filter(|s| s.verb == "Register")
+            .map(|s| {
+                self.source[..s.span.0.min(self.source.len())]
+                    .rfind('\n')
+                    .map(|i| i + 1)
+                    .unwrap_or(0)
+            })
+            .unwrap_or(span.1);
         Some(Trigger {
             id: format!("{}:{}", self.path, self.order),
             span,
             line: self.line_of(span.0),
+            insert_effect_at,
             label,
             steps,
         })
@@ -230,7 +260,12 @@ impl<'s> Rec<'s> {
                 let prefix = call.get_prefix_expr()?;
                 let mut unrolled = self.unroll(&prefix, span)?;
                 let args = self.call_args(call);
-                let call_span = node_span(call);
+                // A nested CallExpr spans its whole prefix chain; the args
+                // list is the part that belongs to THIS invocation.
+                let call_span = call
+                    .get_args_list()
+                    .map(|list| node_span(&list))
+                    .unwrap_or_else(|| node_span(call));
                 let name = unrolled.pending.take();
                 unrolled.calls.push(Invocation { name, args, span: call_span });
                 Some(unrolled)
@@ -262,11 +297,12 @@ impl<'s> Rec<'s> {
                         NumberResult::Float(f) => f,
                         NumberResult::Number => f64::NAN,
                     };
-                    Value::Number { value, span }
+                    Value::Number { value, span, semantic: None }
                 }
                 Some(LuaLiteralToken::String(string)) => Value::String {
                     value: string.get_value(),
                     span,
+                    semantic: None,
                 },
                 Some(LuaLiteralToken::Bool(b)) => Value::Boolean {
                     value: b.is_true(),
@@ -357,6 +393,43 @@ impl<'s> Rec<'s> {
 struct Decorator {
     name: String,
     args: Vec<String>,
+}
+
+/// The domain annotator: stamp literals with what they MEAN, from the verb
+/// tree around them. This is where "the tree walk knows that's a unit
+/// definition" lives — the UI turns semantics into controls (the game itself
+/// supplies the unit list; the server only names the domain).
+fn annotate(value: &mut Value, objectives: &mut Vec<String>) {
+    let Value::Verb { path, calls, .. } = value else {
+        return;
+    };
+    let first_string_semantic = match path.as_str() {
+        "UnitDef" => Some("unit_def_name"),
+        "Objective" => Some("objective_name"),
+        _ => None,
+    };
+    if let Some(sem) = first_string_semantic {
+        if let Some(Value::String { value, semantic, .. }) =
+            calls.first_mut().and_then(|c| c.args.first_mut())
+        {
+            *semantic = Some(sem.to_string());
+            if sem == "objective_name" {
+                objectives.push(value.clone());
+            }
+        }
+    }
+    if path.ends_with(".Has") {
+        if let Some(Value::Number { semantic, .. }) =
+            calls.first_mut().and_then(|c| c.args.get_mut(1))
+        {
+            *semantic = Some("count".to_string());
+        }
+    }
+    for call in calls {
+        for arg in &mut call.args {
+            annotate(arg, objectives);
+        }
+    }
 }
 
 /// Stable content hash (FNV-1a 64) for the CAS precondition on edits.

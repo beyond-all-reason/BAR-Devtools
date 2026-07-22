@@ -105,7 +105,12 @@ T.When(Objective("build_pawns").IsComplete())
 	.Register()
 "#;
         let rec = crate::recognizer::recognize_file("triggers/win.lua", source).unwrap();
-        let ast = crate::model::MissionAst { version: 1, generation: 1, files: vec![rec.file] };
+        let ast = crate::model::MissionAst {
+            version: 1,
+            generation: 1,
+            files: vec![rec.file],
+            surface: serde_json::Value::Null,
+        };
         let dot = super::dot(&ast);
         assert!(dot.contains("t_triggers_win_lua_1 -> objective_build_pawns"), "{dot}");
         assert!(dot.contains("objective_build_pawns -> t_triggers_win_lua_2"), "{dot}");
