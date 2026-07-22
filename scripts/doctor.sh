@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Read-only diagnostic checks for BAR-Devtools.
 # Expects: DEVTOOLS_DIR, COMPOSE, REPOS_CONF, REPOS_LOCAL (exported by Justfile)
+# source common.sh, repos.sh, and setup.sh first.
 
 pass_count=0
 warn_count=0
@@ -113,62 +114,33 @@ check_doctor_flatpak() {
   install_mode="$(flatpak info info.beyondallreason.bar 2>/dev/null | sed -n 's/^Installation: //p')"
   _pass "$ver, info.beyondallreason.bar installed ($install_mode)"
 
-  # Flatpak data dir where devtools symlinks would sit
-  local flatpak_data_dir="$HOME/.var/app/info.beyondallreason.bar/data"
-  [ -d "$flatpak_data_dir" ] || {
+  # Use the same game-dir discovery as setup (handles XDG_DATA_HOME overrides)
+  local game_dir
+  game_dir="$(detect_game_dir 2>/dev/null)" || true
+  if [ -z "$game_dir" ]; then
     echo ""
     return
-  }
-
-  # Collect permitted filesystem paths from Flatpak permissions (merged).
-  # Extract the line: filesystems=path:flag;path;path:ro;...
-  # then split on semicolons and strip trailing access-mode flags (:create, :ro, etc).
-  local -a permitted=("$flatpak_data_dir")
-  local perms_line
-  perms_line="$(flatpak info --show-permissions info.beyondallreason.bar 2>/dev/null | sed -n 's/^filesystems=//p')"
-  if [ -n "$perms_line" ]; then
-    local IFS=';'
-    local -a entries=($perms_line)
-    local e stripped
-    for e in "${entries[@]}"; do
-      [ -z "$e" ] && continue
-      # Strip access-mode flag after trailing colon
-      stripped="${e%:*}"
-      # Resolve tilde for ~/ paths and store as-is for absolute paths
-      case "$stripped" in
-        "~"/*) stripped="$HOME/${stripped#~/}" ;;
-        "~")   stripped="$HOME" ;;
-      esac
-      permitted+=("$stripped")
-    done
   fi
 
-  # Check each devtools symlink: is its target inside a permitted path?
+  # If the flatpak already has access to DEVTOOLS_DIR, nothing to warn about
+  if flatpak_can_access_devtools_dir; then
+    echo ""
+    return
+  fi
+
+  # Permissions are missing -- report which symlinks are affected
   local linked_outside=0
   local -A link_map=(
-    [bar]="$flatpak_data_dir/games/Beyond-All-Reason.sdd"
-    [chobby]="$flatpak_data_dir/games/BYAR-Chobby.sdd"
-    [engine]="$flatpak_data_dir/engine/local-build"
+    [bar]="$game_dir/games/Beyond-All-Reason.sdd"
+    [chobby]="$game_dir/games/BYAR-Chobby.sdd"
+    [engine]="$game_dir/engine/local-build"
   )
-  local name link_path target perm
+  local name link_path target
   for name in bar chobby engine; do
     link_path="${link_map[$name]}"
     [ -L "$link_path" ] || continue
 
     target="$(readlink "$link_path")"
-
-    # No warning needed if the symlink target is in a flatpak-permitted path
-    local covered=0
-    for perm in "${permitted[@]}"; do
-      case "$target" in
-        "$perm"/*|"$perm")
-          covered=1
-          break
-          ;;
-      esac
-    done
-
-    [ "$covered" -eq 1 ] && continue
 
     if [ "$linked_outside" -eq 0 ]; then
       _warn "$name symlink target is outside Flatpak sandbox"
