@@ -59,6 +59,9 @@ pub struct Trigger {
     /// Whole-statement removal span: chain's first line start to past the
     /// Register line's newline. Replace with "" to delete the trigger.
     pub remove_span: Span,
+    /// Byte offset where a new `.AndWhen(...)` line can be inserted (past the
+    /// When line's newline).
+    pub insert_condition_at: usize,
     /// From a `---@label("...")` directly above the chain.
     pub label: Option<String>,
     pub steps: Vec<Step>,

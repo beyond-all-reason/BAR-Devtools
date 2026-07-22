@@ -208,6 +208,11 @@ impl<'s> Rec<'s> {
         for step in &mut steps {
             step.remove_span = line_bounds(self.source, step.span.0, step.span.1);
         }
+        let insert_condition_at = steps
+            .first()
+            .filter(|s| s.verb == "When")
+            .map(|s| line_bounds(self.source, s.span.0, s.span.1).1)
+            .unwrap_or(span.0);
         let insert_effect_at = steps
             .last()
             .filter(|s| s.verb == "Register")
@@ -223,6 +228,7 @@ impl<'s> Rec<'s> {
             span,
             line: self.line_of(span.0),
             insert_effect_at,
+            insert_condition_at,
             remove_span: line_bounds(self.source, span.0, span.1),
             label,
             steps,
