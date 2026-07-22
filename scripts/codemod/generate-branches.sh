@@ -172,7 +172,7 @@ post_commit_fmt() {
 
 bracket_to_dot_branch="mig-bracket"
 bracket_to_dot_commit="gen(bar_codemod): bracket-to-dot"
-bracket_to_dot_pr="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7287"
+bracket_to_dot_pr="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/8401"
 bracket_to_dot_prereq=""
 bracket_to_dot_description=""
 bracket_to_dot_summary='Rewrites identifier-keyed string access to dot notation — `x["y"]` → `x.y` and `["y"] =` → `y =` — so the analyzer can resolve field types through the access.'
@@ -192,7 +192,7 @@ EOF
 
 rename_aliases_branch="mig-rename-aliases"
 rename_aliases_commit="gen(bar_codemod): rename-aliases"
-rename_aliases_pr="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7288"
+rename_aliases_pr="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/8402"
 rename_aliases_prereq=""
 rename_aliases_description=""
 rename_aliases_summary='Renames deprecated Spring method aliases to their canonical names (e.g. `Spring.GetMyTeamID` → `Spring.GetLocalTeamID`) so call sites line up with the names the engine type stubs declare.'
@@ -212,7 +212,7 @@ EOF
 
 detach_bar_modules_branch="mig-detach-bar-modules"
 detach_bar_modules_commit="gen(bar_codemod): detach-bar-modules"
-detach_bar_modules_pr="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7289"
+detach_bar_modules_pr="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/8403"
 detach_bar_modules_prereq="detach-bar-modules-env"
 detach_bar_modules_summary='Moves BAR-added helpers off the `Spring` table into a `BAR` namespace — `Spring.I18N` → `BAR.I18N`, plus `BAR.Utilities`, `BAR.Debug`, `BAR.Lava`, and `BAR.GetModOptionsCopy` — since they aren'\''t engine API and otherwise break type-checking against the `Spring` stubs.'
 detach_bar_modules_description='The `detach-bar-modules-env` prereq exposes `BAR` to the widget/gadget sandbox (`luarules/system.lua`, `luaui/system.lua`), bootstraps `BAR = BAR or {}` in `init.lua`/`springOverrides.lua` before the detached defs, adds the consolidated `types/BAR.lua` stub, and lists `BAR` as a global in `.emmyrc.json`. Cherry-picked on top of `fmt` before the codemod runs.'
@@ -239,7 +239,7 @@ EOF
 
 integration_tests_branch="mig-integration-tests"
 integration_tests_commit="gen(hand): integration tests return-table shape"
-integration_tests_pr="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7437"
+integration_tests_pr="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/8404"
 integration_tests_pr_title="[Tests] Restructure integration tests to table-return shape"
 integration_tests_prereq="integration-tests-curated"
 integration_tests_summary='Hand-curated (not a codemod): restructures the tests under `luaui/Tests/` and `luaui/TestsExamples/` (20 files) from bare-global hook declarations to a `return { ... }` shape, and patches `dbg_test_runner.lua` to read hooks from the returned table.'
@@ -266,7 +266,7 @@ EOF
 
 busted_types_branch="mig-busted-types"
 busted_types_commit="gen(hand): inline luassert and busted LuaCATS types"
-busted_types_pr="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/7438"
+busted_types_pr="https://github.com/beyond-all-reason/Beyond-All-Reason/pull/8405"
 busted_types_pr_title="[Types] Inline LuaCATS busted+luassert type annotations"
 busted_types_prereq="busted-types-curated"
 busted_types_summary='Hand-curated (not a codemod): vendors [LuaCATS/busted](https://github.com/LuaCATS/busted) and [LuaCATS/luassert](https://github.com/LuaCATS/luassert) type annotations under `types/busted/` and `types/luassert/`.'
