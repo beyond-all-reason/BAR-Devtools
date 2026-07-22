@@ -95,6 +95,8 @@ impl Server {
             .collect::<Vec<_>>()
             .join("\n");
         self.write_ast(&ast);
+        let dot = crate::graph::dot(&ast);
+        std::fs::write(self.editor_dir.join("mission_graph.dot"), dot).ok();
         self.write_status(findings.is_empty(), &message);
         if findings.is_empty() {
             eprintln!("[gen {}] AST regenerated", self.generation);

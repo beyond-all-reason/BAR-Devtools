@@ -6,6 +6,7 @@
 //!   check  — same walk, findings only; nonzero exit on a non-conforming
 //!            mission (CI's validator)
 
+mod graph;
 mod model;
 mod recognizer;
 mod serve;
