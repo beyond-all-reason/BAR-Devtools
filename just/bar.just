@@ -263,3 +263,14 @@ mission-ast: require-bar
     mkdir -p "$BAR_DIR/modules/missions/editor"
     bash "$DEVTOOLS_DIR/scripts/mission-kit-cargo.sh" run -q -- parse "$BAR_DIR/modules/missions/hello_pawns" --out "$BAR_DIR/modules/missions/editor/mission_ast.json"
     ok "Wrote modules/missions/editor/mission_ast.json"
+
+# Run the mission editor service: watch triggers, regen AST, apply UI edits, open-in-editor
+mission-serve *args: require-bar
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    bash "$DEVTOOLS_DIR/scripts/mission-kit-cargo.sh" build --release
+    args="{{args}}"
+    exec "$DEVTOOLS_DIR/bar-mission-kit/target/release/bar-mission-kit" serve \
+        ${args:-"$BAR_DIR/modules/missions/hello_pawns"} \
+        --editor-dir "$BAR_DIR/modules/missions/editor"

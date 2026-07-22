@@ -8,6 +8,7 @@
 
 mod model;
 mod recognizer;
+mod serve;
 
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
@@ -33,6 +34,18 @@ enum Command {
     /// Validate mission files; print findings, exit nonzero on any.
     Check {
         paths: Vec<PathBuf>,
+    },
+    /// Run the editor service: watch missions, regenerate the AST artifact,
+    /// apply UI edit intents, handle open-in-editor requests.
+    Serve {
+        /// Mission directory to watch (e.g. .../modules/missions/hello_pawns)
+        missions_dir: PathBuf,
+        /// Directory for the artifact + edits/ + open_request.json
+        #[arg(long)]
+        editor_dir: PathBuf,
+        /// Command template for the mode switch to code
+        #[arg(long, default_value = "code -g {file}:{line}")]
+        editor_cmd: String,
     },
 }
 
@@ -61,9 +74,9 @@ fn display_path(file: &Path, roots: &[PathBuf]) -> String {
     file.display().to_string()
 }
 
-fn run(paths: &[PathBuf]) -> (model::MissionAst, Vec<model::Finding>) {
+pub fn collect_ast(paths: &[PathBuf], generation: u64) -> (model::MissionAst, Vec<model::Finding>) {
     let files = collect_lua_files(paths);
-    let mut ast = model::MissionAst { version: 1, files: Vec::new() };
+    let mut ast = model::MissionAst { version: 1, generation, files: Vec::new() };
     let mut findings = Vec::new();
     for file in &files {
         let rel = display_path(file, paths);
@@ -97,7 +110,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Command::Parse { paths, out } => {
-            let (ast, findings) = run(&paths);
+            let (ast, findings) = collect_ast(&paths, 1);
             for f in &findings {
                 eprintln!("{}:{}: {}", f.path, f.line, f.message);
             }
@@ -114,7 +127,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Command::Check { paths } => {
-            let (_ast, findings) = run(&paths);
+            let (_ast, findings) = collect_ast(&paths, 1);
             for f in &findings {
                 println!("{}:{}: {}", f.path, f.line, f.message);
             }
@@ -124,6 +137,9 @@ fn main() -> ExitCode {
             } else {
                 ExitCode::FAILURE
             }
+        }
+        Command::Serve { missions_dir, editor_dir, editor_cmd } => {
+            serve::Server::new(missions_dir, editor_dir, editor_cmd).run()
         }
     }
 }

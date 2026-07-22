@@ -11,6 +11,8 @@ pub type Span = (usize, usize);
 pub struct MissionAst {
     /// Recognizer version; bump when the node vocabulary changes.
     pub version: u32,
+    /// Monotonic regeneration counter (serve mode); consumers poll this.
+    pub generation: u64,
     pub files: Vec<FileAst>,
 }
 
@@ -38,6 +40,8 @@ pub struct Trigger {
     /// filename:declaration-order — the same identity the runtime stamps.
     pub id: String,
     pub span: Span,
+    /// 1-based source line of the chain start (for open-in-editor).
+    pub line: usize,
     /// From a `---@label("...")` directly above the chain.
     pub label: Option<String>,
     pub steps: Vec<Step>,

@@ -188,6 +188,7 @@ impl<'s> Rec<'s> {
         Some(Trigger {
             id: format!("{}:{}", self.path, self.order),
             span,
+            line: self.line_of(span.0),
             label,
             steps,
         })
