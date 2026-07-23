@@ -53,11 +53,11 @@ pub struct Trigger {
     pub span: Span,
     /// 1-based source line of the chain start (for open-in-editor).
     pub line: usize,
-    /// Byte offset where a new `.Do(...)` line can be inserted (start of the
-    /// Register step's line). Insert intents use start == end == this.
+    /// Byte offset where a new `.Do(...)` line can be inserted (past the
+    /// chain's last line). Insert intents use start == end == this.
     pub insert_effect_at: usize,
-    /// Whole-statement removal span: chain's first line start to past the
-    /// Register line's newline. Replace with "" to delete the trigger.
+    /// Whole-statement removal span: the chain's source lines, newline
+    /// inclusive. Replace with "" to delete the trigger.
     pub remove_span: Span,
     /// Byte offset where a new `.AndWhen(...)` line can be inserted (past the
     /// When line's newline).
@@ -69,7 +69,7 @@ pub struct Trigger {
 
 #[derive(Serialize, Debug)]
 pub struct Step {
-    /// Chain verb: When, AndWhen, Debounce, Once, Do, Register.
+    /// Chain verb: When (first and repeated), Do, Once, Debounce.
     pub verb: String,
     /// The args list INCLUDING parens — replacing it swaps the step's
     /// content: new_text = "(" + template + ")".

@@ -10,9 +10,10 @@ use emmylua_parser::{
     LuaStat, LuaTableExpr, ParserConfig,
 };
 
-/// Chain verbs the framework grammar admits, in the only legal shape:
-/// When first, Register last.
-const CHAIN_VERBS: &[&str] = &["When", "AndWhen", "Debounce", "Once", "Do", "Register"];
+/// Chain verbs the framework grammar admits. A statement starts at a bare
+/// `When(...)` and ends at its last chained call — no terminator; the chain
+/// must contain at least one `Do`. Repeated `.When` AND-composes.
+const CHAIN_VERBS: &[&str] = &["When", "Do", "Once", "Debounce"];
 
 pub struct Recognized {
     pub file: FileAst,
@@ -161,17 +162,17 @@ impl<'s> Rec<'s> {
         label: Option<String>,
     ) -> Option<Trigger> {
         let unrolled = self.unroll(&LuaExpr::CallExpr(call.clone()), span)?;
-        if unrolled.path.len() != 2 || unrolled.path[0] != "T" {
-            self.mark_opaque(span, "statement is not a T.When trigger chain");
+        if unrolled.path.len() != 1 || unrolled.path[0] != "When" {
+            self.mark_opaque(span, "statement is not a When trigger chain");
             return None;
         }
 
-        // The first invocation's verb is the second path segment (T.When);
-        // later invocations carry their own names.
+        // The first invocation is the When itself; later invocations carry
+        // their own names (.When/.Do/.Once).
         let mut steps = Vec::new();
         for (i, invocation) in unrolled.calls.into_iter().enumerate() {
             let verb = if i == 0 {
-                unrolled.path[1].clone()
+                String::from("When")
             } else {
                 match invocation.name.clone() {
                     Some(name) => name,
@@ -184,15 +185,15 @@ impl<'s> Rec<'s> {
             steps.push(Step { verb, span: invocation.span, args: invocation.args, remove_span: (0, 0) });
         }
 
-        // Grammar checks (also the validator's rules).
-        if steps.is_empty() || steps[0].verb != "When" {
-            self.finding(span, "trigger chain must start with T.When(...)".into());
-        }
-        if steps.last().map(|s| s.verb.as_str()) != Some("Register") {
-            self.finding(span, "trigger chain must end with .Register()".into());
+        // Grammar checks (also the validator's rules). No terminator: the
+        // chain ends at its last call; legality means at least one Do.
+        if !steps.iter().any(|s| s.verb == "Do") {
+            self.finding(span, "trigger chain has no Do — every statement needs at least one effect".into());
         }
         for step in &steps {
-            if !CHAIN_VERBS.contains(&step.verb.as_str()) {
+            if step.verb == "Register" {
+                self.finding(step.span, "Register is gone — chains end at their last Do".into());
+            } else if !CHAIN_VERBS.contains(&step.verb.as_str()) {
                 self.finding(
                     step.span,
                     format!(
@@ -213,16 +214,8 @@ impl<'s> Rec<'s> {
             .filter(|s| s.verb == "When")
             .map(|s| line_bounds(self.source, s.span.0, s.span.1).1)
             .unwrap_or(span.0);
-        let insert_effect_at = steps
-            .last()
-            .filter(|s| s.verb == "Register")
-            .map(|s| {
-                self.source[..s.span.0.min(self.source.len())]
-                    .rfind('\n')
-                    .map(|i| i + 1)
-                    .unwrap_or(0)
-            })
-            .unwrap_or(span.1);
+        // New .Do lines append past the chain's last line.
+        let insert_effect_at = line_bounds(self.source, span.0, span.1).1;
         Some(Trigger {
             id: format!("{}:{}", self.path, self.order),
             span,

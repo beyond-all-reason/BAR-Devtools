@@ -259,7 +259,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("hello/triggers")).unwrap();
         std::fs::write(
             dir.join("hello/triggers/win.lua"),
-            "T.When(Team.Player.Has(UnitDef(\"armpw\"), 3))\n\t.Do(Objective(\"x\").Complete())\n\t.Register()\n",
+            "When(Team.Player.Has(UnitDef(\"armpw\"), 3))\n\t.Do(Objective(\"x\").Complete())\n",
         )
         .unwrap();
     }
@@ -351,7 +351,7 @@ mod tests {
             file: "hello/triggers/win.lua".into(),
             start: at,
             end: at,
-            new_text: "\nT.When(Objective(\"x\").IsComplete())\n\t.Do(Objective(\"y\").Complete())\n\t.Register()\n".into(),
+            new_text: "\nWhen(Objective(\"x\").IsComplete())\n\t.Do(Objective(\"y\").Complete())\n".into(),
             base_hash: Some(crate::recognizer::fnv1a(source.as_bytes())),
         };
         apply_edit(&dir, &intent).unwrap();

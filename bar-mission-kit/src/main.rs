@@ -153,13 +153,11 @@ mod tests {
     use crate::model::Value;
 
     const WIN: &str = r#"
-T.When(Team.Player.Has(UnitDef("armpw"), 3))
+When(Team.Player.Has(UnitDef("armpw"), 3))
 	.Do(Objective("build_pawns").Complete())
-	.Register()
 
-T.When(Objective("build_pawns").IsComplete())
+When(Objective("build_pawns").IsComplete())
 	.Do(MatchFlow.Victory(Team.Player))
-	.Register()
 "#;
 
     #[test]
@@ -171,7 +169,7 @@ T.When(Objective("build_pawns").IsComplete())
         assert_eq!(triggers.len(), 2);
         assert_eq!(triggers[0].id, "triggers/win.lua:1");
         let steps: Vec<&str> = triggers[0].steps.iter().map(|s| s.verb.as_str()).collect();
-        assert_eq!(steps, vec!["When", "Do", "Register"]);
+        assert_eq!(steps, vec!["When", "Do"]);
 
         // When's condition: Team.Player.Has(UnitDef("armpw"), 3)
         match &triggers[0].steps[0].args[0] {
@@ -202,9 +200,8 @@ T.When(Objective("build_pawns").IsComplete())
     #[test]
     fn chained_invocations_survive() {
         let src = r#"
-T.When(Region("north").EnteredBy(Team.Player, { count = 5 }))
+When(Region("north").EnteredBy(Team.Player, { count = 5 }))
 	.Do(Wave.Define("flank").Route(Path("east")).Spawn())
-	.Register()
 "#;
         let rec = crate::recognizer::recognize_file("triggers/w.lua", src).unwrap();
         assert!(rec.findings.is_empty(), "findings: {:?}", rec.findings);
@@ -222,7 +219,7 @@ T.When(Region("north").EnteredBy(Team.Player, { count = 5 }))
 
     #[test]
     fn function_bodies_are_findings() {
-        let src = "T.When(C()).Do(function() end).Register()\n";
+        let src = "When(C()).Do(function() end)\n";
         let rec = crate::recognizer::recognize_file("triggers/bad.lua", src).unwrap();
         assert!(rec
             .findings
@@ -243,7 +240,7 @@ T.When(Region("north").EnteredBy(Team.Player, { count = 5 }))
         let src = r#"
 ---@group("Waves")
 ---@label("First blood")
-T.When(C()).Do(E()).Register()
+When(C()).Do(E())
 "#;
         let rec = crate::recognizer::recognize_file("triggers/d.lua", src).unwrap();
         assert_eq!(rec.file.groups.len(), 1);
@@ -280,15 +277,22 @@ T.When(C()).Do(E()).Register()
             }
             other => panic!("expected Has verb, got {other:?}"),
         }
-        // insert point sits at the start of the Register line
+        // effect insert point appends past the chain's last line
         let at = t1.insert_effect_at;
-        assert!(WIN[at..].trim_start().starts_with(".Register"), "{}", &WIN[at..at + 20]);
+        assert!(WIN[..at].trim_end().ends_with(".Do(Objective(\"build_pawns\").Complete())"), "{}", &WIN[..at]);
     }
 
     #[test]
-    fn missing_register_is_a_finding() {
-        let src = "T.When(C()).Do(E())\n";
+    fn a_chain_without_do_is_a_finding() {
+        let src = "When(C()).Once()\n";
         let rec = crate::recognizer::recognize_file("triggers/r.lua", src).unwrap();
-        assert!(rec.findings.iter().any(|f| f.message.contains("Register")));
+        assert!(rec.findings.iter().any(|f| f.message.contains("no Do")));
+    }
+
+    #[test]
+    fn a_leftover_register_is_named_explicitly() {
+        let src = "When(C()).Do(E()).Register()\n";
+        let rec = crate::recognizer::recognize_file("triggers/r.lua", src).unwrap();
+        assert!(rec.findings.iter().any(|f| f.message.contains("Register is gone")));
     }
 }

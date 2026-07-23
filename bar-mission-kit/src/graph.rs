@@ -96,13 +96,11 @@ mod tests {
     #[test]
     fn hello_pawns_graph_has_the_objective_cascade() {
         let source = r#"
-T.When(Team.Player.Has(UnitDef("armpw"), 3))
+When(Team.Player.Has(UnitDef("armpw"), 3))
 	.Do(Objective("build_pawns").Complete())
-	.Register()
 
-T.When(Objective("build_pawns").IsComplete())
+When(Objective("build_pawns").IsComplete())
 	.Do(MatchFlow.Victory(Team.Player))
-	.Register()
 "#;
         let rec = crate::recognizer::recognize_file("triggers/win.lua", source).unwrap();
         let ast = crate::model::MissionAst {
