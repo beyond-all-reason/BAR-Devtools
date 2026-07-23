@@ -39,14 +39,14 @@ library *flags: build-lde
 
     info "Extracting Lua docs..."
     $LDE \
-        --src "$RECOIL_DIR/rts/{Lua,Rml/SolLua}/**/*.cpp" \
+        --src "$RECOIL_DIR/rts/{Lua,Rml/SolLua,Sim/Units/Scripts}/**/*.cpp" \
         --dest "$DEST" \
         --repo "https://github.com/beyond-all-reason/RecoilEngine/blob/master" \
         {{flags}}
 
     info "Copying into BAR working tree..."
-    mkdir -p "$BAR_DIR/recoil-lua-library/library"
     clean_dir "$BAR_DIR/recoil-lua-library/library"
+    mkdir -p "$BAR_DIR/recoil-lua-library/library"
     cp -r "$RECOIL_DIR/rts/Lua/library/"* "$BAR_DIR/recoil-lua-library/library/"
     ok "Updated $BAR_DIR/recoil-lua-library/library/"
 
