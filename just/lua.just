@@ -39,7 +39,7 @@ library *flags: build-lde
 
     info "Extracting Lua docs..."
     $LDE \
-        --src "$RECOIL_DIR/rts/{Lua,Rml/SolLua}/**/*.cpp" \
+        --src "$RECOIL_DIR/rts/{Lua,Rml/SolLua,Sim/Units/Scripts}/**/*.cpp" \
         --dest "$DEST" \
         --repo "https://github.com/beyond-all-reason/RecoilEngine/blob/master" \
         {{flags}}
