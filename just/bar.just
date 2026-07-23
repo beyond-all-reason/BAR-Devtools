@@ -293,3 +293,7 @@ mission-dev *args: require-bar
     serve_pid=$!
     trap 'kill "$serve_pid" 2>/dev/null || true' EXIT
     just bar::launch {{args}}
+
+# Keep the mission api stack rebased on master and the iteration merge fresh (restack.sh rebase|iterate|test|push|all)
+mission-restack *args: require-bar
+    @bash "{{DEVTOOLS_DIR}}/scripts/mission-stack/restack.sh" {{args}}
