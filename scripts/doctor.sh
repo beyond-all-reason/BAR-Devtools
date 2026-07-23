@@ -122,17 +122,8 @@ check_doctor_flatpak() {
     return
   fi
 
-  # If the flatpak already has access to DEVTOOLS_DIR, nothing to warn about.
-  # System installs need sudo to read overrides; warn the user first.
-  if [ "$install_mode" = "system" ]; then
-    info "  Checking system Flatpak permissions (may prompt for sudo)..."
-  fi
-  if flatpak_can_access_devtools_dir; then
-    echo ""
-    return
-  fi
-
-  # Permissions are missing -- report which symlinks are affected
+  # report which symlinks may be affected
+  # we have not yet checked permssions yet
   local linked_outside=0
   local -A link_map=(
     [bar]="$game_dir/games/Beyond-All-Reason.sdd"
@@ -147,7 +138,7 @@ check_doctor_flatpak() {
     target="$(readlink "$link_path")"
 
     if [ "$linked_outside" -eq 0 ]; then
-      _warn "$name symlink target is outside Flatpak sandbox"
+      info "$name symlink target is outside Flatpak sandbox"
       info "  $link_path -> $target"
       linked_outside=1
     else
@@ -156,8 +147,18 @@ check_doctor_flatpak() {
   done
 
   if [ "$linked_outside" -gt 0 ]; then
+    # If the flatpak already has access to DEVTOOLS_DIR, nothing to warn about.
+    # System installs need sudo to read overrides; warn the user first.
+    if [ "$install_mode" = "system" ]; then
+        info "  Checking system Flatpak permissions (may prompt for sudo)..."
+    fi
+    if flatpak_can_access_devtools_dir; then
+        echo ""
+        return
+    fi
+
     echo ""
-    warn "The Flatpak sandbox blocks the Spring engine from following symlinks"
+    _warn "The Flatpak sandbox blocks the Spring engine from following symlinks"
     warn "into folders it hasn't been granted access to."
     warn "Please grant access to these folders with:"
     if [ "$install_mode" = "system" ]; then
