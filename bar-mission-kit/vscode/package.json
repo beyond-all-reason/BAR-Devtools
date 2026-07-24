@@ -1,0 +1,54 @@
+{
+  "name": "bar-mission-editor",
+  "displayName": "BAR Campaign Editor",
+  "description": "Campaign editor for BAR missions, rendered by bar-mission-kit serve; the .lua files are the source of truth",
+  "version": "0.1.0",
+  "publisher": "beyond-all-reason",
+  "license": "GPL-2.0-or-later",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "barMission",
+          "title": "Campaign",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "barMission": [
+        {
+          "type": "webview",
+          "id": "barMissionEditor.form",
+          "name": "Campaign Editor"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "barMissionEditor.open",
+        "title": "BAR: Open Campaign Editor"
+      }
+    ],
+    "configuration": {
+      "title": "BAR Mission Editor",
+      "properties": {
+        "barMissionEditor.serverUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8571",
+          "description": "bar-mission-kit serve HTTP address (its --listen flag)"
+        }
+      }
+    }
+  }
+}
