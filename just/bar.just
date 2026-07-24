@@ -283,6 +283,13 @@ mission-serve *args: require-bar
         ${args:-"$BAR_DIR/modules/missions/hello_pawns"} \
         --editor-dir "$write_dir/modules/missions/editor"
 
+# Tail the game side of the mission editor (bridge, terminal, loader) from infolog
+mission-logs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    write_dir="${BAR_WRITE_DIR:-$HOME/.local/state/Beyond All Reason}"
+    exec tail -F "$write_dir/infolog.txt" | grep --line-buffered -Ei 'mission_editor|mission_bridge|mission_loader|mission (armed|reload)'
+
 # Mission-dev session: mission-serve in the background + game launch; serve dies with the session
 mission-dev *args: require-bar
     #!/usr/bin/env bash
