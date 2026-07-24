@@ -147,7 +147,7 @@ impl<'s> Rec<'s> {
             _ => {
                 self.mark_opaque(
                     span,
-                    "trigger files contain only T.When chains (closure-free surface)",
+                    "trigger files contain only When chains (closure-free surface)",
                 );
             }
         }

@@ -331,7 +331,7 @@ fn file_stamp(path: &Path) -> String {
 /// Cheap change detection: every .lua path + mtime + size, concatenated.
 fn fingerprint_dir(dir: &Path) -> String {
     let mut entries: Vec<String> = Vec::new();
-    let pattern = format!("{}/**/*.lua", dir.display());
+    let pattern = format!("{}/**/triggers/*.lua", dir.display());
     for path in glob::glob(&pattern).into_iter().flatten().flatten() {
         let meta = std::fs::metadata(&path).ok();
         let mtime = meta

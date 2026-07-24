@@ -67,7 +67,9 @@ fn collect_lua_files(paths: &[PathBuf]) -> Vec<PathBuf> {
     let mut files = Vec::new();
     for path in paths {
         if path.is_dir() {
-            let pattern = format!("{}/**/*.lua", path.display());
+            // The loader's contract: a mission IS its triggers/ dir. Scanning
+            // wider (missions root mode) must not recognize lib/gadget code.
+            let pattern = format!("{}/**/triggers/*.lua", path.display());
             for entry in glob::glob(&pattern).expect("valid glob").flatten() {
                 files.push(entry);
             }
