@@ -279,8 +279,15 @@ mission-serve *args: require-bar
         write_dir="$BAR_DIR"
         info "engine write dir not found; falling back to the repo"
     fi
+    if [ -z "$args" ]; then
+        # Default: follow the game — the editor re-scopes to whatever mission
+        # the picker arms (active_mission.json from the bridge).
+        set -- --missions-root "$BAR_DIR/modules/missions"
+    else
+        set -- $args
+    fi
     exec "$DEVTOOLS_DIR/bar-mission-kit/target/release/bar-mission-kit" serve \
-        ${args:-"$BAR_DIR/modules/missions/hello_pawns"} \
+        "$@" \
         --editor-dir "$write_dir/modules/missions/editor"
 
 # Tail the game side of the mission editor (bridge, terminal, loader) from infolog

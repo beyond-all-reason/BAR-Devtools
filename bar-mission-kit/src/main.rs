@@ -41,8 +41,13 @@ enum Command {
     /// Run the editor service: watch missions, regenerate the AST artifact,
     /// apply UI edit intents, handle open-in-editor requests.
     Serve {
-        /// Mission directory to watch (e.g. .../modules/missions/hello_pawns)
-        missions_dir: PathBuf,
+        /// Mission directory to watch (e.g. .../modules/missions/hello_pawns).
+        /// Optional with --missions-root.
+        missions_dir: Option<PathBuf>,
+        /// Follow the game: watch this missions root and re-scope to whatever
+        /// mission the game arms (active_mission.json from the bridge).
+        #[arg(long)]
+        missions_root: Option<PathBuf>,
         /// Directory for the artifact + edits/ + open_request.json
         #[arg(long)]
         editor_dir: PathBuf,
@@ -150,9 +155,13 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         }
-        Command::Serve { missions_dir, editor_dir, editor_cmd, listen } => {
+        Command::Serve { missions_dir, missions_root, editor_dir, editor_cmd, listen } => {
+            let Some(initial) = missions_dir.or_else(|| missions_root.clone()) else {
+                eprintln!("serve needs a missions dir or --missions-root");
+                return ExitCode::FAILURE;
+            };
             http::spawn(&listen, editor_dir.clone());
-            serve::Server::new(missions_dir, editor_dir, editor_cmd).run()
+            serve::Server::new(initial, editor_dir, editor_cmd, missions_root).run()
         }
     }
 }

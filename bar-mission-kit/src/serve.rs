@@ -58,13 +58,49 @@ pub struct Server {
     pub missions_dir: PathBuf,
     pub editor_dir: PathBuf,
     pub editor_cmd: String,
+    /// When set, the editor follows the game: active_mission.json (published
+    /// by the bridge) re-scopes missions_dir to root/<name>.
+    pub missions_root: Option<PathBuf>,
     generation: u64,
     open_seq: u64,
 }
 
 impl Server {
-    pub fn new(missions_dir: PathBuf, editor_dir: PathBuf, editor_cmd: String) -> Self {
-        Server { missions_dir, editor_dir, editor_cmd, generation: 0, open_seq: 0 }
+    pub fn new(
+        missions_dir: PathBuf,
+        editor_dir: PathBuf,
+        editor_cmd: String,
+        missions_root: Option<PathBuf>,
+    ) -> Self {
+        Server { missions_dir, editor_dir, editor_cmd, missions_root, generation: 0, open_seq: 0 }
+    }
+
+    /// Picker click in-game -> loader stamps mission_name -> bridge publishes
+    /// active_mission.json -> the whole editor re-scopes (form, probes, Edit
+    /// target). Only in --missions-root mode.
+    fn follow_active(&mut self) {
+        let Some(root) = &self.missions_root else {
+            return;
+        };
+        let Ok(text) = std::fs::read_to_string(self.editor_dir.join("active_mission.json")) else {
+            return;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            return;
+        };
+        let Some(name) = value.get("name").and_then(|n| n.as_str()) else {
+            return;
+        };
+        if name.is_empty()
+            || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            return;
+        }
+        let candidate = root.join(name);
+        if candidate.is_dir() && candidate != self.missions_dir {
+            eprintln!("following armed mission: {name}");
+            self.missions_dir = candidate;
+        }
     }
 
     pub fn run(&mut self) -> ! {
@@ -82,9 +118,12 @@ impl Server {
             self.consume_edits();
             self.consume_open_request();
 
-            // domains.json (client-published dropdown data) re-renders too
+            self.follow_active();
+            // domains.json (client-published dropdown data) re-renders too;
+            // the dir itself is part of the print so re-scoping regenerates.
             let fingerprint = format!(
-                "{}\n{}",
+                "{}\n{}\n{}",
+                self.missions_dir.display(),
                 fingerprint_dir(&self.missions_dir),
                 file_stamp(&self.editor_dir.join("domains.json"))
             );
@@ -423,7 +462,7 @@ mod tests {
         let dir = tmpdir("open");
         setup(&dir);
         let editor = tmpdir("open-editor");
-        let mut server = Server::new(dir.clone(), editor.clone(), String::new());
+        let mut server = Server::new(dir.clone(), editor.clone(), String::new(), None);
         std::fs::write(
             editor.join("open_request.json"),
             "{\"file\":\"hello/triggers/win.lua\",\"line\":2}",
@@ -438,6 +477,30 @@ mod tests {
         assert!(target["file"].as_str().unwrap().ends_with("hello/triggers/win.lua"));
         assert!(target["file"].as_str().unwrap().starts_with('/'), "absolute path for window routing");
         assert!(!editor.join("open_request.json").exists());
+    }
+
+    #[test]
+    fn the_editor_follows_the_armed_mission() {
+        let root = tmpdir("follow-root");
+        std::fs::create_dir_all(root.join("alpha/triggers")).unwrap();
+        std::fs::create_dir_all(root.join("beta/triggers")).unwrap();
+        let editor = tmpdir("follow-editor");
+        let mut server = Server::new(root.clone(), editor.clone(), String::new(), Some(root.clone()));
+
+        std::fs::write(editor.join("active_mission.json"), "{\"name\":\"beta\"}").unwrap();
+        server.follow_active();
+        assert_eq!(server.missions_dir, root.join("beta"));
+
+        // path-shaped names are refused; scope stays where it was
+        std::fs::write(editor.join("active_mission.json"), "{\"name\":\"../../etc\"}").unwrap();
+        server.follow_active();
+        assert_eq!(server.missions_dir, root.join("beta"));
+
+        // without --missions-root nothing moves
+        let mut pinned = Server::new(root.join("alpha"), editor.clone(), String::new(), None);
+        std::fs::write(editor.join("active_mission.json"), "{\"name\":\"beta\"}").unwrap();
+        pinned.follow_active();
+        assert_eq!(pinned.missions_dir, root.join("alpha"));
     }
 
     #[test]
