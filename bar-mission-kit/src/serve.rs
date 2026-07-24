@@ -11,6 +11,7 @@
 
 use crate::model::MissionAst;
 use crate::recognizer;
+use crate::view;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -48,6 +49,9 @@ struct Status {
     generation: u64,
     ok: bool,
     message: String,
+    /// Absolute missions root, so editor clients can map `path:line` findings
+    /// in `message` onto real files (VS Code diagnostics).
+    missions_dir: String,
 }
 
 pub struct Server {
@@ -55,11 +59,12 @@ pub struct Server {
     pub editor_dir: PathBuf,
     pub editor_cmd: String,
     generation: u64,
+    open_seq: u64,
 }
 
 impl Server {
     pub fn new(missions_dir: PathBuf, editor_dir: PathBuf, editor_cmd: String) -> Self {
-        Server { missions_dir, editor_dir, editor_cmd, generation: 0 }
+        Server { missions_dir, editor_dir, editor_cmd, generation: 0, open_seq: 0 }
     }
 
     pub fn run(&mut self) -> ! {
@@ -77,7 +82,12 @@ impl Server {
             self.consume_edits();
             self.consume_open_request();
 
-            let fingerprint = fingerprint_dir(&self.missions_dir);
+            // domains.json (client-published dropdown data) re-renders too
+            let fingerprint = format!(
+                "{}\n{}",
+                fingerprint_dir(&self.missions_dir),
+                file_stamp(&self.editor_dir.join("domains.json"))
+            );
             if fingerprint != last_fingerprint {
                 last_fingerprint = fingerprint;
                 self.regenerate();
@@ -95,6 +105,7 @@ impl Server {
             .collect::<Vec<_>>()
             .join("\n");
         self.write_ast(&ast);
+        self.write_view(&ast);
         let dot = crate::graph::dot(&ast);
         std::fs::write(self.editor_dir.join("mission_graph.dot"), dot).ok();
         self.write_status(findings.is_empty(), &message);
@@ -113,8 +124,27 @@ impl Server {
         }
     }
 
+    fn write_view(&self, ast: &MissionAst) {
+        let domains: view::Domains = std::fs::read_to_string(self.editor_dir.join("domains.json"))
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default();
+        let artifact = view::render(ast, &domains);
+        let json = serde_json::to_string(&artifact).expect("serializable view");
+        let path = self.editor_dir.join("mission_view.json");
+        if let Err(e) = std::fs::write(&path, json) {
+            eprintln!("cannot write {}: {e}", path.display());
+        }
+    }
+
     fn write_status(&self, ok: bool, message: &str) {
-        let status = Status { generation: self.generation, ok, message: message.to_string() };
+        let missions_dir = self
+            .missions_dir
+            .canonicalize()
+            .unwrap_or_else(|_| self.missions_dir.clone())
+            .display()
+            .to_string();
+        let status = Status { generation: self.generation, ok, message: message.to_string(), missions_dir };
         let json = serde_json::to_string_pretty(&status).expect("serializable status");
         std::fs::write(self.editor_dir.join("status.json"), json).ok();
     }
@@ -150,7 +180,11 @@ impl Server {
         Ok(())
     }
 
-    fn consume_open_request(&self) {
+    /// Open requests become a sequenced open-target artifact (GET
+    /// /open_request): every VS Code window's extension polls it, and the one
+    /// whose workspace contains the file acts. A non-empty --editor-cmd
+    /// additionally shells out, for extension-less setups.
+    fn consume_open_request(&mut self) {
         let path = self.editor_dir.join("open_request.json");
         let Ok(text) = std::fs::read_to_string(&path) else {
             return;
@@ -167,12 +201,23 @@ impl Server {
             eprintln!("open request outside missions dir: {}", request.file);
             return;
         };
-        let cmd = self
-            .editor_cmd
-            .replace("{file}", &file.display().to_string())
-            .replace("{line}", &request.line.to_string());
-        eprintln!("opening: {cmd}");
-        let _ = std::process::Command::new("sh").arg("-c").arg(&cmd).spawn();
+        let file = file.canonicalize().unwrap_or(file);
+        self.open_seq += 1;
+        let target = serde_json::json!({
+            "seq": self.open_seq,
+            "file": file.display().to_string(),
+            "line": request.line,
+        });
+        std::fs::write(self.editor_dir.join("open_target.json"), target.to_string()).ok();
+        eprintln!("open target [{}]: {}:{}", self.open_seq, file.display(), request.line);
+        if !self.editor_cmd.is_empty() {
+            let cmd = self
+                .editor_cmd
+                .replace("{file}", &file.display().to_string())
+                .replace("{line}", &request.line.to_string());
+            eprintln!("opening: {cmd}");
+            let _ = std::process::Command::new("sh").arg("-c").arg(&cmd).spawn();
+        }
     }
 }
 
@@ -230,6 +275,18 @@ pub fn apply_edit(missions_dir: &Path, intent: &EditIntent) -> Result<(), String
     }
 
     std::fs::write(&path, edited).map_err(|e| e.to_string())
+}
+
+fn file_stamp(path: &Path) -> String {
+    let meta = std::fs::metadata(path).ok();
+    let mtime = meta
+        .as_ref()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let size = meta.map(|m| m.len()).unwrap_or(0);
+    format!("{}|{mtime}|{size}", path.display())
 }
 
 /// Cheap change detection: every .lua path + mtime + size, concatenated.
@@ -359,6 +416,28 @@ mod tests {
         let rec = crate::recognizer::recognize_file("t.lua", &edited).unwrap();
         assert!(rec.findings.is_empty());
         assert_eq!(rec.file.groups[0].triggers.len(), 2);
+    }
+
+    #[test]
+    fn open_requests_become_routable_targets() {
+        let dir = tmpdir("open");
+        setup(&dir);
+        let editor = tmpdir("open-editor");
+        let mut server = Server::new(dir.clone(), editor.clone(), String::new());
+        std::fs::write(
+            editor.join("open_request.json"),
+            "{\"file\":\"hello/triggers/win.lua\",\"line\":2}",
+        )
+        .unwrap();
+        server.consume_open_request();
+        let target: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(editor.join("open_target.json")).unwrap())
+                .unwrap();
+        assert_eq!(target["seq"], 1);
+        assert_eq!(target["line"], 2);
+        assert!(target["file"].as_str().unwrap().ends_with("hello/triggers/win.lua"));
+        assert!(target["file"].as_str().unwrap().starts_with('/'), "absolute path for window routing");
+        assert!(!editor.join("open_request.json").exists());
     }
 
     #[test]

@@ -7,9 +7,11 @@
 //!            mission (CI's validator)
 
 mod graph;
+mod http;
 mod model;
 mod recognizer;
 mod serve;
+mod view;
 
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
@@ -44,9 +46,15 @@ enum Command {
         /// Directory for the artifact + edits/ + open_request.json
         #[arg(long)]
         editor_dir: PathBuf,
-        /// Command template for the mode switch to code
-        #[arg(long, default_value = "code -g {file}:{line}")]
+        /// Shell template for open-in-editor. Empty (the default) means the
+        /// VS Code extension owns opening: it routes to the window whose
+        /// workspace contains the mission. Set e.g. "code -g {file}:{line}"
+        /// for extension-less setups.
+        #[arg(long, default_value = "")]
         editor_cmd: String,
+        /// Loopback HTTP address for editor clients (VS Code webview)
+        #[arg(long, default_value = "127.0.0.1:8571")]
+        listen: String,
     },
 }
 
@@ -75,7 +83,7 @@ fn display_path(file: &Path, roots: &[PathBuf]) -> String {
     file.display().to_string()
 }
 
-const MISSION_SURFACE: &str = include_str!("../surfaces/missions.json");
+pub(crate) const MISSION_SURFACE: &str = include_str!("../surfaces/missions.json");
 
 pub fn collect_ast(paths: &[PathBuf], generation: u64) -> (model::MissionAst, Vec<model::Finding>) {
     let files = collect_lua_files(paths);
@@ -142,7 +150,8 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         }
-        Command::Serve { missions_dir, editor_dir, editor_cmd } => {
+        Command::Serve { missions_dir, editor_dir, editor_cmd, listen } => {
+            http::spawn(&listen, editor_dir.clone());
             serve::Server::new(missions_dir, editor_dir, editor_cmd).run()
         }
     }
