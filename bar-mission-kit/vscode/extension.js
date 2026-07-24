@@ -33,6 +33,57 @@ function activate(context) {
 		pollOpenTarget(server);
 	}, 1500);
 	context.subscriptions.push({ dispose: () => clearInterval(timer) });
+
+	// Trigger files are DSL documents, not Lua project members: their
+	// completion comes from serve's vocabulary (surface + objectives +
+	// domains), ranked above whatever a Lua LS thinks the world contains.
+	context.subscriptions.push(
+		vscode.languages.registerCompletionItemProvider(
+			{ language: "lua", pattern: "**/modules/missions/**/triggers/**" },
+			{
+				async provideCompletionItems() {
+					const vocab = await vocabulary(serverUrl());
+					if (!vocab) return [];
+					const items = [];
+					const add = (label, insert, kind, sort, detail) => {
+						const item = new vscode.CompletionItem(label, kind);
+						item.insertText = insert;
+						item.sortText = sort;
+						item.detail = detail;
+						items.push(item);
+					};
+					const chain = new vscode.CompletionItem("When … Do …", vscode.CompletionItemKind.Snippet);
+					chain.insertText = new vscode.SnippetString("When(${1})\n\t.Do(${2})");
+					chain.sortText = "00";
+					chain.detail = "new trigger chain";
+					items.push(chain);
+					vocab.conditions.forEach((c, i) =>
+						add(`WHEN · ${c.label}`, c.template, vscode.CompletionItemKind.Event, `01${i}`, c.template));
+					vocab.effects.forEach((e, i) =>
+						add(`DO · ${e.label}`, e.template, vscode.CompletionItemKind.Method, `02${i}`, e.template));
+					vocab.objectives.forEach((o, i) =>
+						add(o, o, vscode.CompletionItemKind.EnumMember, `03${i}`, "objective"));
+					vocab.units.forEach((u, i) =>
+						add(u.label, u.value, vscode.CompletionItemKind.Constant, `04${String(i).padStart(3, "0")}`, "unit def"));
+					return items;
+				},
+			}
+		)
+	);
+}
+
+let vocabCache = { at: 0, value: null };
+async function vocabulary(server) {
+	if (Date.now() - vocabCache.at < 10000 && vocabCache.value) return vocabCache.value;
+	try {
+		const response = await fetch(server + "/view");
+		if (!response.ok) return vocabCache.value;
+		const view = await response.json();
+		vocabCache = { at: Date.now(), value: view.vocabulary || null };
+	} catch {
+		// serve down: keep whatever we had
+	}
+	return vocabCache.value;
 }
 
 // Window routing: serve publishes a sequenced open target; every window's

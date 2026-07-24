@@ -18,7 +18,7 @@ pub struct Domains {
     pub units: Vec<DomainOption>,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Serialize, Clone)]
 pub struct DomainOption {
     pub value: String,
     pub label: String,
@@ -40,6 +40,17 @@ pub struct ViewArtifact {
     /// deliberately bypasses the generation counter — values change without
     /// re-rendering the form.
     pub live: Vec<LiveProbe>,
+    /// The DSL vocabulary for editor completion: trigger files aren't Lua
+    /// project members, so their completion comes from here, not a Lua LS.
+    pub vocabulary: Vocabulary,
+}
+
+#[derive(Serialize)]
+pub struct Vocabulary {
+    pub conditions: Vec<SurfaceEntry>,
+    pub effects: Vec<SurfaceEntry>,
+    pub objectives: Vec<String>,
+    pub units: Vec<DomainOption>,
 }
 
 /// One thing the game should sample. `key` matches a data-live attribute in
@@ -94,8 +105,8 @@ struct Surface {
     effects: Vec<SurfaceEntry>,
 }
 
-#[derive(Deserialize, Clone)]
-struct SurfaceEntry {
+#[derive(Deserialize, Serialize, Clone)]
+pub struct SurfaceEntry {
     label: String,
     template: String,
 }
@@ -124,13 +135,21 @@ pub fn render(ast: &MissionAst, domains: &Domains) -> ViewArtifact {
     let nouns = xmlize(&dioxus_ssr::render_element(nouns_body(ast, domains, &live)));
 
     let files = ast.files.len();
-    let objective_count = ast
+    let objectives: Vec<String> = ast
         .files
         .iter()
-        .flat_map(|f| f.objectives.iter())
+        .flat_map(|f| f.objectives.iter().cloned())
         .collect::<std::collections::BTreeSet<_>>()
-        .len();
+        .into_iter()
+        .collect();
+    let objective_count = objectives.len();
     let unit_count = live.borrow().iter().filter(|p| p.kind == "unit_count").count();
+    let vocabulary = Vocabulary {
+        conditions: surface.conditions.clone(),
+        effects: surface.effects.clone(),
+        objectives,
+        units: domains.units.clone(),
+    };
     let form = [
         section("mission", "Mission Editor", &format!("{files} file{}", plural(files)), false, &mission),
         section(
@@ -154,6 +173,7 @@ pub fn render(ast: &MissionAst, domains: &Domains) -> ViewArtifact {
         billboard,
         modals: modals(&surface),
         live: live.into_inner(),
+        vocabulary,
     }
 }
 
@@ -915,6 +935,15 @@ When(Objective("build_pawns").IsComplete())
     fn an_unknown_unit_still_renders_as_a_selectable_option() {
         let view = render(&ast(), &Domains::default());
         assert!(view.form.contains("value=\"armpw\" selected=\"true\""), "{}", view.form);
+    }
+
+    #[test]
+    fn the_vocabulary_rides_the_artifact_for_editor_completion() {
+        let view = render(&ast(), &domains());
+        assert_eq!(view.vocabulary.conditions.len(), 2);
+        assert_eq!(view.vocabulary.effects.len(), 3);
+        assert_eq!(view.vocabulary.objectives, vec!["build_pawns".to_string()]);
+        assert_eq!(view.vocabulary.units.len(), 2);
     }
 
     #[test]
