@@ -1371,7 +1371,7 @@ cmd_init() {
   if feature_selected teiserver; then
     info "Building Docker images..."
     $COMPOSE build teiserver
-    $COMPOSE --profile spads pull spads
+    $COMPOSE --profile spads build spads
     ok "Images built successfully."
     recap "Docker images" ok "built"
   else
@@ -1570,7 +1570,7 @@ cmd_setup() {
 
   info "Building Docker images..."
   $COMPOSE build teiserver
-  $COMPOSE --profile spads pull spads
+  $COMPOSE --profile spads build spads
   ok "Images built successfully."
 
   echo ""
