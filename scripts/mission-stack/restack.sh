@@ -2,15 +2,14 @@
 # Deterministic restack of the mission api stack.
 #
 #   restack.sh rebase    rebase hello_pawns onto upstream/master, then each
-#                        stack layer onto the one below (known auto-resolve:
+#                        branch onto its parent (known auto-resolve:
 #                        matchflow_verdict.lua modify/delete -> keep deletion)
 #   restack.sh test      run the busted suite as the gate
 #   restack.sh push      force-push the stack + sharing-modules to upstream
 #   restack.sh all       rebase test
 #
-# sharing-modules is a sibling stack pinned to the fmt substrate ($SHARING_BASE,
-# fmt-llm tip); it does not restack until bar-fmt lands upstream, then it rebases
-# onto hello_pawns and joins STACK.
+# Topology: hello_pawns carries the module foundation (mode_builder); on it,
+# matchflow_extraction -> bar_editor and sharing-modules are sibling stacks.
 #
 # Requires: a clean $BAR_DIR checkout (the script switches branches in it).
 # Any conflict other than the known one aborts loudly for manual resolution.
@@ -23,7 +22,6 @@ source "$DEVTOOLS_DIR/scripts/common.sh"
 BASE="upstream/master"
 STACK=(hello_pawns matchflow_extraction bar_editor)
 SHARING="sharing-modules"
-SHARING_BASE="570ed55650cc0e3f810010ca095935781226cdd5"
 KNOWN_DELETE="modules/matchflow/gadgets/matchflow_verdict.lua"
 
 cd "$BAR_DIR"
@@ -72,6 +70,7 @@ cmd_rebase() {
         rebase_one "$branch" "$prev"
         prev="$branch"
     done
+    rebase_one "$SHARING" "${STACK[0]}"
 }
 
 cmd_test() {
@@ -81,8 +80,8 @@ cmd_test() {
 }
 
 cmd_push() {
-    if [ "$(git merge-base "$SHARING_BASE" "$SHARING")" != "$SHARING_BASE" ]; then
-        echo "ERROR: $SHARING is no longer based on $SHARING_BASE - update SHARING_BASE first." >&2
+    if [ "$(git merge-base "${STACK[0]}" "$SHARING")" != "$(git rev-parse "${STACK[0]}")" ]; then
+        echo "ERROR: $SHARING is not based on ${STACK[0]} - run restack.sh rebase first." >&2
         exit 1
     fi
     step "Pushing stack + $SHARING to upstream (force)..."
