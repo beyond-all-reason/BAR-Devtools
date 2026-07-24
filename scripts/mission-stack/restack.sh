@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# Deterministic restack of the mission api stack + the iteration merge.
+# Deterministic restack of the mission api stack.
 #
 #   restack.sh rebase    rebase hello_pawns onto upstream/master, then each
 #                        stack layer onto the one below (known auto-resolve:
 #                        matchflow_verdict.lua modify/delete -> keep deletion)
-#   restack.sh iterate   regenerate modules_iteration = sharing_tab (+) hello_pawns
-#                        (the iteration branch is DERIVED - rebuilt, never edited)
 #   restack.sh test      run the busted suite as the gate
-#   restack.sh push      force-push the stack + iteration to upstream
-#   restack.sh all       rebase iterate test
+#   restack.sh push      force-push the stack + sharing-modules to upstream
+#   restack.sh all       rebase test
+#
+# sharing-modules is a sibling stack pinned to the fmt substrate ($SHARING_BASE,
+# fmt-llm tip); it does not restack until bar-fmt lands upstream, then it rebases
+# onto hello_pawns and joins STACK.
 #
 # Requires: a clean $BAR_DIR checkout (the script switches branches in it).
 # Any conflict other than the known one aborts loudly for manual resolution.
@@ -20,8 +22,8 @@ source "$DEVTOOLS_DIR/scripts/common.sh"
 
 BASE="upstream/master"
 STACK=(hello_pawns matchflow_extraction bar_editor)
-SHARING="sharing_tab"
-ITER="modules_iteration"
+SHARING="sharing-modules"
+SHARING_BASE="570ed55650cc0e3f810010ca095935781226cdd5"
 KNOWN_DELETE="modules/matchflow/gadgets/matchflow_verdict.lua"
 
 cd "$BAR_DIR"
@@ -72,19 +74,6 @@ cmd_rebase() {
     done
 }
 
-cmd_iterate() {
-    require_clean
-    step "Regenerating $ITER = $SHARING + ${STACK[0]}..."
-    git checkout -q -B "$ITER" "$SHARING"
-    if ! git merge --no-edit "${STACK[0]}" >/dev/null 2>&1; then
-        echo "ERROR: iteration merge conflicts:" >&2
-        git diff --name-only --diff-filter=U >&2
-        git merge --abort
-        exit 1
-    fi
-    ok "$ITER regenerated at $(git rev-parse --short HEAD)"
-}
-
 cmd_test() {
     step "Running busted gate..."
     lx test
@@ -92,18 +81,21 @@ cmd_test() {
 }
 
 cmd_push() {
-    step "Pushing stack + iteration to upstream (force)..."
-    git push -f upstream "${STACK[@]}" "$ITER"
+    if [ "$(git merge-base "$SHARING_BASE" "$SHARING")" != "$SHARING_BASE" ]; then
+        echo "ERROR: $SHARING is no longer based on $SHARING_BASE - update SHARING_BASE first." >&2
+        exit 1
+    fi
+    step "Pushing stack + $SHARING to upstream (force)..."
+    git push -f upstream "${STACK[@]}" "$SHARING"
     ok "pushed"
 }
 
 for cmd in "${@:-all}"; do
     case "$cmd" in
         rebase) cmd_rebase ;;
-        iterate) cmd_iterate ;;
         test) cmd_test ;;
         push) cmd_push ;;
-        all) cmd_rebase; cmd_iterate; cmd_test ;;
-        *) echo "usage: restack.sh [rebase|iterate|test|push|all]" >&2; exit 1 ;;
+        all) cmd_rebase; cmd_test ;;
+        *) echo "usage: restack.sh [rebase|test|push|all]" >&2; exit 1 ;;
     esac
 done
