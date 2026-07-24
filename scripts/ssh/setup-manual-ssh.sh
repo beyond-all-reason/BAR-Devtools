@@ -74,6 +74,6 @@ echo ""
 read -rp "    Press Enter once you've added the key... " _
 
 step "4/4 Verify"
-op_ssh_verify
+op_ssh_verify manual
 echo ""
 info "Open a new shell to pick up the ${SHELLRC_TARGET/#$HOME/~} snippet automatically."

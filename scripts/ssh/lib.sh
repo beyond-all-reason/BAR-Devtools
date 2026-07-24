@@ -75,23 +75,34 @@ shellrc_apply() {
 }
 
 # Verify the agent end-to-end. SSH_AUTH_SOCK must be set in the calling shell.
+# Flavor (arg 1, default "op") picks the remediation hints: op | manual.
 op_ssh_verify() {
+    local flavor="${1:-op}"
     local listing rc
     # ssh-add exits 1 = no keys, 2 = no agent; capture without tripping set -e.
     if listing="$(ssh-add -l 2>&1)"; then rc=0; else rc=$?; fi
 
     if [ $rc -eq 2 ]; then
-        err "Could not reach the SSH agent at \$SSH_AUTH_SOCK ($SSH_AUTH_SOCK)."
-        err "  Confirm 1Password Desktop is running and signed in, and that"
-        err "  Settings → Developer → 'Use the SSH agent' is enabled."
+        err "Could not reach the SSH agent at \$SSH_AUTH_SOCK (${SSH_AUTH_SOCK:-unset})."
+        if [ "$flavor" = op ]; then
+            err "  Confirm 1Password Desktop is running and signed in, and that"
+            err "  Settings → Developer → 'Use the SSH agent' is enabled."
+        else
+            err "  Open a new shell to pick up the manual-ssh-agent rc block,"
+            err "  or re-run 'just ssh::manual-setup'."
+        fi
         return 1
     fi
     if [ $rc -eq 1 ]; then
         warn "Agent is reachable but no SSH keys are loaded."
-        warn "  Open 1Password and add an SSH key item (or unlock an existing"
-        warn "  one), then re-run 'just ssh::op-setup'. Without a loaded key"
-        warn "  the bridge succeeds silently and the first git operation"
-        warn "  fails with 'Permission denied (publickey)'."
+        if [ "$flavor" = op ]; then
+            warn "  Open 1Password and add an SSH key item (or unlock an existing"
+            warn "  one), then re-run 'just ssh::op-setup'. Without a loaded key"
+            warn "  the bridge succeeds silently and the first git operation"
+            warn "  fails with 'Permission denied (publickey)'."
+        else
+            warn "  Run 'ssh-add ~/.ssh/id_ed25519', or re-run 'just ssh::manual-setup'."
+        fi
         return 1
     fi
 
@@ -111,10 +122,17 @@ op_ssh_verify() {
     else
         warn "github.com did not accept any loaded key:"
         printf '%s\n' "$gh_out" | sed 's/^/    /'
-        warn "  The agent is bridged correctly, but the keys 1Password is"
-        warn "  exposing aren't registered on your GitHub account. Add one"
-        warn "  at https://github.com/settings/keys (the public key for any"
-        warn "  loaded item) and re-run."
+        if [ "$flavor" = op ]; then
+            warn "  The agent is bridged correctly, but the keys 1Password is"
+            warn "  exposing aren't registered on your GitHub account. Add one"
+            warn "  at https://github.com/settings/keys (the public key for any"
+            warn "  loaded item) and re-run."
+        else
+            warn "  The agent has your key loaded, but GitHub rejected it. At"
+            warn "  https://github.com/settings/keys check that ~/.ssh/id_ed25519.pub"
+            warn "  is present as an Authentication Key (not a Signing Key) on the"
+            warn "  account you'll contribute from, then re-run 'just ssh::manual-setup'."
+        fi
     fi
 }
 
@@ -128,7 +146,7 @@ op_ssh_pin_protocol_ssh() {
     fi
     {
         [ -s "$conf" ] && echo ""
-        echo "# Auto-pinned by just ssh::op-setup after github.com auth succeeded."
+        echo "# Auto-pinned by just ssh:: setup after github.com auth succeeded."
         echo "@protocol ssh"
     } >> "$conf"
     ok "Pinned @protocol ssh in $conf — clones/pushes will use the bridged agent."
