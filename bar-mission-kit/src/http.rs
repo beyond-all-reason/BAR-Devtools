@@ -3,10 +3,11 @@
 //! the game uses. No shared state with the serve loop — the regeneration
 //! cycle is the confirmation, same as every other client.
 //!
-//!   GET  /view    -> mission_view.json
-//!   GET  /status  -> status.json
-//!   POST /edit    -> <editor-dir>/edits/http_<ts>_<n>.json (validated shape)
-//!   POST /open    -> <editor-dir>/open_request.json
+//!   GET  /view            -> mission_view.json
+//!   GET  /status          -> status.json
+//!   POST /edit            -> <editor-dir>/edits/http_<ts>_<n>.json (validated shape)
+//!   POST /open            -> <editor-dir>/open_request.json
+//!   POST /select_mission  -> <editor-dir>/select_mission.json
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -84,6 +85,13 @@ fn handle(mut stream: TcpStream, editor_dir: PathBuf) -> std::io::Result<()> {
                 return respond(&mut stream, 400, "text/plain", b"bad open request");
             }
             std::fs::write(editor_dir.join("open_request.json"), &body)?;
+            respond(&mut stream, 200, "application/json", b"{\"ok\":true}")
+        }
+        ("POST", "/select_mission") => {
+            if serde_json::from_slice::<crate::serve::SelectMission>(&body).is_err() {
+                return respond(&mut stream, 400, "text/plain", b"bad select_mission");
+            }
+            std::fs::write(editor_dir.join("select_mission.json"), &body)?;
             respond(&mut stream, 200, "application/json", b"{\"ok\":true}")
         }
         _ => respond(&mut stream, 404, "text/plain", b"not found"),
@@ -200,6 +208,21 @@ mod tests {
         // query strings must not defeat the router (the sidebar loads /?embed=1)
         let response = request(port, "GET /?embed=1 HTTP/1.1\r\n\r\n");
         assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    }
+
+    #[test]
+    fn mission_selections_land_in_the_channel() {
+        let dir = tmpdir("select");
+        let port = spawn("127.0.0.1:0", dir.clone()).unwrap();
+        let body = "{\"name\":\"cm8_ashfall\"}";
+        let response = request(
+            port,
+            &format!("POST /select_mission HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}", body.len()),
+        );
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert_eq!(std::fs::read_to_string(dir.join("select_mission.json")).unwrap(), body);
+        let response = request(port, "POST /select_mission HTTP/1.1\r\nContent-Length: 4\r\n\r\nnope");
+        assert!(response.starts_with("HTTP/1.1 400"), "{response}");
     }
 
     #[test]

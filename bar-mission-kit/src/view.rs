@@ -24,6 +24,15 @@ pub struct DomainOption {
     pub label: String,
 }
 
+/// Where the served mission sits in the missions tree. Serve owns this (it
+/// knows --missions-root); the crumb and mission list render server-side so
+/// terminals stay blind.
+#[derive(Default, Clone)]
+pub struct Scope {
+    pub mission: Option<String>,
+    pub missions: Vec<String>,
+}
+
 /// The rendered view artifact (mission_view.json). `generation` first: the
 /// widget greps it cheaply before decoding.
 #[derive(Serialize)]
@@ -127,7 +136,7 @@ struct Ctx<'a> {
     live: &'a std::cell::RefCell<Vec<LiveProbe>>,
 }
 
-pub fn render(ast: &MissionAst, domains: &Domains) -> ViewArtifact {
+pub fn render(ast: &MissionAst, domains: &Domains, scope: &Scope) -> ViewArtifact {
     let surface: Surface = serde_json::from_value(ast.surface.clone()).unwrap_or_default();
     let live = std::cell::RefCell::new(Vec::new());
     let mission = xmlize(&dioxus_ssr::render_element(body(ast, &surface, domains, true, &live)));
@@ -151,7 +160,13 @@ pub fn render(ast: &MissionAst, domains: &Domains) -> ViewArtifact {
         units: domains.units.clone(),
     };
     let form = [
-        section("mission", "Mission Editor", &format!("{files} file{}", plural(files)), false, &mission),
+        section(
+            "mission",
+            "Mission Editor",
+            &format!("{files} file{}", plural(files)),
+            false,
+            &format!("{}{mission}", crumb(scope)),
+        ),
         section(
             "nouns",
             "Nouns",
@@ -179,6 +194,38 @@ pub fn render(ast: &MissionAst, domains: &Domains) -> ViewArtifact {
 
 fn plural(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
+}
+
+/// The navigable path: `missions ▸ <current>`. The root is a button when
+/// there are siblings to navigate to; terminals toggle the list and post the
+/// pick as a select_mission intent. Names are dir names already restricted to
+/// [A-Za-z0-9_-] by serve, so they embed in markup verbatim.
+fn crumb(scope: &Scope) -> String {
+    let Some(name) = &scope.mission else {
+        return String::new();
+    };
+    let navigable = !scope.missions.is_empty();
+    let root = if navigable {
+        "<button class=\"me-crumb-root\" data-nav=\"missions\">missions</button>".to_string()
+    } else {
+        "<span class=\"me-crumb-root\">missions</span>".to_string()
+    };
+    let mut out = format!(
+        "<div class=\"me-crumb\">{root}\
+         <span class=\"me-crumb-sep\"></span>\
+         <span class=\"me-crumb-here\">{name}</span></div>"
+    );
+    if navigable {
+        out.push_str("<div class=\"me-mission-list collapsed\" data-mission-list=\"1\">");
+        for mission in &scope.missions {
+            let current = if Some(mission) == scope.mission.as_ref() { " me-mission-current" } else { "" };
+            out.push_str(&format!(
+                "<button class=\"me-mission-row{current}\" data-select-mission=\"{mission}\">{mission}</button>"
+            ));
+        }
+        out.push_str("</div>");
+    }
+    out
 }
 
 /// Collapsible section shell. Static titles/keys only — bodies are already
@@ -868,7 +915,7 @@ When(Objective("build_pawns").IsComplete())
 
     #[test]
     fn the_form_is_wellformed_xml_with_editable_controls() {
-        let view = render(&ast(), &domains());
+        let view = render(&ast(), &domains(), &Scope::default());
         assert_wellformed(&view.form);
         assert!(!view.form.contains("<!--"), "hydration markers leaked");
         // count literal -> number input with span + CAS hash attributes
@@ -886,7 +933,7 @@ When(Objective("build_pawns").IsComplete())
 
     #[test]
     fn the_form_is_sectioned_with_a_noun_explorer() {
-        let view = render(&ast(), &domains());
+        let view = render(&ast(), &domains(), &Scope::default());
         for key in ["mission", "nouns"] {
             assert!(view.form.contains(&format!("data-section=\"{key}\"")), "missing section {key}");
             assert!(view.form.contains(&format!("data-toggle=\"{key}\"")), "missing toggle {key}");
@@ -906,7 +953,7 @@ When(Objective("build_pawns").IsComplete())
 
     #[test]
     fn live_probes_are_slotted_and_deduped() {
-        let view = render(&ast(), &domains());
+        let view = render(&ast(), &domains(), &Scope::default());
         // unit chip in the sentence + a probe describing what to sample
         assert!(view.form.contains("data-live=\"unit:armpw:3\""), "{}", view.form);
         assert!(view.form.contains("data-live=\"obj:build_pawns\""));
@@ -921,7 +968,7 @@ When(Objective("build_pawns").IsComplete())
 
     #[test]
     fn the_billboard_is_readonly_display_notation() {
-        let view = render(&ast(), &domains());
+        let view = render(&ast(), &domains(), &Scope::default());
         assert_wellformed(&view.billboard);
         assert!(!view.billboard.contains("<input"));
         assert!(!view.billboard.contains("<select"));
@@ -933,13 +980,13 @@ When(Objective("build_pawns").IsComplete())
 
     #[test]
     fn an_unknown_unit_still_renders_as_a_selectable_option() {
-        let view = render(&ast(), &Domains::default());
+        let view = render(&ast(), &Domains::default(), &Scope::default());
         assert!(view.form.contains("value=\"armpw\" selected=\"true\""), "{}", view.form);
     }
 
     #[test]
     fn the_vocabulary_rides_the_artifact_for_editor_completion() {
-        let view = render(&ast(), &domains());
+        let view = render(&ast(), &domains(), &Scope::default());
         assert_eq!(view.vocabulary.conditions.len(), 2);
         assert_eq!(view.vocabulary.effects.len(), 3);
         assert_eq!(view.vocabulary.objectives, vec!["build_pawns".to_string()]);
@@ -948,7 +995,7 @@ When(Objective("build_pawns").IsComplete())
 
     #[test]
     fn modal_rows_carry_composed_edits() {
-        let view = render(&ast(), &domains());
+        let view = render(&ast(), &domains(), &Scope::default());
         let step = &view.modals.add_step;
         assert!(step.rows.iter().any(|r| r.kind == "andwhen" && r.new_text.starts_with("\t.When(")));
         assert!(step.rows.iter().any(|r| r.kind == "effect" && r.new_text.starts_with("\t.Do(")));
@@ -959,6 +1006,34 @@ When(Objective("build_pawns").IsComplete())
         assert!(view.modals.swap_conditions.rows.iter().all(|r| r.kind == "swap"
             && r.new_text.starts_with('(')
             && r.new_text.ends_with(')')));
+    }
+
+    #[test]
+    fn the_breadcrumb_navigates_missions() {
+        let scope = Scope {
+            mission: Some("cm8_ashfall".into()),
+            missions: vec!["cm8_ashfall".into(), "hello_pawns".into()],
+        };
+        let view = render(&ast(), &domains(), &scope);
+        assert_wellformed(&view.form);
+        assert!(view.form.contains("data-nav=\"missions\""), "{}", view.form);
+        assert!(view.form.contains("me-crumb-here\">cm8_ashfall<"));
+        assert!(view.form.contains("data-select-mission=\"hello_pawns\""));
+        assert!(view.form.contains("me-mission-row me-mission-current"));
+        // the crumb leads the mission section, before the file view
+        assert!(view.form.find("me-crumb").unwrap() < view.form.find("me-file").unwrap());
+        // pinned serve (no root): the path shows, nothing navigates
+        let pinned = render(
+            &ast(),
+            &domains(),
+            &Scope { mission: Some("solo".into()), missions: vec![] },
+        );
+        assert!(!pinned.form.contains("data-nav"));
+        assert!(!pinned.form.contains("data-select-mission"));
+        assert!(pinned.form.contains("me-crumb-here\">solo<"));
+        // no scope at all -> no crumb
+        let bare = render(&ast(), &domains(), &Scope::default());
+        assert!(!bare.form.contains("me-crumb"));
     }
 
     #[test]

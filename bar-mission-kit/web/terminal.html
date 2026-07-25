@@ -94,6 +94,20 @@
 	#live-banner { display: none; font-size: 0.72em; color: #8a9aac; padding: 4px 2px 0; }
 	body.live-idle #live-banner { display: block; }
 	body.live-idle .me-live { opacity: 0.35; }
+	/* The navigable path: missions ▸ current. */
+	.me-crumb { display: flex; align-items: center; gap: 6px; padding: 2px 0 6px; font-size: 0.82em; }
+	.me-crumb-root { background: none; border: none; padding: 0; font-size: 1em; color: #6f9fd8; }
+	button.me-crumb-root { cursor: pointer; }
+	button.me-crumb-root:hover { color: #cfe4ff; text-decoration: underline; }
+	.me-crumb-sep::before { content: "\25b8"; color: #4c5d70; }
+	.me-crumb-here { color: #e4ecf5; font-weight: 600; }
+	.me-mission-list { margin: 0 0 8px; padding: 4px; background: rgba(79,140,224,0.05);
+		border: 1px solid #223040; border-radius: 6px; }
+	.me-mission-list.collapsed { display: none; }
+	.me-mission-row { display: block; width: 100%; text-align: left; background: none; border: none;
+		border-radius: 5px; color: #9fb3c8; padding: 5px 9px; font-size: 0.85em; cursor: pointer; }
+	.me-mission-row:hover { background: #2c4158; color: #fff; }
+	.me-mission-current { color: #e4ecf5; background: rgba(79,140,224,0.12); }
 	.me-noun-group { color: #55677a; font-size: 0.68em; letter-spacing: 0.12em; margin: 10px 0 3px; }
 	.me-noun { display: flex; align-items: center; justify-content: space-between; padding: 3px 4px; border-radius: 4px; }
 	.me-noun-name { color: #c6d2df; }
@@ -254,6 +268,22 @@
 			const sectionEl = toggle.closest(".me-section");
 			sectionEl.classList.toggle("collapsed");
 			collapsedSections.set(sectionEl.dataset.section, sectionEl.classList.contains("collapsed"));
+			return;
+		}
+		const nav = event.target.closest("[data-nav]");
+		if (nav) {
+			const list = document.querySelector("[data-mission-list]");
+			if (list) list.classList.toggle("collapsed");
+			return;
+		}
+		const pick = event.target.closest("[data-select-mission]");
+		if (pick) {
+			fetch("/select_mission", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ name: pick.dataset.selectMission }),
+			});
+			lastGeneration = null; // the re-scope renders as the next generation
 			return;
 		}
 		const jump = event.target.closest("[data-open-file]");

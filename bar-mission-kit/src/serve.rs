@@ -40,6 +40,13 @@ pub struct OpenRequest {
     pub line: usize,
 }
 
+/// A crumb click: re-scope serve to root/<name>. Same channel discipline as
+/// every other intent — a json file in the editor dir, consumed by the loop.
+#[derive(Deserialize, Debug)]
+pub struct SelectMission {
+    pub name: String,
+}
+
 fn one() -> usize {
     1
 }
@@ -63,6 +70,10 @@ pub struct Server {
     pub missions_root: Option<PathBuf>,
     generation: u64,
     open_seq: u64,
+    /// Last-seen active_mission.json content: arming is an EVENT, so the
+    /// editor follows a change, not the standing file — a manual crumb
+    /// selection must not be overridden by a stale arming from last session.
+    last_active: String,
 }
 
 impl Server {
@@ -72,12 +83,20 @@ impl Server {
         editor_cmd: String,
         missions_root: Option<PathBuf>,
     ) -> Self {
-        Server { missions_dir, editor_dir, editor_cmd, missions_root, generation: 0, open_seq: 0 }
+        Server {
+            missions_dir,
+            editor_dir,
+            editor_cmd,
+            missions_root,
+            generation: 0,
+            open_seq: 0,
+            last_active: String::new(),
+        }
     }
 
     /// Picker click in-game -> loader stamps mission_name -> bridge publishes
     /// active_mission.json -> the whole editor re-scopes (form, probes, Edit
-    /// target). Only in --missions-root mode.
+    /// target). Only in --missions-root mode, and only when the file CHANGES.
     fn follow_active(&mut self) {
         let Some(root) = &self.missions_root else {
             return;
@@ -85,15 +104,17 @@ impl Server {
         let Ok(text) = std::fs::read_to_string(self.editor_dir.join("active_mission.json")) else {
             return;
         };
+        if text == self.last_active {
+            return;
+        }
+        self.last_active = text.clone();
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
             return;
         };
         let Some(name) = value.get("name").and_then(|n| n.as_str()) else {
             return;
         };
-        if name.is_empty()
-            || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-        {
+        if !valid_mission_name(name) {
             return;
         }
         let candidate = root.join(name);
@@ -101,6 +122,60 @@ impl Server {
             eprintln!("following armed mission: {name}");
             self.missions_dir = candidate;
         }
+    }
+
+    /// Crumb click in any terminal -> select_mission.json -> re-scope. The
+    /// game keeps precedence through follow_active: a new arming event is a
+    /// change and wins the tick.
+    fn consume_select_mission(&mut self) {
+        let path = self.editor_dir.join("select_mission.json");
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        std::fs::remove_file(&path).ok();
+        let Some(root) = &self.missions_root else {
+            eprintln!("select_mission ignored: serve is pinned (no --missions-root)");
+            return;
+        };
+        let request: SelectMission = match serde_json::from_str(&text) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("bad select_mission: {e}");
+                return;
+            }
+        };
+        if !valid_mission_name(&request.name) {
+            eprintln!("select_mission refused: {}", request.name);
+            return;
+        }
+        let candidate = root.join(&request.name);
+        if candidate.is_dir() && candidate != self.missions_dir {
+            eprintln!("selected mission: {}", request.name);
+            self.missions_dir = candidate;
+        }
+    }
+
+    /// Sibling missions under the root: a mission is a dir with at least one
+    /// trigger file. Name charset doubles as the markup-safety guarantee for
+    /// the crumb (view embeds names verbatim).
+    fn list_missions(&self) -> Vec<String> {
+        let Some(root) = &self.missions_root else {
+            return Vec::new();
+        };
+        let mut names: Vec<String> = std::fs::read_dir(root)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.path().is_dir())
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter(|name| valid_mission_name(name))
+            .filter(|name| {
+                let pattern = format!("{}/**/triggers/*.lua", root.join(name).display());
+                glob::glob(&pattern).map(|mut g| g.next().is_some()).unwrap_or(false)
+            })
+            .collect();
+        names.sort();
+        names
     }
 
     pub fn run(&mut self) -> ! {
@@ -118,14 +193,17 @@ impl Server {
             self.consume_edits();
             self.consume_open_request();
 
+            self.consume_select_mission();
             self.follow_active();
             // domains.json (client-published dropdown data) re-renders too;
-            // the dir itself is part of the print so re-scoping regenerates.
+            // the dir itself is part of the print so re-scoping regenerates,
+            // and the sibling list so a new mission dir appears in the crumb.
             let fingerprint = format!(
-                "{}\n{}\n{}",
+                "{}\n{}\n{}\n{}",
                 self.missions_dir.display(),
                 fingerprint_dir(&self.missions_dir),
-                file_stamp(&self.editor_dir.join("domains.json"))
+                file_stamp(&self.editor_dir.join("domains.json")),
+                self.list_missions().join(",")
             );
             if fingerprint != last_fingerprint {
                 last_fingerprint = fingerprint;
@@ -168,7 +246,15 @@ impl Server {
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok())
             .unwrap_or_default();
-        let artifact = view::render(ast, &domains);
+        let scope = view::Scope {
+            mission: self
+                .missions_dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.to_string()),
+            missions: self.list_missions(),
+        };
+        let artifact = view::render(ast, &domains, &scope);
         let json = serde_json::to_string(&artifact).expect("serializable view");
         let path = self.editor_dir.join("mission_view.json");
         if let Err(e) = std::fs::write(&path, json) {
@@ -258,6 +344,10 @@ impl Server {
             let _ = std::process::Command::new("sh").arg("-c").arg(&cmd).spawn();
         }
     }
+}
+
+fn valid_mission_name(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 /// Resolve a mission-relative path defensively (no escaping the tree).
@@ -501,6 +591,64 @@ mod tests {
         std::fs::write(editor.join("active_mission.json"), "{\"name\":\"beta\"}").unwrap();
         pinned.follow_active();
         assert_eq!(pinned.missions_dir, root.join("alpha"));
+    }
+
+    #[test]
+    fn a_crumb_selection_rescopes_and_survives_the_standing_arm_file() {
+        let root = tmpdir("select-root");
+        std::fs::create_dir_all(root.join("alpha/triggers")).unwrap();
+        std::fs::create_dir_all(root.join("beta/triggers")).unwrap();
+        let editor = tmpdir("select-editor");
+        let mut server =
+            Server::new(root.join("alpha"), editor.clone(), String::new(), Some(root.clone()));
+
+        // arming re-scopes (a change from nothing)
+        std::fs::write(editor.join("active_mission.json"), "{\"name\":\"beta\"}").unwrap();
+        server.follow_active();
+        assert_eq!(server.missions_dir, root.join("beta"));
+
+        // a crumb pick wins...
+        std::fs::write(editor.join("select_mission.json"), "{\"name\":\"alpha\"}").unwrap();
+        server.consume_select_mission();
+        assert_eq!(server.missions_dir, root.join("alpha"));
+        assert!(!editor.join("select_mission.json").exists());
+
+        // ...and the STANDING arm file does not yank it back
+        server.follow_active();
+        assert_eq!(server.missions_dir, root.join("alpha"));
+
+        // a NEW arming event wins the tick again
+        std::fs::write(editor.join("active_mission.json"), "{\"name\":\"beta\",\"t\":2}").unwrap();
+        server.follow_active();
+        assert_eq!(server.missions_dir, root.join("beta"));
+
+        // path-shaped names are refused
+        std::fs::write(editor.join("select_mission.json"), "{\"name\":\"../../etc\"}").unwrap();
+        server.consume_select_mission();
+        assert_eq!(server.missions_dir, root.join("beta"));
+
+        // pinned serve (no --missions-root) ignores selections, consumes the file
+        let mut pinned = Server::new(root.join("alpha"), editor.clone(), String::new(), None);
+        std::fs::write(editor.join("select_mission.json"), "{\"name\":\"beta\"}").unwrap();
+        pinned.consume_select_mission();
+        assert_eq!(pinned.missions_dir, root.join("alpha"));
+        assert!(!editor.join("select_mission.json").exists());
+    }
+
+    #[test]
+    fn missions_are_listed_by_trigger_presence() {
+        let root = tmpdir("list-root");
+        std::fs::create_dir_all(root.join("alpha/triggers")).unwrap();
+        std::fs::write(root.join("alpha/triggers/win.lua"), "x").unwrap();
+        std::fs::create_dir_all(root.join("lib")).unwrap(); // no triggers -> not a mission
+        std::fs::create_dir_all(root.join("beta/deep/triggers")).unwrap();
+        std::fs::write(root.join("beta/deep/triggers/t.lua"), "x").unwrap();
+        let server =
+            Server::new(root.join("alpha"), tmpdir("list-editor"), String::new(), Some(root.clone()));
+        assert_eq!(server.list_missions(), vec!["alpha".to_string(), "beta".to_string()]);
+
+        let pinned = Server::new(root.join("alpha"), tmpdir("list-editor2"), String::new(), None);
+        assert!(pinned.list_missions().is_empty());
     }
 
     #[test]
