@@ -59,10 +59,17 @@
 	.me-modal-row:hover { background: #2c4158; color: #fff; }
 	#hint { color: #55677a; }
 	#footer { margin-top: 10px; padding-top: 8px; border-top: 1px solid #1d2938; font-size: 0.7em; color: #4c5d70; }
-	.me-live { margin-left: 8px; padding: 1px 8px; border-radius: 9px; font-size: 0.72em; white-space: nowrap;
-		background: #16283c; border: 1px solid #33517a; color: #8fbcff; }
-	.me-live.done { background: #12301c; border-color: #2e6b40; color: #7fd79a; }
-	body.live-stale .me-live { opacity: 0.35; }
+	.me-live { margin-left: 8px; padding: 2px 9px; border-radius: 9px; font-size: 0.8em; font-weight: 600;
+		white-space: nowrap; background: #1b3a5e; border: 1px solid #4f8ce0; color: #b8d6ff;
+		box-shadow: 0 0 6px rgba(79,140,224,0.35); }
+	.me-live.done { background: #17452a; border-color: #3fae60; color: #9df0b6;
+		box-shadow: 0 0 6px rgba(127,215,154,0.4); }
+	.me-live.tick { animation: me-live-tick 0.6s ease-out; }
+	@keyframes me-live-tick {
+		0% { box-shadow: 0 0 0 3px rgba(143,188,255,0.6); }
+		100% { box-shadow: 0 0 6px rgba(79,140,224,0.35); }
+	}
+	body.live-stale .me-live { opacity: 0.35; box-shadow: none; }
 
 	/* Final shape: one flat card, collapsible sections. */
 	.me-section { border-top: 1px solid #1d2938; margin-top: 4px; }
@@ -184,10 +191,15 @@
 		for (const el of document.querySelectorAll("[data-live]")) {
 			const value = state.values && state.values[el.dataset.live];
 			if (!value) continue;
-			el.textContent = value.text;
+			if (el.textContent !== value.text) {
+				el.textContent = value.text;
+				el.classList.remove("tick");
+				void el.offsetWidth; // restart the animation on rapid updates
+				el.classList.add("tick");
+			}
 			el.classList.toggle("done", value.state === "done");
 			if (typeof value.pct === "number") {
-				const fill = value.state === "done" ? "rgba(127,215,154,0.28)" : "rgba(79,140,224,0.22)";
+				const fill = value.state === "done" ? "rgba(127,215,154,0.5)" : "rgba(79,140,224,0.45)";
 				el.style.background = `linear-gradient(90deg, ${fill} ${value.pct * 100}%, transparent 0)`;
 			}
 		}
