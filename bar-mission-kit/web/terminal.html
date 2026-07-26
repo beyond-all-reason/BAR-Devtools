@@ -14,7 +14,14 @@
 		box-shadow: 0 12px 34px rgba(0,0,0,0.65), inset 0 1px 0 rgba(255,255,255,0.07); }
 	h1 { font-size: 1.1em; font-weight: 600; color: #fff; margin: 0 0 12px; padding-bottom: 10px;
 		border-bottom: 1px solid #1d2938; }
-	.me-file { color: #55677a; font-size: 0.75em; margin: 8px 0 4px; }
+	/* The file header is the door to the text: obvious, and it opens the .lua. */
+	.me-file { display: flex; align-items: baseline; gap: 8px; margin: 10px 0 4px;
+		padding: 3px 7px; border-radius: 5px; border: 1px solid #1c2836;
+		color: #8fa3b8; font-size: 0.78em; cursor: pointer; }
+	.me-file:hover { background: #16202c; border-color: #33517a; color: #cfe4ff; }
+	.me-file-name { flex: 1 1 auto; }
+	.me-file-open { color: #4c5d70; font-size: 0.85em; }
+	.me-file:hover .me-file-open { color: #8fbcff; }
 	.me-group { color: #e8c884; font-size: 0.85em; margin: 12px 0 4px; }
 	/* Summary: KPI row + one part-to-whole bar. Series hues are the validated
 	   dark categorical slots 1-2; labels/values stay in text ink so identity is

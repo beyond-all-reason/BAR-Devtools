@@ -527,7 +527,15 @@ fn body<'a>(
 
 fn file_view(file: &FileAst, ctx: &Ctx) -> Element {
     rsx! {
-        div { class: "me-file", "{file.path}" }
+        // The file header IS the way into the text: clicking it opens the
+        // .lua in the editor (the same open-in-editor jump the cards use).
+        div {
+            class: "me-file me-jump",
+            "data-open-file": "{file.path}",
+            "data-open-line": "1",
+            span { class: "me-file-name", "{file.path}" }
+            span { class: "me-file-open", "open" }
+        }
         for group in file.groups.iter() {
             if group.label.is_some() {
                 div { class: "me-group", {group.label.clone().unwrap_or_default()} }
