@@ -297,7 +297,7 @@
 	// the module editor owns nouns and modules. ?focus= names the view; each
 	// keeps only its own sections and summary. A dashboard tile pointing at
 	// the other view's section still reveals it — the tiles are the crossing.
-	const VIEW_SECTIONS = { mission: ["mission", "units"], modules: ["nouns", "modules"] };
+	const VIEW_SECTIONS = { mission: ["mission", "units", "nouns"], modules: ["modules"] };
 	const viewScope = new URLSearchParams(location.search).get("focus") || "mission";
 	const scopedSections = VIEW_SECTIONS[viewScope] || null;
 	function applySectionStates() {
