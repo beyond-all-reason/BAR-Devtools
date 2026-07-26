@@ -207,8 +207,6 @@ pub fn render(ast: &MissionAst, domains: &Domains, scope: &Scope) -> ViewArtifac
         format!("<div class=\"me-view\" data-view=\"mission\">{}{}</div>",
             crumb(scope),
             summary(trigger_count, spawn_count, objectives_len, unit_names_len, surface.modules.len())),
-        format!("<div class=\"me-view\" data-view=\"modules\">{}</div>",
-            modules_summary(&surface.modules)),
         section(
             "mission",
             "Triggers",
@@ -258,46 +256,6 @@ pub fn render(ast: &MissionAst, domains: &Domains, scope: &Scope) -> ViewArtifac
 /// The module explorer: what the mission's vocabulary is made of. Each row is
 /// a module that publishes a marked surface — its verbs, its mode presets,
 /// and what it requires. Rows jump to the module's own types file.
-/// The module editor's dashboard: what the published surface adds up to.
-/// Same marks as the mission summary; the bar splits verbs from mode presets.
-fn modules_summary(modules: &[ModuleInfo]) -> String {
-    let verbs: usize = modules.iter().map(|m| m.vocabulary.len()).sum();
-    let modes: usize = modules.iter().map(|m| m.modes.len()).sum();
-    let requires: usize = modules.iter().map(|m| m.requires.len()).sum();
-    let total = verbs + modes;
-    let pct = |n: usize| if total == 0 { 0.0 } else { (n as f64) * 100.0 / (total as f64) };
-    let tile = |slot: &str, label: &str, value: usize| {
-        let dot = if slot.is_empty() {
-            String::new()
-        } else {
-            format!("<span class=\"me-stat-dot {slot}\"></span>")
-        };
-        format!(
-            "<button class=\"me-stat\" data-open-section=\"modules\">{dot}\
-             <span class=\"me-stat-label\">{label}</span>\
-             <span class=\"me-stat-value\">{value}</span></button>"
-        )
-    };
-    let bar = if total == 0 {
-        String::new()
-    } else {
-        format!(
-            "<div class=\"me-propbar\">\
-             <div class=\"me-propseg me-series-1\" style=\"width: {:.1}%;\"></div>\
-             <div class=\"me-propseg me-series-2\" style=\"width: {:.1}%;\"></div></div>",
-            pct(verbs),
-            pct(modes)
-        )
-    };
-    format!(
-        "<div class=\"me-summary\" data-summary=\"modules\"><div class=\"me-stats\">{}{}{}{}</div>{bar}</div>",
-        tile("me-series-1", "Verbs", verbs),
-        tile("me-series-2", "Mode presets", modes),
-        tile("", "Modules", modules.len()),
-        tile("", "Dependencies", requires),
-    )
-}
-
 fn modules_body(modules: &[ModuleInfo]) -> String {
     // The module editor's own path: `modules > N publishing a surface`, the
     // root toggling a picker that jumps to a module — the same shape the
