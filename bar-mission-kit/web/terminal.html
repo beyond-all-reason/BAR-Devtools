@@ -51,6 +51,16 @@
 		border-radius: 9px; padding: 1px 7px; font-size: 0.68em; }
 	.me-chip-mode { background: #33230e; border-color: #6b4a1e; color: #ffb45e; }
 	.me-chip-req { background: #1c242e; border-color: #3a4754; color: #97a5b4; }
+	/* The DSL popover: what the statement says, beside what the form shows. */
+	.me-dsl { margin: 4px 0 2px 0; padding: 6px 8px; background: #0b1017;
+		border: 1px solid #223040; border-radius: 6px; font-size: 0.78em;
+		line-height: 1.6; overflow-x: auto; }
+	.me-dsl.collapsed { display: none; }
+	.me-dsl-line { white-space: nowrap; }
+	.me-dsl-line + .me-dsl-line { padding-left: 1.4em; }
+	.me-dsl-dot { color: #55677a; }
+	.me-dsl-btn { color: #7fa9d8; border-color: #2c405a; padding: 0 7px; font-size: 0.68em; }
+
 
 
 	.me-card { background: linear-gradient(#16202c, #101720); border: 1px solid #223040;
@@ -76,7 +86,10 @@
 	.me-input, .me-select { background: transparent; border: none; border-bottom: 1px dashed #33517a;
 		border-radius: 0; color: #ffd08a; padding: 0 2px; font-size: 1em; }
 	.me-input:focus { outline: none; border-bottom: 1px solid #6ea8e8; background: rgba(110,168,232,0.08); }
-	.me-input { width: 110px; } .me-input-num { width: 30px; text-align: center; }
+	/* Slot inputs match the unit dropdown's measure: names in cm8 are long. */
+	.me-input { width: 15em; }
+	.me-input-obj { width: 15em; }
+	.me-input-num { width: 3.5em; text-align: center; }
 	.me-select { color: #9fd3a4; max-width: 100%; cursor: pointer; appearance: none; -webkit-appearance: none;
 		text-overflow: ellipsis; }
 	/* Slot controls size to their content, not to the row: a unit name is long,
@@ -172,7 +185,11 @@
 	   [badge ........ chip tools] then the sentence at full width, with the
 	   unit dropdown scaling to the whole line. */
 	@media (max-width: 520px) {
-		.me-input { width: 90px; }
+		/* The sidebar is narrow: slot controls take the line rather than a
+		   fixed measure, so long names (cm8's) are readable instead of clipped. */
+		.me-input, .me-input-obj { width: 100%; }
+		.me-input-num { width: 4em; }
+		.me-select-unit, .me-select-enum { max-width: 100%; }
 		.me-card-head { display: block; position: relative; padding-right: 26px; }
 		.me-card-head .me-x { position: absolute; right: 0; top: 0; }
 	}
@@ -338,6 +355,14 @@
 				collapsedSections.set(key, false);
 				target.scrollIntoView({ behavior: "smooth", block: "start" });
 			}
+			return;
+		}
+		// The dsl button reveals the statement as written.
+		const dslBtn = event.target.closest("[data-dsl]");
+		if (dslBtn) {
+			const card = dslBtn.closest(".me-card");
+			const pop = card && card.querySelector(".me-dsl");
+			if (pop) pop.classList.toggle("collapsed");
 			return;
 		}
 		const toggle = event.target.closest("[data-toggle]");

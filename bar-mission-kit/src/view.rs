@@ -594,6 +594,13 @@ fn trigger_card(trigger: &Trigger, ctx: &Ctx) -> Element {
                         "+"
                     }
                 }
+                if ctx.style == Style::Ui {
+                    button {
+                        class: "me-button me-dsl-btn",
+                        "data-dsl": "1",
+                        "dsl"
+                    }
+                }
                 if ctx.editable {
                     button {
                         class: "me-button me-x me-card-x",
@@ -608,6 +615,37 @@ fn trigger_card(trigger: &Trigger, ctx: &Ctx) -> Element {
             }
             for step in trigger.steps.iter().filter(|s| s.verb != "Register") {
                 {step_row(step, ctx)}
+            }
+            if ctx.style == Style::Ui {
+                {dsl_popover(trigger, ctx)}
+            }
+        }
+    }
+}
+
+/// The statement as it is written: the same AST rendered in display notation,
+/// carried in the card and revealed on demand. The form shows what a statement
+/// MEANS; this shows what it SAYS — no second source of truth, no mode switch.
+fn dsl_popover(trigger: &Trigger, ctx: &Ctx) -> Element {
+    let dsl = Ctx {
+        file: ctx.file,
+        hash: ctx.hash,
+        editable: false,
+        style: Style::Dsl,
+        surface: ctx.surface,
+        domains: ctx.domains,
+        live: ctx.live,
+    };
+    rsx! {
+        div { class: "me-dsl collapsed",
+            for (i, step) in trigger.steps.iter().filter(|s| s.verb != "Register").enumerate() {
+                div { class: "me-dsl-line",
+                    if i > 0 { span { class: "me-dsl-dot", "." } }
+                    span { class: "me-verb", "{step.verb}" }
+                    "("
+                    {comma_list(step.args.iter().map(|a| value_view(a, &dsl)).collect())}
+                    ")"
+                }
             }
         }
     }

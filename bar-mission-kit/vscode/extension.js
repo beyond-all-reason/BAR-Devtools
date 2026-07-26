@@ -163,11 +163,14 @@ async function pollOpenTarget(server) {
 		return;
 	}
 	if (typeof target.seq !== "number") return;
-	if (lastOpenSeq === null) {
-		lastOpenSeq = target.seq;
-		if (!(typeof target.ts === "number" && target.ts > startedAt)) return;
-	}
-	if (target.seq === lastOpenSeq && !(typeof target.ts === "number" && target.ts > startedAt)) return;
+	// Act once per request: on a new seq, or on the first sighting of a target
+	// stamped after this extension host started (a live click, not a leftover).
+	// The seq must be recorded either way, or a live target reopens every poll.
+	const fresh = typeof target.ts === "number" && target.ts > startedAt;
+	const firstSighting = lastOpenSeq === null;
+	const changed = !firstSighting && target.seq !== lastOpenSeq;
+	lastOpenSeq = target.seq;
+	if (!changed && !(firstSighting && fresh)) return;
 	lastOpenSeq = target.seq;
 	const routed = routeIntoWorkspace(target.file);
 	if (!routed) return; // another window's project
