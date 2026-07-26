@@ -283,7 +283,8 @@ impl<'s> Rec<'s> {
                     }
                 }
             };
-            steps.push(Step { verb, span: invocation.span, args: invocation.args, remove_span: (0, 0) });
+            let line = self.line_of(invocation.span.0);
+            steps.push(Step { verb, line, span: invocation.span, args: invocation.args, remove_span: (0, 0) });
         }
 
         // Grammar checks (also the validator's rules). No terminator: the

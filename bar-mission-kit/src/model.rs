@@ -79,6 +79,8 @@ pub struct Trigger {
 pub struct Step {
     /// Chain verb: When (first and repeated), Do, Once, Debounce.
     pub verb: String,
+    /// 1-based source line of this step (open-in-editor lands here).
+    pub line: usize,
     /// The args list INCLUDING parens — replacing it swaps the step's
     /// content: new_text = "(" + template + ")".
     pub span: Span,
