@@ -162,7 +162,8 @@ pub fn render(ast: &MissionAst, domains: &Domains, scope: &Scope) -> ViewArtifac
     let unit_names = sorted_set(&mut ast.files.iter().flat_map(|f| f.unit_defs.iter().cloned()));
     let groups = sorted_set(&mut ast.files.iter().flat_map(|f| f.group_defs.iter().cloned()));
     let objective_count = objectives.len();
-    let unit_count = live.borrow().iter().filter(|p| p.kind == "unit_count").count();
+    let objectives_len = objectives.len();
+    let unit_names_len = unit_names.len();
     let vocabulary = Vocabulary {
         conditions: surface.conditions.clone(),
         effects: surface.effects.clone(),
@@ -179,30 +180,38 @@ pub fn render(ast: &MissionAst, domains: &Domains, scope: &Scope) -> ViewArtifac
         .flat_map(|f| f.groups.iter())
         .map(|g| g.triggers.len())
         .sum();
+    let trigger_count: usize = ast
+        .files
+        .iter()
+        .filter(|f| !is_roster(&f.path))
+        .flat_map(|f| f.groups.iter())
+        .map(|g| g.triggers.len())
+        .sum();
     let form = [
+        summary(trigger_count, spawn_count, objectives_len, unit_names_len),
         section(
             "mission",
             "Triggers",
-            &format!("{trigger_files} file{}", plural(trigger_files)),
-            false,
+            &format!("{trigger_count} in {trigger_files} file{}", plural(trigger_files)),
+            true,
             &format!("{}{triggers}", crumb(scope)),
         ),
         section(
             "units",
             "Units",
             &format!("{spawn_count} spawn{}", plural(spawn_count)),
-            false,
+            true,
             &units,
         ),
         section(
             "nouns",
             "Nouns",
             &format!(
-                "{objective_count} objective{} · {unit_count} unit{}",
+                "{objective_count} objective{} · {unit_names_len} named unit{}",
                 plural(objective_count),
-                plural(unit_count)
+                plural(unit_names_len)
             ),
-            false,
+            true,
             &nouns,
         ),
     ]
@@ -217,6 +226,48 @@ pub fn render(ast: &MissionAst, domains: &Domains, scope: &Scope) -> ViewArtifac
         live: live.into_inner(),
         vocabulary,
     }
+}
+
+/// The panel's overview: a KPI row plus one part-to-whole bar of the
+/// mission's statements. Counts let every section collapse by default —
+/// the reader sees the shape of the mission before opening anything.
+///
+/// Marks follow the viz rules: two categorical slots (blue/orange, validated
+/// against both terminals' dark surfaces), a 2px surface gap between
+/// segments, rounded ends, and identity carried by the dots — the labels and
+/// values stay in text ink, never in a series color.
+fn summary(triggers: usize, spawns: usize, objectives: usize, named: usize) -> String {
+    let total = triggers + spawns;
+    let pct = |n: usize| if total == 0 { 0.0 } else { (n as f64) * 100.0 / (total as f64) };
+    let stat = |slot: &str, label: &str, value: usize| {
+        let dot = if slot.is_empty() {
+            String::new()
+        } else {
+            format!("<span class=\"me-stat-dot {slot}\"></span>")
+        };
+        format!(
+            "<div class=\"me-stat\">{dot}<span class=\"me-stat-label\">{label}</span>\
+             <span class=\"me-stat-value\">{value}</span></div>"
+        )
+    };
+    let bar = if total == 0 {
+        String::new()
+    } else {
+        format!(
+            "<div class=\"me-propbar\">\
+             <div class=\"me-propseg me-series-1\" style=\"width: {:.1}%;\"></div>\
+             <div class=\"me-propseg me-series-2\" style=\"width: {:.1}%;\"></div></div>",
+            pct(triggers),
+            pct(spawns)
+        )
+    };
+    format!(
+        "<div class=\"me-summary\"><div class=\"me-stats\">{}{}{}{}</div>{bar}</div>",
+        stat("me-series-1", "Triggers", triggers),
+        stat("me-series-2", "Spawns", spawns),
+        stat("", "Objectives", objectives),
+        stat("", "Named units", named),
+    )
 }
 
 fn plural(n: usize) -> &'static str {

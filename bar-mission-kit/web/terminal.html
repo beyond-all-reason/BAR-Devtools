@@ -16,6 +16,21 @@
 		border-bottom: 1px solid #1d2938; }
 	.me-file { color: #55677a; font-size: 0.75em; margin: 8px 0 4px; }
 	.me-group { color: #e8c884; font-size: 0.85em; margin: 12px 0 4px; }
+	/* Summary: KPI row + one part-to-whole bar. Series hues are the validated
+	   dark categorical slots 1-2; labels/values stay in text ink so identity is
+	   carried by the dots, not the type. */
+	.me-summary { margin: 2px 0 10px; }
+	.me-stats { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 6px; }
+	.me-stat { display: flex; align-items: baseline; gap: 5px; }
+	.me-stat-dot { width: 7px; height: 7px; border-radius: 4px; align-self: center; }
+	.me-stat-label { color: #8fa3b8; font-size: 0.72em; }
+	.me-stat-value { color: #e8eef6; font-weight: 600; font-size: 0.9em; }
+	.me-propbar { display: flex; height: 6px; }
+	.me-propseg { height: 6px; border-radius: 3px; }
+	.me-propseg + .me-propseg { margin-left: 2px; }   /* 2px surface gap */
+	.me-series-1 { background: #3987e5; }
+	.me-series-2 { background: #d95926; }
+
 	.me-card { background: linear-gradient(#16202c, #101720); border: 1px solid #223040;
 		border-left: 3px solid #4f8ce0; border-radius: 8px; margin: 8px 0; padding: 10px 12px;
 		box-shadow: 0 3px 10px rgba(0,0,0,0.3); }
