@@ -369,6 +369,22 @@ fn resolve_mission_file(missions_dir: &Path, rel: &str) -> Result<PathBuf, Strin
     Ok(path)
 }
 
+/// Inserted text adopts the document's line endings: the UI's templates are
+/// LF, and mission files are frequently CRLF — an LF insertion would seed a
+/// mixed document and, at EOF, rewrite the file's terminal bytes. A document
+/// with no clear convention is left to speak for itself.
+fn match_line_endings(source: &str, new_text: &str) -> String {
+    let crlf = source.matches("\r\n").count();
+    let lf = source.matches('\n').count() - crlf;
+    if crlf > lf {
+        new_text.replace("\r\n", "\n").replace('\n', "\r\n")
+    } else if crlf == 0 {
+        new_text.replace("\r\n", "\n")
+    } else {
+        new_text.to_string()
+    }
+}
+
 /// Apply a span edit to a mission file — but only if the result still
 /// parses AND passes the recognizer with zero findings. The grammar is the
 /// write gate; a rejected edit changes nothing on disk.
@@ -393,9 +409,10 @@ pub fn apply_edit(missions_dir: &Path, intent: &EditIntent) -> Result<(), String
             source.len()
         ));
     }
-    let mut edited = String::with_capacity(source.len() + intent.new_text.len());
+    let new_text = match_line_endings(&source, &intent.new_text);
+    let mut edited = String::with_capacity(source.len() + new_text.len());
     edited.push_str(&source[..intent.start]);
-    edited.push_str(&intent.new_text);
+    edited.push_str(&new_text);
     edited.push_str(&source[intent.end..]);
 
     // Gate against the same type-derived grammar the view was built from.
@@ -478,6 +495,75 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    const WIN: &str =
+        "When(Team.Player.Has(UnitDef(\"armpw\"), 3))\n\t.Do(Objective(\"x\").Complete())\n";
+
+    /// The documents the editor actually meets: BAR working trees are CRLF in
+    /// places, and not every file ends with a terminator.
+    fn documents() -> Vec<(&'static str, String)> {
+        let crlf = WIN.replace('\n', "\r\n");
+        vec![
+            ("lf", WIN.to_string()),
+            ("crlf", crlf.clone()),
+            ("crlf-no-final-newline", crlf.trim_end_matches("\r\n").to_string()),
+            ("lf-no-final-newline", WIN.trim_end_matches('\n').to_string()),
+        ]
+    }
+
+    fn seed(dir: &Path, source: &str) {
+        std::fs::create_dir_all(dir.join("hello/triggers")).unwrap();
+        std::fs::write(dir.join("hello/triggers/win.lua"), source).unwrap();
+    }
+
+    fn edited_text(dir: &Path) -> String {
+        std::fs::read_to_string(dir.join("hello/triggers/win.lua")).unwrap()
+    }
+
+    /// A write is the exact splice: every byte outside [start, end) survives,
+    /// terminal bytes included, and inserted lines keep the document's
+    /// line-ending convention instead of the template's.
+    #[test]
+    fn a_write_touches_only_the_span_it_edits() {
+        for (name, source) in documents() {
+            let dir = tmpdir(&format!("splice-{name}"));
+            let file = "hello/triggers/win.lua";
+
+            seed(&dir, &source);
+            let at = source.find(", 3)").unwrap() + 2;
+            let intent = EditIntent {
+                file: file.into(),
+                start: at,
+                end: at + 1,
+                new_text: "5".into(),
+                base_hash: None,
+            };
+            apply_edit(&dir, &intent).unwrap();
+            let edited = edited_text(&dir);
+            assert_eq!(edited[..at], source[..at], "{name}: bytes before the span");
+            assert_eq!(edited[at + 1..], source[at + 1..], "{name}: bytes after the span");
+
+            // an insertion at EOF, exactly as the add-step modal posts it
+            seed(&dir, &source);
+            let eof = source.len();
+            let intent = EditIntent {
+                file: file.into(),
+                start: eof,
+                end: eof,
+                new_text: "\t.Do(Objective(\"y\").Complete())\n".into(),
+                base_hash: None,
+            };
+            apply_edit(&dir, &intent).unwrap();
+            let edited = edited_text(&dir);
+            assert_eq!(edited[..eof], source, "{name}: bytes before the insertion");
+            if source.contains("\r\n") {
+                let bare = edited.matches('\n').count() - edited.matches("\r\n").count();
+                assert_eq!(bare, 0, "{name}: CRLF document gained an LF line: {edited:?}");
+            } else {
+                assert_eq!(edited.matches('\r').count(), 0, "{name}: LF document gained a CR");
+            }
+        }
     }
 
     #[test]
