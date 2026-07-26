@@ -245,6 +245,10 @@ mission-kit-test:
     source "$DEVTOOLS_DIR/scripts/common.sh"
     step "Testing bar-mission-kit..."
     bash "$DEVTOOLS_DIR/scripts/mission-kit-cargo.sh" test
+    # The terminal's script is embedded HTML: cargo cannot see a syntax error
+    # in it, only a blank panel at runtime can.
+    step "Checking the browser terminal's script..."
+    enter_distrobox bash "$DEVTOOLS_DIR/bar-mission-kit/check_terminal_js.sh"
     ok "All tests passed"
 
 # Validate mission trigger files (default: hello_pawns)

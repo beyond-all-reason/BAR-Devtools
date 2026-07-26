@@ -298,15 +298,18 @@
 	// keeps only its own sections and summary. A dashboard tile pointing at
 	// the other view's section still reveals it — the tiles are the crossing.
 	const VIEW_SECTIONS = { mission: ["mission", "units"], modules: ["nouns", "modules"] };
-	const view = new URLSearchParams(location.search).get("focus") || "mission";
-	const mine = VIEW_SECTIONS[view] || null;
+	const viewScope = new URLSearchParams(location.search).get("focus") || "mission";
+	const scopedSections = VIEW_SECTIONS[viewScope] || null;
 	function applySectionStates() {
 		for (const summaryEl of document.querySelectorAll("[data-view]")) {
-			summaryEl.classList.toggle("me-hidden", mine !== null && summaryEl.dataset.view !== view);
+			summaryEl.classList.toggle(
+				"me-hidden",
+				scopedSections !== null && summaryEl.dataset.view !== viewScope
+			);
 		}
 		for (const sectionEl of document.querySelectorAll(".me-section")) {
 			const key = sectionEl.dataset.section;
-			if (mine && !mine.includes(key) && !collapsedSections.has(key)) {
+			if (scopedSections && !scopedSections.includes(key) && !collapsedSections.has(key)) {
 				sectionEl.classList.add("me-hidden");
 				continue;
 			}
@@ -330,19 +333,6 @@
 			}
 			return;
 		}
-		// The module picker: toggle the list, or jump to a module's row.
-		const pick = event.target.closest("[data-select-module]");
-		if (pick) {
-			const row = document.querySelector(`.me-module[data-module="${pick.dataset.selectModule}"]`);
-			if (row) row.scrollIntoView({ behavior: "smooth", block: "start" });
-			document.querySelector("[data-module-list]")?.classList.add("collapsed");
-			return;
-		}
-		const nav = event.target.closest('[data-nav="modules"]');
-		if (nav) {
-			document.querySelector("[data-module-list]")?.classList.toggle("collapsed");
-			return;
-		}
 		const toggle = event.target.closest("[data-toggle]");
 		if (toggle) {
 			const sectionEl = toggle.closest(".me-section");
@@ -352,8 +342,20 @@
 		}
 		const nav = event.target.closest("[data-nav]");
 		if (nav) {
-			const list = document.querySelector("[data-mission-list]");
+			// Both crumbs use [data-nav]; the value names the list to toggle.
+			const which = nav.dataset.nav === "modules" ? "[data-module-list]" : "[data-mission-list]";
+			const list = document.querySelector(which);
 			if (list) list.classList.toggle("collapsed");
+			return;
+		}
+		const modulePick = event.target.closest("[data-select-module]");
+		if (modulePick) {
+			const row = document.querySelector(
+				`.me-module[data-module="${modulePick.dataset.selectModule}"]`
+			);
+			if (row) row.scrollIntoView({ behavior: "smooth", block: "start" });
+			const list = document.querySelector("[data-module-list]");
+			if (list) list.classList.add("collapsed");
 			return;
 		}
 		const pick = event.target.closest("[data-select-mission]");
