@@ -9,7 +9,7 @@
 //! that produces a parse error or a grammar finding is rejected and reported
 //! in <editor-dir>/status.json. The .lua file stays the source of truth.
 
-use crate::model::MissionAst;
+use crate::model::{MissionAst, Span};
 use crate::recognizer;
 use crate::view;
 use serde::{Deserialize, Serialize};
@@ -27,10 +27,77 @@ pub struct EditIntent {
     pub end: usize,
     pub new_text: String,
     /// Hash of the file content the edit was computed against (FileAst.hash).
-    /// The write is refused if the file changed since — compare-and-swap;
-    /// the regeneration loop then refreshes the stale view.
+    /// A whole-file hash, so a second edit from the same view generation
+    /// always arrives stale; the journal rebases it onto the current file, and
+    /// only a genuine overlap is refused.
     #[serde(default)]
     pub base_hash: Option<String>,
+}
+
+/// One write serve performed, keyed by the file hashes it moved between.
+#[derive(Clone, Debug)]
+struct AppliedEdit {
+    before: String,
+    after: String,
+    start: usize,
+    end: usize,
+    new_len: usize,
+}
+
+/// Recent writes per file, so an intent stamped with an older view generation
+/// can be replayed onto what those writes left behind. Only writes serve made
+/// itself are recorded: any other route to the current bytes stays a refusal.
+#[derive(Default)]
+pub struct EditJournal {
+    by_file: std::collections::HashMap<String, std::collections::VecDeque<AppliedEdit>>,
+}
+
+const JOURNAL_DEPTH: usize = 64;
+
+fn stale(file: &str) -> String {
+    format!("file changed on disk since the view was built ({file}) — refreshing view instead of writing")
+}
+
+impl EditJournal {
+    fn record(&mut self, file: &str, applied: AppliedEdit) {
+        let entries = self.by_file.entry(file.to_string()).or_default();
+        entries.push_back(applied);
+        while entries.len() > JOURNAL_DEPTH {
+            entries.pop_front();
+        }
+    }
+
+    /// Carry `span` from the file state `base` forward to `current`, one
+    /// recorded write at a time. Err when the route is unrecorded (someone
+    /// else wrote the file) or when a write landed on the span itself.
+    fn rebase(&self, file: &str, base: &str, current: &str, span: Span) -> Result<Span, String> {
+        let entries = self.by_file.get(file).ok_or_else(|| stale(file))?;
+        let (mut start, mut end) = span;
+        let mut at = base;
+        for _ in 0..=entries.len() {
+            if at == current {
+                return Ok((start, end));
+            }
+            // newest first: a file that returned to an earlier state has two
+            // edges out of it, and the recent one is the live history
+            let step = entries.iter().rev().find(|e| e.before == at).ok_or_else(|| stale(file))?;
+            if step.start == start && step.end == end {
+                // The same leaf, rewritten: this intent replaces all of it, so
+                // it redirects onto the new extent and the later write wins.
+                end = start + step.new_len;
+            } else if step.start < end && start < step.end {
+                return Err(format!(
+                    "edit overlaps a newer edit to the same region of {file} — refreshing view instead of writing"
+                ));
+            } else if step.end <= start {
+                let delta = step.new_len as i64 - (step.end - step.start) as i64;
+                start = (start as i64 + delta) as usize;
+                end = (end as i64 + delta) as usize;
+            }
+            at = &step.after;
+        }
+        Err(stale(file))
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -74,6 +141,7 @@ pub struct Server {
     /// editor follows a change, not the standing file — a manual crumb
     /// selection must not be overridden by a stale arming from last session.
     last_active: String,
+    journal: EditJournal,
 }
 
 impl Server {
@@ -91,6 +159,7 @@ impl Server {
             generation: 0,
             open_seq: 0,
             last_active: String::new(),
+            journal: EditJournal::default(),
         }
     }
 
@@ -284,7 +353,7 @@ impl Server {
             .map(|e| e.path())
             .filter(|p| p.extension().map(|x| x == "json").unwrap_or(false))
             .collect();
-        paths.sort();
+        paths.sort_by_key(|p| natural_key(p));
         for path in paths {
             let outcome = self.apply_edit_file(&path);
             if let Err(message) = outcome {
@@ -300,8 +369,8 @@ impl Server {
         let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
         let intent: EditIntent =
             serde_json::from_str(&text).map_err(|e| format!("bad edit intent: {e}"))?;
-        apply_edit(&self.missions_dir, &intent)?;
-        eprintln!("applied edit to {} [{}..{})", intent.file, intent.start, intent.end);
+        let span = apply_edit_journaled(&self.missions_dir, &intent, &mut self.journal)?;
+        eprintln!("applied edit to {} [{}..{})", intent.file, span.0, span.1);
         Ok(())
     }
 
@@ -353,6 +422,33 @@ impl Server {
     }
 }
 
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum Chunk {
+    Text(String),
+    Number(u128),
+}
+
+/// Intent filenames carry numbers (`<frame>_<seq>.json`, `http_<ms>_<n>.json`)
+/// and do not sort lexicographically in submission order: "1000_2" < "900_1".
+/// Compare digit runs numerically so the drain order is the write order.
+fn natural_key(path: &Path) -> Vec<Chunk> {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut chunks = Vec::new();
+    let mut rest = name.as_str();
+    while !rest.is_empty() {
+        let digit = rest.starts_with(|c: char| c.is_ascii_digit());
+        let split = rest.find(|c: char| c.is_ascii_digit() != digit).unwrap_or(rest.len());
+        let (head, tail) = rest.split_at(split);
+        chunks.push(if digit {
+            head.parse().map(Chunk::Number).unwrap_or_else(|_| Chunk::Text(head.into()))
+        } else {
+            Chunk::Text(head.into())
+        });
+        rest = tail;
+    }
+    chunks
+}
+
 fn valid_mission_name(name: &str) -> bool {
     !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
@@ -387,33 +483,37 @@ fn match_line_endings(source: &str, new_text: &str) -> String {
 
 /// Apply a span edit to a mission file — but only if the result still
 /// parses AND passes the recognizer with zero findings. The grammar is the
-/// write gate; a rejected edit changes nothing on disk.
-pub fn apply_edit(missions_dir: &Path, intent: &EditIntent) -> Result<(), String> {
+/// write gate; a rejected edit changes nothing on disk. An intent stamped
+/// with an earlier view generation rebases onto serve's own intervening
+/// writes through `journal`. Returns the span actually written.
+pub fn apply_edit_journaled(
+    missions_dir: &Path,
+    intent: &EditIntent,
+    journal: &mut EditJournal,
+) -> Result<Span, String> {
     let path = resolve_mission_file(missions_dir, &intent.file)?;
     let source = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    if let Some(base_hash) = &intent.base_hash {
-        let current = recognizer::fnv1a(source.as_bytes());
-        if &current != base_hash {
-            return Err(format!(
-                "file changed on disk since the view was built ({}) — refreshing view instead of writing",
-                intent.file
-            ));
+    let current = recognizer::fnv1a(source.as_bytes());
+    let (start, end) = match &intent.base_hash {
+        Some(base) if base != &current => {
+            journal.rebase(&intent.file, base, &current, (intent.start, intent.end))?
         }
-    }
-    if intent.start > intent.end || intent.end > source.len() {
+        _ => (intent.start, intent.end),
+    };
+    if start > end || end > source.len() {
         return Err(format!(
             "edit span [{}, {}) out of bounds for {} ({} bytes)",
-            intent.start,
-            intent.end,
+            start,
+            end,
             intent.file,
             source.len()
         ));
     }
     let new_text = match_line_endings(&source, &intent.new_text);
     let mut edited = String::with_capacity(source.len() + new_text.len());
-    edited.push_str(&source[..intent.start]);
+    edited.push_str(&source[..start]);
     edited.push_str(&new_text);
-    edited.push_str(&source[intent.end..]);
+    edited.push_str(&source[end..]);
 
     // Gate against the same type-derived grammar the view was built from.
     let surface = crate::types::TypeSurface::load_near(&[missions_dir.to_path_buf()]);
@@ -429,7 +529,13 @@ pub fn apply_edit(missions_dir: &Path, intent: &EditIntent) -> Result<(), String
         return Err(format!("edit rejected — result leaves the mission subset: {msgs}"));
     }
 
-    std::fs::write(&path, edited).map_err(|e| e.to_string())
+    let after = recognizer::fnv1a(edited.as_bytes());
+    std::fs::write(&path, edited).map_err(|e| e.to_string())?;
+    journal.record(
+        &intent.file,
+        AppliedEdit { before: current, after, start, end, new_len: new_text.len() },
+    );
+    Ok((start, end))
 }
 
 fn file_stamp(path: &Path) -> String {
@@ -480,6 +586,10 @@ fn fingerprint_dir(dir: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn apply_edit(missions_dir: &Path, intent: &EditIntent) -> Result<(), String> {
+        apply_edit_journaled(missions_dir, intent, &mut EditJournal::default()).map(|_| ())
+    }
 
     fn setup(dir: &Path) {
         std::fs::create_dir_all(dir.join("hello/triggers")).unwrap();
@@ -654,6 +764,168 @@ mod tests {
         let rec = crate::recognizer::recognize_file("t.lua", &edited).unwrap();
         assert!(rec.findings.is_empty());
         assert_eq!(rec.file.groups[0].triggers.len(), 2);
+    }
+
+    fn intent_json(file: &str, start: usize, end: usize, new_text: &str, hash: &str) -> String {
+        serde_json::json!({
+            "file": file,
+            "start": start,
+            "end": end,
+            "new_text": new_text,
+            "base_hash": hash,
+        })
+        .to_string()
+    }
+
+    /// The ordinary way people use the form: change a field, change another.
+    /// Both intents carry the same view generation's hash, both are drained in
+    /// one pass, and the second's offsets are stale by the first's length
+    /// change. Non-overlapping spans — both must land.
+    #[test]
+    fn two_edits_from_one_view_generation_both_land() {
+        let dir = tmpdir("collide");
+        setup(&dir);
+        let editor = tmpdir("collide-editor");
+        std::fs::create_dir_all(editor.join("edits")).unwrap();
+        let mut server = Server::new(dir.clone(), editor.clone(), String::new(), None);
+
+        let file = "hello/triggers/win.lua";
+        let source = std::fs::read_to_string(dir.join(file)).unwrap();
+        let hash = crate::recognizer::fnv1a(source.as_bytes());
+        let count = source.find(", 3)").unwrap() + 2;
+        let name = source.find("\"x\"").unwrap();
+
+        std::fs::write(
+            editor.join("edits/900_1.json"),
+            intent_json(file, count, count + 1, "55", &hash),
+        )
+        .unwrap();
+        std::fs::write(
+            editor.join("edits/1000_2.json"),
+            intent_json(file, name, name + 3, "\"win\"", &hash),
+        )
+        .unwrap();
+
+        server.consume_edits();
+        let edited = std::fs::read_to_string(dir.join(file)).unwrap();
+        assert!(edited.contains(", 55)"), "count edit lost: {edited:?}");
+        assert!(edited.contains("Objective(\"win\")"), "name edit lost: {edited:?}");
+    }
+
+    /// The safety property: an edit whose OWN region moved underneath it is
+    /// still refused, and the file keeps the newer write.
+    #[test]
+    fn an_edit_whose_own_span_moved_is_still_refused() {
+        let dir = tmpdir("overlap");
+        setup(&dir);
+        let editor = tmpdir("overlap-editor");
+        std::fs::create_dir_all(editor.join("edits")).unwrap();
+        let mut server = Server::new(dir.clone(), editor.clone(), String::new(), None);
+
+        let file = "hello/triggers/win.lua";
+        let source = std::fs::read_to_string(dir.join(file)).unwrap();
+        let hash = crate::recognizer::fnv1a(source.as_bytes());
+        let chain_start = source.find("When(").unwrap();
+        let when_end = source.find(")\n").map(|i| i + 2).unwrap_or(source.len());
+        let count = source.find(", 3)").unwrap() + 2;
+
+        // 1: rewrite the whole When line. 2: retune the count inside it.
+        std::fs::write(
+            editor.join("edits/900_1.json"),
+            intent_json(
+                file,
+                chain_start,
+                when_end,
+                "When(Team.Player.Has(UnitDef(\"armck\"), 9))\n",
+                &hash,
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            editor.join("edits/900_2.json"),
+            intent_json(file, count, count + 1, "55", &hash),
+        )
+        .unwrap();
+
+        server.consume_edits();
+        let edited = std::fs::read_to_string(dir.join(file)).unwrap();
+        assert!(edited.contains("armck\"), 9)"), "first edit lost: {edited:?}");
+        assert!(!edited.contains("55"), "stale edit wrote into a moved region: {edited:?}");
+        let status = std::fs::read_to_string(editor.join("status.json")).unwrap();
+        assert!(status.contains("overlaps"), "{status}");
+    }
+
+    /// A rebased edit still faces the grammar gate.
+    #[test]
+    fn a_rebased_edit_that_breaks_the_grammar_is_rejected() {
+        let dir = tmpdir("rebase-grammar");
+        setup(&dir);
+        let editor = tmpdir("rebase-grammar-editor");
+        std::fs::create_dir_all(editor.join("edits")).unwrap();
+        let mut server = Server::new(dir.clone(), editor.clone(), String::new(), None);
+
+        let file = "hello/triggers/win.lua";
+        let source = std::fs::read_to_string(dir.join(file)).unwrap();
+        let hash = crate::recognizer::fnv1a(source.as_bytes());
+        let count = source.find(", 3)").unwrap() + 2;
+        let name = source.find("\"x\"").unwrap();
+
+        std::fs::write(
+            editor.join("edits/900_1.json"),
+            intent_json(file, count, count + 1, "55", &hash),
+        )
+        .unwrap();
+        std::fs::write(
+            editor.join("edits/900_2.json"),
+            intent_json(file, name, name + 3, "function() end", &hash),
+        )
+        .unwrap();
+
+        server.consume_edits();
+        let edited = std::fs::read_to_string(dir.join(file)).unwrap();
+        assert!(edited.contains(", 55)"), "{edited:?}");
+        assert!(!edited.contains("function"), "{edited:?}");
+    }
+
+    /// Intent filenames are `<frame>_<seq>.json`; drained in submission order,
+    /// two writes to one field leave the later value.
+    #[test]
+    fn the_same_field_edited_twice_keeps_the_later_value() {
+        let dir = tmpdir("samefield");
+        setup(&dir);
+        let editor = tmpdir("samefield-editor");
+        std::fs::create_dir_all(editor.join("edits")).unwrap();
+        let mut server = Server::new(dir.clone(), editor.clone(), String::new(), None);
+
+        let file = "hello/triggers/win.lua";
+        let source = std::fs::read_to_string(dir.join(file)).unwrap();
+        let hash = crate::recognizer::fnv1a(source.as_bytes());
+        let count = source.find(", 3)").unwrap() + 2;
+
+        std::fs::write(
+            editor.join("edits/900_1.json"),
+            intent_json(file, count, count + 1, "5", &hash),
+        )
+        .unwrap();
+        std::fs::write(
+            editor.join("edits/1000_2.json"),
+            intent_json(file, count, count + 1, "55", &hash),
+        )
+        .unwrap();
+
+        server.consume_edits();
+        let edited = std::fs::read_to_string(dir.join(file)).unwrap();
+        assert!(edited.contains(", 55)"), "later value lost: {edited:?}");
+    }
+
+    #[test]
+    fn intents_drain_in_numeric_submission_order() {
+        let names = ["1000_2.json", "900_1.json", "900_10.json", "900_9.json", "http_5_2.json"];
+        let mut paths: Vec<PathBuf> = names.iter().map(PathBuf::from).collect();
+        paths.sort_by_key(|p| natural_key(p));
+        let sorted: Vec<String> =
+            paths.iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
+        assert_eq!(sorted, ["http_5_2.json", "900_1.json", "900_9.json", "900_10.json", "1000_2.json"]);
     }
 
     #[test]
