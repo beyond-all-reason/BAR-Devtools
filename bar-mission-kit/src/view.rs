@@ -406,7 +406,14 @@ fn file_view(file: &FileAst, ctx: &Ctx) -> Element {
 }
 
 fn trigger_card(trigger: &Trigger, ctx: &Ctx) -> Element {
-    let title = trigger.label.clone().unwrap_or_else(|| trigger.id.clone());
+    // The head is chrome, not content: a ghost ordinal as the open-in-editor
+    // handle (the file header already names the file) plus the add/remove
+    // cluster at the right — cards spend their height on statements.
+    let ordinal = trigger.id.rsplit(':').next().unwrap_or_default();
+    let title = trigger.label.clone().unwrap_or_else(|| format!("#{ordinal}"));
+    let addable = ctx.editable
+        && !(ctx.surface.conditions.is_empty() && ctx.surface.effects.is_empty())
+        && trigger.steps.first().map(|s| s.verb == "When").unwrap_or(false);
     rsx! {
         div { class: "me-card",
             div { class: "me-card-head",
@@ -415,6 +422,17 @@ fn trigger_card(trigger: &Trigger, ctx: &Ctx) -> Element {
                     "data-open-file": "{ctx.file}",
                     "data-open-line": "{trigger.line}",
                     "{title}"
+                }
+                if addable {
+                    button {
+                        class: "me-button me-add-btn me-card-add",
+                        "data-add": "step",
+                        "data-insert-cond": "{trigger.insert_condition_at}",
+                        "data-insert-effect": "{trigger.insert_effect_at}",
+                        "data-file": "{ctx.file}",
+                        "data-hash": "{ctx.hash}",
+                        "+"
+                    }
                 }
                 if ctx.editable {
                     button {
@@ -430,22 +448,6 @@ fn trigger_card(trigger: &Trigger, ctx: &Ctx) -> Element {
             }
             for step in trigger.steps.iter().filter(|s| s.verb != "Register") {
                 {step_row(step, ctx)}
-            }
-            if ctx.editable
-                && !(ctx.surface.conditions.is_empty() && ctx.surface.effects.is_empty())
-                && trigger.steps.first().map(|s| s.verb == "When").unwrap_or(false)
-            {
-                div { class: "me-add-row",
-                    button {
-                        class: "me-button me-add-btn",
-                        "data-add": "step",
-                        "data-insert-cond": "{trigger.insert_condition_at}",
-                        "data-insert-effect": "{trigger.insert_effect_at}",
-                        "data-file": "{ctx.file}",
-                        "data-hash": "{ctx.hash}",
-                        "+ add"
-                    }
-                }
             }
         }
     }
