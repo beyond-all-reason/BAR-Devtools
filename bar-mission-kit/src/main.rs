@@ -74,8 +74,24 @@ fn collect_lua_files(paths: &[PathBuf]) -> Vec<PathBuf> {
             for pattern in [
                 format!("{}/**/triggers/*.lua", path.display()),
                 format!("{}/**/units.lua", path.display()),
+                format!("{}/**/modes/*.lua", path.display()),
             ] {
                 for entry in glob::glob(&pattern).expect("valid glob").flatten() {
+                    // spec/modes/, spec/**/triggers/ etc. are busted's, not ours.
+                    if entry.components().any(|c| c.as_os_str() == "spec") {
+                        continue;
+                    }
+                    // modules/modes is a MODULE (mode infrastructure); its own
+                    // files aren't presets. Presets live in <module>/modes/.
+                    fn dir_name(p: Option<&std::path::Path>) -> &str {
+                        p.and_then(|d| d.file_name()).and_then(|n| n.to_str()).unwrap_or("")
+                    }
+                    let parent = entry.parent();
+                    if dir_name(parent) == "modes"
+                        && dir_name(parent.and_then(|p| p.parent())) == "modules"
+                    {
+                        continue;
+                    }
                     files.push(entry);
                 }
             }
@@ -105,21 +121,26 @@ pub(crate) const MISSION_SURFACE: &str = include_str!("../surfaces/missions.json
 
 pub fn collect_ast(paths: &[PathBuf], generation: u64) -> (model::MissionAst, Vec<model::Finding>) {
     let files = collect_lua_files(paths);
-    // The grammar's source of truth: the game's LuaCATS types, found near
-    // the mission files (falls back to the built-in snapshot).
-    let type_surface = types::TypeSurface::load_near(paths);
+    // The grammar's source of truth: the game's LuaCATS types. Resolution is
+    // PER FILE — each file answers to its own module's published surface
+    // (nearest marked types/ dir), so a sharing mode preset and a mission
+    // trigger file check against different vocabularies in one walk.
+    let mut surfaces: std::collections::HashMap<PathBuf, std::rc::Rc<types::TypeSurface>> =
+        std::collections::HashMap::new();
+    let mut surface_for = |file: &PathBuf| -> std::rc::Rc<types::TypeSurface> {
+        let key = types::TypeSurface::types_dir_near(file)
+            .unwrap_or_else(|| PathBuf::from("<builtin>"));
+        surfaces
+            .entry(key)
+            .or_insert_with(|| std::rc::Rc::new(types::TypeSurface::load_near(std::slice::from_ref(file))))
+            .clone()
+    };
+
     let mut surface: serde_json::Value =
         serde_json::from_str(MISSION_SURFACE).expect("valid surface overlay");
-    if let Some(overlay) = surface.as_object_mut() {
-        // Derived editor enums ride the artifact so every terminal renders
-        // literal-union parameters as pickers.
-        overlay.insert(
-            "enums".into(),
-            serde_json::to_value(type_surface.enums()).expect("serializable enums"),
-        );
-    }
-    let mut ast = model::MissionAst { version: 1, generation, files: Vec::new(), surface };
+    let mut ast = model::MissionAst { version: 1, generation, files: Vec::new(), surface: serde_json::Value::Null };
     let mut findings = Vec::new();
+    let mut enums: std::collections::BTreeMap<String, Vec<String>> = Default::default();
     for file in &files {
         let rel = display_path(file, paths);
         let source = match std::fs::read_to_string(file) {
@@ -133,6 +154,8 @@ pub fn collect_ast(paths: &[PathBuf], generation: u64) -> (model::MissionAst, Ve
                 continue;
             }
         };
+        let type_surface = surface_for(file);
+        enums.extend(type_surface.enums());
         match recognizer::recognize_file_with(&rel, &source, &type_surface) {
             Ok(recognized) => {
                 findings.extend(recognized.findings);
@@ -145,6 +168,12 @@ pub fn collect_ast(paths: &[PathBuf], generation: u64) -> (model::MissionAst, Ve
             }),
         }
     }
+    if let Some(overlay) = surface.as_object_mut() {
+        // Derived editor enums ride the artifact so every terminal renders
+        // literal-union parameters as pickers.
+        overlay.insert("enums".into(), serde_json::to_value(enums).expect("serializable enums"));
+    }
+    ast.surface = surface;
     findings.extend(cross_check_names(&ast.files));
     (ast, findings)
 }
@@ -415,6 +444,47 @@ When(C()).Do(E())
         assert_eq!(units, vec!["hub"]);
         assert_eq!(groups, vec!["outpost"]);
         assert!(rec.file.unit_defs.is_empty());
+    }
+
+    #[test]
+    fn mode_presets_recognize_with_their_import_preamble_and_return_chain() {
+        let dir = std::env::temp_dir().join(format!("bmk-modes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("types")).unwrap();
+        std::fs::create_dir_all(dir.join("modes")).unwrap();
+        std::fs::write(
+            dir.join("types/dsl.lua"),
+            "---@meta dsl\n\n---@class TestModeChain\n---@field Desc fun(d: string): TestModeChain\n---@field Deny fun(n: table): TestModeChain\n\n---@param name string\n---@return TestModeChain\nfunction Mode(name) end\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("modes/strict.lua"),
+            "local ModeDSL = VFS.Include(\"modules/x/mode_dsl.lua\")\nlocal Mode, Share = ModeDSL.Mode, ModeDSL.Share\n\nreturn Mode(\"Strict\")\n\t.Desc(\"No sharing, taxed at -1.\")\n\t.Deny(Share.Resources)\n",
+        )
+        .unwrap();
+
+        let (ast, findings) = crate::collect_ast(&[dir.clone()], 1);
+        assert!(findings.is_empty(), "{:?}", findings.iter().map(|f| &f.message).collect::<Vec<_>>());
+        let steps: Vec<&str> = ast.files[0].groups[0].triggers[0]
+            .steps
+            .iter()
+            .map(|s| s.verb.as_str())
+            .collect();
+        assert_eq!(steps, vec!["Mode", "Desc", "Deny"]);
+        match &ast.files[0].groups[0].triggers[0].steps[1].args[0] {
+            Value::String { value, .. } => assert!(value.contains("-1")),
+            other => panic!("expected desc string, got {other:?}"),
+        }
+        // a real (non-import) local is still outside the surface
+        std::fs::write(
+            dir.join("modes/bad.lua"),
+            "local x = 1\nreturn Mode(\"Bad\").Desc(\"x\")\n",
+        )
+        .unwrap();
+        let (_ast, findings) = crate::collect_ast(&[dir.clone()], 2);
+        assert!(findings.iter().any(|f| f.message.contains("import")), "{:?}",
+            findings.iter().map(|f| &f.message).collect::<Vec<_>>());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

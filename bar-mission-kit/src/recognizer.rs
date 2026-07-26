@@ -14,6 +14,26 @@ use emmylua_parser::{
 };
 use std::collections::BTreeMap;
 
+/// What kind of mission file a path is; the grammar differs slightly by kind.
+/// Trigger/roster files are sandbox-injected statement chains. Mode presets
+/// are plain modules: an import preamble (VFS.Include + destructure locals)
+/// followed by `return Mode(...)...` — same chains, different plumbing.
+#[derive(Clone, Copy, PartialEq)]
+pub enum FileKind {
+    Statements,
+    ModePreset,
+}
+
+impl FileKind {
+    pub fn of(path: &str) -> FileKind {
+        if path.contains("modes/") {
+            FileKind::ModePreset
+        } else {
+            FileKind::Statements
+        }
+    }
+}
+
 /// Steps a chain must contain to be executable, per head. The runtime
 /// enforces these at Finalize; declaring them keeps check mode's findings
 /// aligned. (Not derivable from the types — a required call is semantics.)
@@ -53,6 +73,7 @@ pub fn recognize_file_with(
     let mut rec = Rec {
         path: path.to_string(),
         source,
+        kind: FileKind::of(path),
         heads: surface.statement_heads(),
         surface,
         groups: vec![Group { label: None, triggers: Vec::new() }],
@@ -121,6 +142,7 @@ pub fn recognize_file_with(
 struct Rec<'s> {
     path: String,
     source: &'s str,
+    kind: FileKind,
     /// statement head -> chain class, derived from the types.
     heads: BTreeMap<String, String>,
     surface: &'s TypeSurface,
@@ -184,6 +206,37 @@ impl<'s> Rec<'s> {
                 };
                 if let Some(trigger) = self.statement_chain(&call, span, label) {
                     self.groups.last_mut().unwrap().triggers.push(trigger);
+                }
+            }
+            // Mode presets return their chain; the return IS the statement.
+            LuaStat::ReturnStat(ret) if self.kind == FileKind::ModePreset => {
+                let exprs: Vec<LuaExpr> = ret.get_expr_list().collect();
+                match exprs.as_slice() {
+                    [LuaExpr::CallExpr(call)] => {
+                        if let Some(trigger) = self.statement_chain(call, span, label) {
+                            self.groups.last_mut().unwrap().triggers.push(trigger);
+                        }
+                    }
+                    _ => self.mark_opaque(span, "mode presets return exactly one Mode chain"),
+                }
+            }
+            // Mode presets bind their vocabulary with an import preamble:
+            // `local X = VFS.Include(...)` and destructures of such locals.
+            // Plumbing, not content — tolerated, not modeled.
+            LuaStat::LocalStat(local) if self.kind == FileKind::ModePreset => {
+                let imports = local.get_value_exprs().all(|expr| match &expr {
+                    LuaExpr::CallExpr(call) => call
+                        .get_prefix_expr()
+                        .and_then(|p| match p {
+                            LuaExpr::IndexExpr(_) | LuaExpr::NameExpr(_) => Some(()),
+                            _ => None,
+                        })
+                        .is_some(),
+                    LuaExpr::IndexExpr(_) | LuaExpr::NameExpr(_) => true,
+                    _ => false,
+                });
+                if !imports {
+                    self.mark_opaque(span, "mode preset locals may only import vocabulary");
                 }
             }
             _ => {
@@ -384,6 +437,23 @@ impl<'s> Rec<'s> {
                 span,
                 "function body in a trigger file — build the effect with a named verb (closure-free surface)",
             ),
+            // Negative number literals (`-1`): the parser sees unary minus.
+            LuaExpr::UnaryExpr(unary) => {
+                let negated_number = unary
+                    .get_op_token()
+                    .map(|op| op.get_op() == emmylua_parser::UnaryOperator::OpUnm)
+                    .unwrap_or(false)
+                    .then(|| unary.get_expr())
+                    .flatten()
+                    .and_then(|inner| match self.value(&inner) {
+                        Value::Number { value, .. } => Some(value),
+                        _ => None,
+                    });
+                match negated_number {
+                    Some(value) => Value::Number { value: -value, span, semantic: None },
+                    None => self.opaque_value(span, "expression outside the mission subset"),
+                }
+            }
             _ => self.opaque_value(span, "expression outside the mission subset"),
         }
     }

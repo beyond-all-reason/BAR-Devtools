@@ -60,18 +60,48 @@ impl TypeSurface {
     /// built-in snapshot when none is found.
     pub fn load_near(paths: &[std::path::PathBuf]) -> TypeSurface {
         for path in paths {
-            let start = if path.is_dir() { Some(path.as_path()) } else { path.parent() };
-            let mut ancestor = start;
-            while let Some(dir) = ancestor {
-                let sources = surface_sources(&dir.join("types"));
-                if !sources.is_empty() {
-                    let refs: Vec<&str> = sources.iter().map(String::as_str).collect();
-                    return TypeSurface::parse(&refs);
+            if let Some(dir) = TypeSurface::types_dir_near(path) {
+                // A module's surface = its own marked types plus the marked
+                // types of every module its manifest requires (transitively):
+                // vocabulary travels with the module that injects it, and the
+                // manifest graph is what composes the sandbox.
+                let mut sources = Vec::new();
+                let mut seen = std::collections::BTreeSet::new();
+                let mut queue = vec![dir.clone()];
+                while let Some(types_dir) = queue.pop() {
+                    if !seen.insert(types_dir.clone()) {
+                        continue;
+                    }
+                    for name in manifest_requires(&types_dir) {
+                        if let Some(module_dir) = types_dir.parent().and_then(|m| m.parent()) {
+                            let required = module_dir.join(&name).join("types");
+                            if !surface_sources(&required).is_empty() {
+                                queue.push(required);
+                            }
+                        }
+                    }
+                    sources.extend(surface_sources(&types_dir));
                 }
-                ancestor = dir.parent();
+                let refs: Vec<&str> = sources.iter().map(String::as_str).collect();
+                return TypeSurface::parse(&refs);
             }
         }
         TypeSurface::parse(&[DSL_SNAPSHOT, MISSIONS_TYPES_SNAPSHOT])
+    }
+
+    /// The nearest ancestor types/ dir containing surface-marked files —
+    /// the per-file surface cache key.
+    pub fn types_dir_near(path: &std::path::Path) -> Option<std::path::PathBuf> {
+        let start = if path.is_dir() { Some(path) } else { path.parent() };
+        let mut ancestor = start;
+        while let Some(dir) = ancestor {
+            let candidate = dir.join("types");
+            if !surface_sources(&candidate).is_empty() {
+                return Some(candidate);
+            }
+            ancestor = dir.parent();
+        }
+        None
     }
 
     fn parse_source(&mut self, source: &str) {
@@ -311,6 +341,33 @@ pub const SURFACE_MARKER: &str = "---@meta dsl";
 
 fn declares_surface(source: &str) -> bool {
     source.lines().take(4).any(|line| line.trim() == SURFACE_MARKER)
+}
+
+/// The `requires = { "name", ... }` list from the module.lua manifest sitting
+/// beside a types/ dir; empty when there is no manifest.
+fn manifest_requires(types_dir: &std::path::Path) -> Vec<String> {
+    let Some(module_dir) = types_dir.parent() else {
+        return Vec::new();
+    };
+    let Ok(manifest) = std::fs::read_to_string(module_dir.join("module.lua")) else {
+        return Vec::new();
+    };
+    let Some(open) = manifest.find("requires") else {
+        return Vec::new();
+    };
+    let Some(start) = manifest[open..].find('{').map(|i| open + i + 1) else {
+        return Vec::new();
+    };
+    let Some(end) = manifest[start..].find('}').map(|i| start + i) else {
+        return Vec::new();
+    };
+    manifest[start..end]
+        .split(',')
+        .filter_map(|entry| {
+            let entry = entry.trim().trim_matches(|c| c == '"' || c == '\'');
+            (!entry.is_empty()).then(|| entry.to_string())
+        })
+        .collect()
 }
 
 fn surface_sources(types_dir: &std::path::Path) -> Vec<String> {
@@ -568,6 +625,35 @@ mod tests {
         assert!(surface.globals.contains_key("UnitDef"));
         assert!(surface.aliases.contains_key("UnitDefName"), "composed from the second file");
         assert!(!surface.globals.contains_key("Ban"), "unmarked scratch must stay out");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_modules_surface_composes_through_its_manifest_requires() {
+        let dir = std::env::temp_dir().join(format!("bmk-requires-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for module in ["alpha", "beta"] {
+            std::fs::create_dir_all(dir.join("modules").join(module).join("types")).unwrap();
+        }
+        std::fs::write(
+            dir.join("modules/alpha/module.lua"),
+            "return { name = \"alpha\", requires = { \"beta\" } }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("modules/alpha/types/dsl.lua"),
+            "---@meta dsl\n\n---@class AlphaChain\n---@field Do fun(e: table): AlphaChain\n\n---@return AlphaChain\nfunction When(c) end\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("modules/beta/types/dsl.lua"),
+            "---@meta dsl\n\n---@class BetaVerbs\n---@field Zap fun(): table\n\n---@type BetaVerbs\nBeta = {}\n",
+        )
+        .unwrap();
+
+        let surface = TypeSurface::load_near(&[dir.join("modules/alpha/some_mission/triggers")]);
+        assert!(surface.statement_heads().contains_key("When"), "own vocabulary");
+        assert!(surface.globals.contains_key("Beta"), "required module's vocabulary composes in");
         std::fs::remove_dir_all(&dir).ok();
     }
 
