@@ -114,6 +114,13 @@ pub struct ModalRow {
 }
 
 #[derive(Deserialize, Clone, Default)]
+struct StatementInfo {
+    name: String,
+    #[serde(default)]
+    steps: Vec<String>,
+}
+
+#[derive(Deserialize, Clone, Default)]
 struct ModuleInfo {
     name: String,
     #[serde(default)]
@@ -121,9 +128,7 @@ struct ModuleInfo {
     #[serde(default)]
     requires: Vec<String>,
     #[serde(default)]
-    statements: Vec<String>,
-    #[serde(default)]
-    chain: Vec<String>,
+    statements: Vec<StatementInfo>,
     #[serde(default)]
     conditions: Vec<String>,
     #[serde(default)]
@@ -241,6 +246,13 @@ pub fn render(ast: &MissionAst, domains: &Domains, scope: &Scope) -> ViewArtifac
             &nouns,
         ),
         section(
+            "graph",
+            "Graph",
+            &format!("{} module{}", surface.modules.len(), plural(surface.modules.len())),
+            true,
+            &modules_graph(&surface.modules),
+        ),
+        section(
             "modules",
             "Modules",
             &format!("{} publishing a DSL surface", surface.modules.len()),
@@ -264,6 +276,72 @@ pub fn render(ast: &MissionAst, domains: &Domains, scope: &Scope) -> ViewArtifac
 /// The module explorer: what the mission's vocabulary is made of. Each row is
 /// a module that publishes a marked surface — its verbs, its mode presets,
 /// and what it requires. Rows jump to the module's own types file.
+/// The dependency graph as the Reference's overview: modules laid out by
+/// depth (what nothing depends on sits at the left), each showing what it
+/// requires. No SVG in the RML intersection — the layering IS the drawing.
+fn modules_graph(modules: &[ModuleInfo]) -> String {
+    use std::collections::HashMap;
+    let known: Vec<&str> = modules.iter().map(|m| m.name.as_str()).collect();
+    let requires: HashMap<&str, Vec<&str>> = modules
+        .iter()
+        .map(|m| {
+            let deps = m
+                .requires
+                .iter()
+                .map(String::as_str)
+                .filter(|d| known.contains(d))
+                .collect();
+            (m.name.as_str(), deps)
+        })
+        .collect();
+    // Depth = longest path to a module that requires nothing (cycle-safe).
+    fn depth<'a>(
+        name: &'a str,
+        requires: &HashMap<&'a str, Vec<&'a str>>,
+        seen: &mut Vec<&'a str>,
+    ) -> usize {
+        if seen.contains(&name) {
+            return 0;
+        }
+        seen.push(name);
+        let d = requires
+            .get(name)
+            .map(|deps| deps.iter().map(|d| depth(d, requires, seen) + 1).max().unwrap_or(0))
+            .unwrap_or(0);
+        seen.pop();
+        d
+    }
+    let mut rows: Vec<(usize, &ModuleInfo)> = modules
+        .iter()
+        .map(|m| (depth(&m.name, &requires, &mut Vec::new()), m))
+        .collect();
+    rows.sort_by(|a, b| (a.0, &a.1.name).cmp(&(b.0, &b.1.name)));
+
+    let mut out = String::from("<div class=\"me-graph\">");
+    for (d, m) in rows {
+        let deps = requires.get(m.name.as_str()).cloned().unwrap_or_default();
+        let arrows = if deps.is_empty() {
+            String::new()
+        } else {
+            let chips: String = deps
+                .iter()
+                .map(|d| format!("<span class=\"me-chip me-chip-req\">{d}</span>"))
+                .collect();
+            format!("<span class=\"me-graph-arrow\">needs</span>{chips}")
+        };
+        out.push_str(&format!(
+            "<div class=\"me-graph-row\" style=\"margin-left: {}px;\">\
+             <button class=\"me-chip me-chip-stmt me-graph-node\" data-select-module=\"{}\">{}</button>\
+             {arrows}</div>",
+            d * 18,
+            m.name,
+            m.name
+        ));
+    }
+    out.push_str("</div>");
+    out
+}
+
 fn modules_body(modules: &[ModuleInfo]) -> String {
     // The module editor's own path: `modules > N publishing a surface`, the
     // root toggling a picker that jumps to a module — the same shape the
@@ -292,11 +370,21 @@ fn modules_body(modules: &[ModuleInfo]) -> String {
              <span class=\"me-module-desc\">{}</span></div>",
             m.name, m.name, m.description
         ));
+        // Statements first, each with the steps that chain onto it.
+        for statement in &m.statements {
+            out.push_str(&format!(
+                "<div class=\"me-module-row\"><span class=\"me-module-key\">statement</span>\
+                 <span class=\"me-chip me-chip-stmt\">{}</span>",
+                statement.name
+            ));
+            for step in &statement.steps {
+                out.push_str(&format!("<span class=\"me-chip me-chip-build\">{step}</span>"));
+            }
+            out.push_str("</div>");
+        }
         for (key, class, items) in [
-            ("statements", "me-chip me-chip-stmt", &m.statements),
             ("conditions", "me-chip", &m.conditions),
             ("effects", "me-chip me-chip-effect", &m.effects),
-            ("steps", "me-chip me-chip-build", &m.chain),
             ("nouns", "me-chip me-chip-noun", &m.nouns),
             ("modes", "me-chip me-chip-mode", &m.modes),
             ("requires", "me-chip me-chip-req", &m.requires),

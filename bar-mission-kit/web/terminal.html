@@ -56,6 +56,13 @@
 	/* conditions keep the default (blue) chip; effects wear the effect hue. */
 	.me-chip-effect { background: #33230e; border-color: #6b4a1e; color: #ffb45e; }
 	.me-chip-noun { background: #16202c; border-color: #2c3b4d; color: #9fb3c8; }
+	/* Dependency graph: depth is the drawing — each row sits under what it needs. */
+	.me-graph { padding: 2px 0; }
+	.me-graph-row { display: flex; align-items: center; gap: 5px; padding: 3px 0;
+		border-left: 1px solid #1c2836; padding-left: 8px; }
+	.me-graph-node { cursor: pointer; }
+	.me-graph-node:hover { background: #24384f; color: #cfe4ff; }
+	.me-graph-arrow { color: #4c5d70; font-size: 0.68em; }
 
 
 
@@ -322,7 +329,7 @@
 	// the module editor owns nouns and modules. ?focus= names the view; each
 	// keeps only its own sections and summary. A dashboard tile pointing at
 	// the other view's section still reveals it — the tiles are the crossing.
-	const VIEW_SECTIONS = { mission: ["mission", "units", "nouns"], modules: ["modules"] };
+	const VIEW_SECTIONS = { mission: ["mission", "units", "nouns"], modules: ["graph", "modules"] };
 	const viewScope = new URLSearchParams(location.search).get("focus") || "mission";
 	const scopedSections = VIEW_SECTIONS[viewScope] || null;
 	function applySectionStates() {

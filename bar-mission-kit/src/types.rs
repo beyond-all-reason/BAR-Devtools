@@ -324,7 +324,7 @@ impl TypeSurface {
         for (field, sig) in fields {
             let name = format!("{prefix}.{field}");
             match sig.ret.as_deref() {
-                Some(ret) if ret == class => roles.chain.push(format!(".{field}")),
+                Some(ret) if ret == class => {}
                 Some("MissionCondition") => roles.conditions.push(name),
                 Some(ret) if ret.contains("Effect") => roles.effects.push(name),
                 Some(ret) if self.classes.contains_key(ret) => self.walk_class(ret, &name, roles),
@@ -408,11 +408,17 @@ fn surface_sources(types_dir: &std::path::Path) -> Vec<String> {
         .collect()
 }
 
+/// A statement head and the steps that chain onto it.
+#[derive(Debug, Clone, serde::Serialize, Default)]
+pub struct Statement {
+    pub name: String,
+    pub steps: Vec<String>,
+}
+
 /// The roles a module's surface fills, as the author thinks of them.
 #[derive(Default)]
 pub struct Roles {
-    pub statements: Vec<String>,
-    pub chain: Vec<String>,
+    pub statements: Vec<Statement>,
     pub conditions: Vec<String>,
     pub effects: Vec<String>,
     pub nouns: Vec<String>,
@@ -427,11 +433,9 @@ pub struct ModuleInfo {
     pub name: String,
     pub description: String,
     pub requires: Vec<String>,
-    /// Statement heads: globals that open a chain (When, Spawn, Mode).
-    pub statements: Vec<String>,
-    /// Chain verbs a statement takes (.Do, .At, .Deny) — for a mode chain
-    /// these are its policies.
-    pub chain: Vec<String>,
+    /// Statement heads with the steps each one takes: a step means nothing
+    /// apart from the statement it belongs to (.At is Spawn's, not Mode's).
+    pub statements: Vec<Statement>,
     /// Callables returning a condition (what a When can ask).
     pub conditions: Vec<String>,
     /// Callables returning an effect (what a Do can run).
@@ -490,12 +494,13 @@ pub fn explore_modules(modules_root: &std::path::Path) -> Vec<ModuleInfo> {
             match global {
                 Global::Fn(sig) => match sig.ret.as_deref() {
                     Some(ret) if surface.is_chain_class(ret) => {
-                        roles.statements.push(name.clone());
-                        if let Some(fields) = surface.classes.get(ret) {
-                            for field in fields.keys() {
-                                roles.chain.push(format!(".{field}"));
-                            }
-                        }
+                        let mut steps: Vec<String> = surface
+                            .classes
+                            .get(ret)
+                            .map(|fields| fields.keys().map(|f| format!(".{f}")).collect())
+                            .unwrap_or_default();
+                        steps.sort();
+                        roles.statements.push(Statement { name: name.clone(), steps });
                     }
                     Some(ret) => surface.walk_class(ret, name, &mut roles),
                     None => {}
@@ -511,8 +516,9 @@ pub fn explore_modules(modules_root: &std::path::Path) -> Vec<ModuleInfo> {
                 }
             }
         }
-        let Roles { mut statements, mut chain, mut conditions, mut effects, mut nouns } = roles;
-        for list in [&mut statements, &mut chain, &mut conditions, &mut effects, &mut nouns] {
+        let Roles { mut statements, mut conditions, mut effects, mut nouns } = roles;
+        statements.sort_by(|a, b| a.name.cmp(&b.name));
+        for list in [&mut conditions, &mut effects, &mut nouns] {
             list.sort();
             list.dedup();
         }
@@ -533,7 +539,6 @@ pub fn explore_modules(modules_root: &std::path::Path) -> Vec<ModuleInfo> {
             requires: manifest_requires(&dir.join("types")),
             name,
             statements,
-            chain,
             conditions,
             effects,
             nouns,
