@@ -140,6 +140,8 @@
 	.me-mission-list { margin: 0 0 8px; padding: 4px; background: rgba(79,140,224,0.05);
 		border: 1px solid #223040; border-radius: 6px; }
 	.me-mission-list.collapsed { display: none; }
+	.me-module-list.collapsed { display: none; }
+	.me-hidden { display: none; }
 	.me-mission-row { display: block; width: 100%; text-align: left; background: none; border: none;
 		border-radius: 5px; color: #9fb3c8; padding: 5px 9px; font-size: 0.85em; cursor: pointer; }
 	.me-mission-row:hover { background: #2c4158; color: #fff; }
@@ -291,14 +293,24 @@
 	// one section (the module editor view); the rest stay out of the way until
 	// the reader opens them.
 	const collapsedSections = new Map();
-	const focusSection = new URLSearchParams(location.search).get("focus");
+	// Two editors over one page: the mission editor owns triggers and units,
+	// the module editor owns nouns and modules. ?focus= names the view; each
+	// keeps only its own sections and summary. A dashboard tile pointing at
+	// the other view's section still reveals it — the tiles are the crossing.
+	const VIEW_SECTIONS = { mission: ["mission", "units"], modules: ["nouns", "modules"] };
+	const view = new URLSearchParams(location.search).get("focus") || "mission";
+	const mine = VIEW_SECTIONS[view] || null;
 	function applySectionStates() {
+		for (const summaryEl of document.querySelectorAll("[data-view]")) {
+			summaryEl.classList.toggle("me-hidden", mine !== null && summaryEl.dataset.view !== view);
+		}
 		for (const sectionEl of document.querySelectorAll(".me-section")) {
 			const key = sectionEl.dataset.section;
-			if (focusSection && !collapsedSections.has(key)) {
-				sectionEl.classList.toggle("collapsed", key !== focusSection);
+			if (mine && !mine.includes(key) && !collapsedSections.has(key)) {
+				sectionEl.classList.add("me-hidden");
 				continue;
 			}
+			sectionEl.classList.remove("me-hidden");
 			if (collapsedSections.has(key)) {
 				sectionEl.classList.toggle("collapsed", collapsedSections.get(key));
 			}
@@ -312,10 +324,23 @@
 			const key = open.dataset.openSection;
 			const target = document.querySelector(`.me-section[data-section="${key}"]`);
 			if (target) {
-				target.classList.remove("collapsed");
+				target.classList.remove("collapsed", "me-hidden");
 				collapsedSections.set(key, false);
 				target.scrollIntoView({ behavior: "smooth", block: "start" });
 			}
+			return;
+		}
+		// The module picker: toggle the list, or jump to a module's row.
+		const pick = event.target.closest("[data-select-module]");
+		if (pick) {
+			const row = document.querySelector(`.me-module[data-module="${pick.dataset.selectModule}"]`);
+			if (row) row.scrollIntoView({ behavior: "smooth", block: "start" });
+			document.querySelector("[data-module-list]")?.classList.add("collapsed");
+			return;
+		}
+		const nav = event.target.closest('[data-nav="modules"]');
+		if (nav) {
+			document.querySelector("[data-module-list]")?.classList.toggle("collapsed");
 			return;
 		}
 		const toggle = event.target.closest("[data-toggle]");

@@ -204,8 +204,11 @@ pub fn render(ast: &MissionAst, domains: &Domains, scope: &Scope) -> ViewArtifac
         .map(|g| g.triggers.len())
         .sum();
     let form = [
-        crumb(scope),
-        summary(trigger_count, spawn_count, objectives_len, unit_names_len, surface.modules.len()),
+        format!("<div class=\"me-view\" data-view=\"mission\">{}{}</div>",
+            crumb(scope),
+            summary(trigger_count, spawn_count, objectives_len, unit_names_len, surface.modules.len())),
+        format!("<div class=\"me-view\" data-view=\"modules\">{}</div>",
+            modules_summary(&surface.modules)),
         section(
             "mission",
             "Triggers",
@@ -255,33 +258,87 @@ pub fn render(ast: &MissionAst, domains: &Domains, scope: &Scope) -> ViewArtifac
 /// The module explorer: what the mission's vocabulary is made of. Each row is
 /// a module that publishes a marked surface — its verbs, its mode presets,
 /// and what it requires. Rows jump to the module's own types file.
+/// The module editor's dashboard: what the published surface adds up to.
+/// Same marks as the mission summary; the bar splits verbs from mode presets.
+fn modules_summary(modules: &[ModuleInfo]) -> String {
+    let verbs: usize = modules.iter().map(|m| m.vocabulary.len()).sum();
+    let modes: usize = modules.iter().map(|m| m.modes.len()).sum();
+    let requires: usize = modules.iter().map(|m| m.requires.len()).sum();
+    let total = verbs + modes;
+    let pct = |n: usize| if total == 0 { 0.0 } else { (n as f64) * 100.0 / (total as f64) };
+    let tile = |slot: &str, label: &str, value: usize| {
+        let dot = if slot.is_empty() {
+            String::new()
+        } else {
+            format!("<span class=\"me-stat-dot {slot}\"></span>")
+        };
+        format!(
+            "<button class=\"me-stat\" data-open-section=\"modules\">{dot}\
+             <span class=\"me-stat-label\">{label}</span>\
+             <span class=\"me-stat-value\">{value}</span></button>"
+        )
+    };
+    let bar = if total == 0 {
+        String::new()
+    } else {
+        format!(
+            "<div class=\"me-propbar\">\
+             <div class=\"me-propseg me-series-1\" style=\"width: {:.1}%;\"></div>\
+             <div class=\"me-propseg me-series-2\" style=\"width: {:.1}%;\"></div></div>",
+            pct(verbs),
+            pct(modes)
+        )
+    };
+    format!(
+        "<div class=\"me-summary\" data-summary=\"modules\"><div class=\"me-stats\">{}{}{}{}</div>{bar}</div>",
+        tile("me-series-1", "Verbs", verbs),
+        tile("me-series-2", "Mode presets", modes),
+        tile("", "Modules", modules.len()),
+        tile("", "Dependencies", requires),
+    )
+}
+
 fn modules_body(modules: &[ModuleInfo]) -> String {
-    let mut out = String::new();
+    // The module editor's own path: `modules > N publishing a surface`, the
+    // root toggling a picker that jumps to a module — the same shape the
+    // mission crumb has, so both editors navigate the same way.
+    let mut out = format!(
+        "<div class=\"me-crumb\">\
+         <button class=\"me-crumb-root\" data-nav=\"modules\">modules</button>\
+         <span class=\"me-crumb-sep\"></span>\
+         <span class=\"me-crumb-here\">{} publishing a surface</span></div>",
+        modules.len()
+    );
+    if !modules.is_empty() {
+        out.push_str("<div class=\"me-module-list collapsed\" data-module-list=\"1\">");
+        for m in modules {
+            out.push_str(&format!(
+                "<button class=\"me-mission-row\" data-select-module=\"{}\">{}</button>",
+                m.name, m.name
+            ));
+        }
+        out.push_str("</div>");
+    }
     for m in modules {
         out.push_str(&format!(
-            "<div class=\"me-module\"><div class=\"me-module-head\">\
+            "<div class=\"me-module\" data-module=\"{}\"><div class=\"me-module-head\">\
              <span class=\"me-module-name\">{}</span>\
              <span class=\"me-module-desc\">{}</span></div>",
-            m.name, m.description
+            m.name, m.name, m.description
         ));
-        if !m.vocabulary.is_empty() {
-            out.push_str("<div class=\"me-module-row\"><span class=\"me-module-key\">verbs</span>");
-            for verb in &m.vocabulary {
-                out.push_str(&format!("<span class=\"me-chip\">{verb}</span>"));
+        for (key, class, items) in [
+            ("verbs", "me-chip", &m.vocabulary),
+            ("modes", "me-chip me-chip-mode", &m.modes),
+            ("requires", "me-chip me-chip-req", &m.requires),
+        ] {
+            if items.is_empty() {
+                continue;
             }
-            out.push_str("</div>");
-        }
-        if !m.modes.is_empty() {
-            out.push_str("<div class=\"me-module-row\"><span class=\"me-module-key\">modes</span>");
-            for mode in &m.modes {
-                out.push_str(&format!("<span class=\"me-chip me-chip-mode\">{mode}</span>"));
-            }
-            out.push_str("</div>");
-        }
-        if !m.requires.is_empty() {
-            out.push_str("<div class=\"me-module-row\"><span class=\"me-module-key\">requires</span>");
-            for req in &m.requires {
-                out.push_str(&format!("<span class=\"me-chip me-chip-req\">{req}</span>"));
+            out.push_str(&format!(
+                "<div class=\"me-module-row\"><span class=\"me-module-key\">{key}</span>"
+            ));
+            for item in items.iter() {
+                out.push_str(&format!("<span class=\"{class}\">{item}</span>"));
             }
             out.push_str("</div>");
         }
@@ -1414,11 +1471,13 @@ When(Objective("relieve_the_outpost").IsComplete())
             &domains(),
             &Scope { mission: Some("solo".into()), missions: vec![] },
         );
-        assert!(!pinned.form.contains("data-nav"));
+        assert!(!pinned.form.contains("data-nav=\"missions\""));
         assert!(!pinned.form.contains("data-select-mission"));
         assert!(pinned.form.contains("me-crumb-here\">solo<"));
+        // no scope at all -> no MISSION crumb (the module editor keeps its own)
         let bare = render(&ast(), &domains(), &Scope::default());
-        assert!(!bare.form.contains("me-crumb"));
+        assert!(!bare.form.contains("me-crumb-here\">solo<"));
+        assert!(!bare.form.contains("data-select-mission"));
     }
 
     #[test]

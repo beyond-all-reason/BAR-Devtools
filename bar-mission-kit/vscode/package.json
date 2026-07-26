@@ -2,7 +2,7 @@
   "name": "bar-mission-editor",
   "displayName": "BAR: Mission Editor",
   "description": "Mission and module editors for BAR, rendered by bar-mission-kit serve; the .lua files are the source of truth",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "beyond-all-reason",
   "license": "GPL-2.0-or-later",
   "engines": {
@@ -30,23 +30,23 @@
         {
           "type": "webview",
           "id": "barMissionEditor.form",
-          "name": "BAR: Mission Editor"
+          "name": "Missions"
         },
         {
           "type": "webview",
           "id": "barMissionEditor.modules",
-          "name": "BAR: Module Editor"
+          "name": "Modules"
         }
       ]
     },
     "commands": [
       {
         "command": "barMissionEditor.open",
-        "title": "BAR: Open Mission Editor"
+        "title": "BAR: Open Missions"
       },
       {
         "command": "barMissionEditor.openModules",
-        "title": "BAR: Open Module Editor"
+        "title": "BAR: Open Modules"
       }
     ],
     "configuration": {
