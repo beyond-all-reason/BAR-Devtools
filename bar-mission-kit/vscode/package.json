@@ -1,8 +1,8 @@
 {
   "name": "bar-mission-editor",
-  "displayName": "BAR Runtime",
+  "displayName": "Beyond All Reason",
   "description": "Mission and module editors for BAR, rendered by bar-mission-kit serve; the .lua files are the source of truth",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "beyond-all-reason",
   "license": "GPL-2.0-or-later",
   "engines": {
@@ -20,7 +20,7 @@
       "activitybar": [
         {
           "id": "barMission",
-          "title": "BAR Runtime",
+          "title": "Beyond All Reason",
           "icon": "media/icon.svg"
         }
       ]
@@ -42,15 +42,15 @@
     "commands": [
       {
         "command": "barMissionEditor.open",
-        "title": "BAR: Open Missions"
+        "title": "Beyond All Reason: Open Missions"
       },
       {
         "command": "barMissionEditor.openModules",
-        "title": "BAR: Open Reference"
+        "title": "Beyond All Reason: Open Reference"
       }
     ],
     "configuration": {
-      "title": "BAR Runtime",
+      "title": "Beyond All Reason",
       "properties": {
         "barMissionEditor.serverUrl": {
           "type": "string",
