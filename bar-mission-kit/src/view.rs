@@ -121,7 +121,11 @@ struct ModuleInfo {
     #[serde(default)]
     requires: Vec<String>,
     #[serde(default)]
-    vocabulary: Vec<String>,
+    statements: Vec<String>,
+    #[serde(default)]
+    nouns: Vec<String>,
+    #[serde(default)]
+    builders: Vec<String>,
     #[serde(default)]
     modes: Vec<String>,
 }
@@ -285,7 +289,9 @@ fn modules_body(modules: &[ModuleInfo]) -> String {
             m.name, m.name, m.description
         ));
         for (key, class, items) in [
-            ("verbs", "me-chip", &m.vocabulary),
+            ("statements", "me-chip me-chip-stmt", &m.statements),
+            ("nouns", "me-chip", &m.nouns),
+            ("builders", "me-chip me-chip-build", &m.builders),
             ("modes", "me-chip me-chip-mode", &m.modes),
             ("requires", "me-chip me-chip-req", &m.requires),
         ] {

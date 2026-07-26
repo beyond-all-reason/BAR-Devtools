@@ -395,8 +395,12 @@ pub struct ModuleInfo {
     pub name: String,
     pub description: String,
     pub requires: Vec<String>,
-    /// Global names this module injects (statement heads and verb objects).
-    pub vocabulary: Vec<String>,
+    /// Statement heads: globals that open a chain (When, Spawn, Mode).
+    pub statements: Vec<String>,
+    /// Nouns: object globals a statement's verbs act on (Team, Share, Match).
+    pub nouns: Vec<String>,
+    /// Builders: globals that construct a value (Objective, UnitDef, Unit).
+    pub builders: Vec<String>,
     /// Mode presets shipped under <module>/modes/.
     pub modes: Vec<String>,
 }
@@ -440,8 +444,29 @@ pub fn explore_modules(modules_root: &std::path::Path) -> Vec<ModuleInfo> {
             let refs: Vec<&str> = sources.iter().map(String::as_str).collect();
             TypeSurface::parse(&refs)
         };
-        let mut vocabulary: Vec<String> = surface.globals.keys().cloned().collect();
-        vocabulary.sort();
+        // A global's kind is derivable, so derive it: heads open chains, plain
+        // fns build values, `---@type` objects are the nouns those verbs take.
+        let (mut statements, mut nouns, mut builders) = (Vec::new(), Vec::new(), Vec::new());
+        for (name, global) in &surface.globals {
+            match global {
+                Global::Fn(sig) => {
+                    let opens_chain = sig
+                        .ret
+                        .as_deref()
+                        .map(|ret| surface.is_chain_class(ret))
+                        .unwrap_or(false);
+                    if opens_chain {
+                        statements.push(name.clone());
+                    } else {
+                        builders.push(name.clone());
+                    }
+                }
+                Global::Object(_) => nouns.push(name.clone()),
+            }
+        }
+        statements.sort();
+        nouns.sort();
+        builders.sort();
         let mut modes: Vec<String> = std::fs::read_dir(dir.join("modes"))
             .into_iter()
             .flatten()
@@ -458,7 +483,9 @@ pub fn explore_modules(modules_root: &std::path::Path) -> Vec<ModuleInfo> {
             description: manifest_field(&manifest, "description").unwrap_or_default(),
             requires: manifest_requires(&dir.join("types")),
             name,
-            vocabulary,
+            statements,
+            nouns,
+            builders,
             modes,
         });
     }
