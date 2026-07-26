@@ -172,6 +172,18 @@ pub fn collect_ast(paths: &[PathBuf], generation: u64) -> (model::MissionAst, Ve
         // Derived editor enums ride the artifact so every terminal renders
         // literal-union parameters as pickers.
         overlay.insert("enums".into(), serde_json::to_value(enums).expect("serializable enums"));
+        // The module explorer: every module publishing a marked surface,
+        // discovered the same way the grammar is.
+        if let Some(root) = files
+            .first()
+            .and_then(|f| types::TypeSurface::types_dir_near(f))
+            .and_then(|t| t.parent().and_then(|m| m.parent()).map(|p| p.to_path_buf()))
+        {
+            overlay.insert(
+                "modules".into(),
+                serde_json::to_value(types::explore_modules(&root)).expect("serializable modules"),
+            );
+        }
     }
     ast.surface = surface;
     findings.extend(cross_check_names(&ast.files));

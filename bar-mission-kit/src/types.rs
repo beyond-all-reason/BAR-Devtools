@@ -386,6 +386,85 @@ fn surface_sources(types_dir: &std::path::Path) -> Vec<String> {
         .collect()
 }
 
+/// One module as the editor shows it: what it is, what it requires, and what
+/// vocabulary it puts in the sandbox. Derived from the same marked types the
+/// grammar comes from — a module that publishes a surface is explorable, no
+/// registration anywhere.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ModuleInfo {
+    pub name: String,
+    pub description: String,
+    pub requires: Vec<String>,
+    /// Global names this module injects (statement heads and verb objects).
+    pub vocabulary: Vec<String>,
+    /// Mode presets shipped under <module>/modes/.
+    pub modes: Vec<String>,
+}
+
+/// Read one field out of a module.lua manifest (`name = "x"` / `description = "y"`).
+fn manifest_field(manifest: &str, field: &str) -> Option<String> {
+    let at = manifest.find(&format!("{field}"))?;
+    let rest = &manifest[at..];
+    let eq = rest.find('=')?;
+    let tail = rest[eq + 1..].trim_start();
+    let quote = tail.chars().next()?;
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+    let body = &tail[1..];
+    let end = body.find(quote)?;
+    Some(body[..end].to_string())
+}
+
+/// Every module under the modules root that publishes a marked surface.
+pub fn explore_modules(modules_root: &std::path::Path) -> Vec<ModuleInfo> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(modules_root) else {
+        return out;
+    };
+    let mut dirs: Vec<std::path::PathBuf> =
+        entries.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+    dirs.sort();
+    for dir in dirs {
+        let sources = surface_sources(&dir.join("types"));
+        let manifest = std::fs::read_to_string(dir.join("module.lua")).unwrap_or_default();
+        if sources.is_empty() && manifest.is_empty() {
+            continue;
+        }
+        let name = dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_string();
+        let surface = {
+            let refs: Vec<&str> = sources.iter().map(String::as_str).collect();
+            TypeSurface::parse(&refs)
+        };
+        let mut vocabulary: Vec<String> = surface.globals.keys().cloned().collect();
+        vocabulary.sort();
+        let mut modes: Vec<String> = std::fs::read_dir(dir.join("modes"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| {
+                let p = e.path();
+                (p.extension().map(|x| x == "lua").unwrap_or(false))
+                    .then(|| p.file_stem()?.to_str().map(|s| s.to_string()))
+                    .flatten()
+            })
+            .collect();
+        modes.sort();
+        out.push(ModuleInfo {
+            description: manifest_field(&manifest, "description").unwrap_or_default(),
+            requires: manifest_requires(&dir.join("types")),
+            name,
+            vocabulary,
+            modes,
+        });
+    }
+    out
+}
+
 /// MissionUnitName -> unit_name, UnitDefName -> unit_def_name.
 pub fn alias_slug(name: &str) -> String {
     let name = name.strip_prefix("Mission").unwrap_or(name);

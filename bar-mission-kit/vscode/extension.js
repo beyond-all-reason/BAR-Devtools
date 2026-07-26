@@ -12,18 +12,26 @@ function activate(context) {
 	diagnostics = vscode.languages.createDiagnosticCollection("bar-mission-kit");
 	context.subscriptions.push(diagnostics);
 
-	context.subscriptions.push(
-		vscode.window.registerWebviewViewProvider("barMissionEditor.form", {
-			resolveWebviewView(view) {
-				view.webview.options = { enableScripts: true };
-				view.webview.html = frame(serverUrl());
-			},
-		})
-	);
+	// Two views over one served form: the mission editor opens on triggers and
+	// units, the module editor on the module explorer. Same page, different
+	// section focused — terminals stay blind, the URL carries the scope.
+	for (const [id, focus] of [["barMissionEditor.form", ""], ["barMissionEditor.modules", "modules"]]) {
+		context.subscriptions.push(
+			vscode.window.registerWebviewViewProvider(id, {
+				resolveWebviewView(view) {
+					view.webview.options = { enableScripts: true };
+					view.webview.html = frame(serverUrl(), focus);
+				},
+			})
+		);
+	}
 
 	context.subscriptions.push(
 		vscode.commands.registerCommand("barMissionEditor.open", () =>
 			vscode.commands.executeCommand("barMissionEditor.form.focus")
+		),
+		vscode.commands.registerCommand("barMissionEditor.openModules", () =>
+			vscode.commands.executeCommand("barMissionEditor.modules.focus")
 		)
 	);
 
@@ -246,13 +254,14 @@ async function paintEdges(server) {
 	editor.setDecorations(edgeDecoration, decorations);
 }
 
-function frame(server) {
+function frame(server, focus) {
+	const scope = focus ? `&focus=${encodeURIComponent(focus)}` : "";
 	return `<!DOCTYPE html><html>
 <head>
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src ${server}; style-src 'unsafe-inline';"/>
 <style>html, body, iframe { margin: 0; padding: 0; width: 100%; height: 100%; border: 0; overflow: hidden; }</style>
 </head>
-<body><iframe src="${server}/?embed=1"></iframe></body></html>`;
+<body><iframe src="${server}/?embed=1${scope}"></iframe></body></html>`;
 }
 
 async function pollDiagnostics(server) {

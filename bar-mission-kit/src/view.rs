@@ -114,6 +114,19 @@ pub struct ModalRow {
 }
 
 #[derive(Deserialize, Clone, Default)]
+struct ModuleInfo {
+    name: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    requires: Vec<String>,
+    #[serde(default)]
+    vocabulary: Vec<String>,
+    #[serde(default)]
+    modes: Vec<String>,
+}
+
+#[derive(Deserialize, Clone, Default)]
 struct Surface {
     #[serde(default)]
     conditions: Vec<SurfaceEntry>,
@@ -123,6 +136,9 @@ struct Surface {
     /// (collect_ast merges them into the surface overlay).
     #[serde(default)]
     enums: std::collections::BTreeMap<String, Vec<String>>,
+    /// Modules publishing a marked DSL surface (the explorer's rows).
+    #[serde(default)]
+    modules: Vec<ModuleInfo>,
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -188,13 +204,14 @@ pub fn render(ast: &MissionAst, domains: &Domains, scope: &Scope) -> ViewArtifac
         .map(|g| g.triggers.len())
         .sum();
     let form = [
-        summary(trigger_count, spawn_count, objectives_len, unit_names_len),
+        crumb(scope),
+        summary(trigger_count, spawn_count, objectives_len, unit_names_len, surface.modules.len()),
         section(
             "mission",
             "Triggers",
             &format!("{trigger_count} in {trigger_files} file{}", plural(trigger_files)),
             true,
-            &format!("{}{triggers}", crumb(scope)),
+            &triggers,
         ),
         section(
             "units",
@@ -214,6 +231,13 @@ pub fn render(ast: &MissionAst, domains: &Domains, scope: &Scope) -> ViewArtifac
             true,
             &nouns,
         ),
+        section(
+            "modules",
+            "Modules",
+            &format!("{} publishing a DSL surface", surface.modules.len()),
+            true,
+            &modules_body(&surface.modules),
+        ),
     ]
     .concat();
 
@@ -228,26 +252,66 @@ pub fn render(ast: &MissionAst, domains: &Domains, scope: &Scope) -> ViewArtifac
     }
 }
 
-/// The panel's overview: a KPI row plus one part-to-whole bar of the
-/// mission's statements. Counts let every section collapse by default —
-/// the reader sees the shape of the mission before opening anything.
+/// The module explorer: what the mission's vocabulary is made of. Each row is
+/// a module that publishes a marked surface — its verbs, its mode presets,
+/// and what it requires. Rows jump to the module's own types file.
+fn modules_body(modules: &[ModuleInfo]) -> String {
+    let mut out = String::new();
+    for m in modules {
+        out.push_str(&format!(
+            "<div class=\"me-module\"><div class=\"me-module-head\">\
+             <span class=\"me-module-name\">{}</span>\
+             <span class=\"me-module-desc\">{}</span></div>",
+            m.name, m.description
+        ));
+        if !m.vocabulary.is_empty() {
+            out.push_str("<div class=\"me-module-row\"><span class=\"me-module-key\">verbs</span>");
+            for verb in &m.vocabulary {
+                out.push_str(&format!("<span class=\"me-chip\">{verb}</span>"));
+            }
+            out.push_str("</div>");
+        }
+        if !m.modes.is_empty() {
+            out.push_str("<div class=\"me-module-row\"><span class=\"me-module-key\">modes</span>");
+            for mode in &m.modes {
+                out.push_str(&format!("<span class=\"me-chip me-chip-mode\">{mode}</span>"));
+            }
+            out.push_str("</div>");
+        }
+        if !m.requires.is_empty() {
+            out.push_str("<div class=\"me-module-row\"><span class=\"me-module-key\">requires</span>");
+            for req in &m.requires {
+                out.push_str(&format!("<span class=\"me-chip me-chip-req\">{req}</span>"));
+            }
+            out.push_str("</div>");
+        }
+        out.push_str("</div>");
+    }
+    out
+}
+
+/// The landing dashboard: a KPI row that is also the navigation, plus one
+/// part-to-whole bar of the mission's statements. Every tile opens its
+/// section — including Modules, the way into the module editor — so the panel
+/// can open fully collapsed and still show the shape of the mission.
 ///
 /// Marks follow the viz rules: two categorical slots (blue/orange, validated
 /// against both terminals' dark surfaces), a 2px surface gap between
-/// segments, rounded ends, and identity carried by the dots — the labels and
+/// segments, rounded ends, and identity carried by the dots — labels and
 /// values stay in text ink, never in a series color.
-fn summary(triggers: usize, spawns: usize, objectives: usize, named: usize) -> String {
+fn summary(triggers: usize, spawns: usize, objectives: usize, named: usize, modules: usize) -> String {
     let total = triggers + spawns;
     let pct = |n: usize| if total == 0 { 0.0 } else { (n as f64) * 100.0 / (total as f64) };
-    let stat = |slot: &str, label: &str, value: usize| {
+    let tile = |slot: &str, label: &str, value: usize, section: &str| {
         let dot = if slot.is_empty() {
             String::new()
         } else {
             format!("<span class=\"me-stat-dot {slot}\"></span>")
         };
         format!(
-            "<div class=\"me-stat\">{dot}<span class=\"me-stat-label\">{label}</span>\
-             <span class=\"me-stat-value\">{value}</span></div>"
+            "<button class=\"me-stat\" data-open-section=\"{section}\">{dot}\
+             <span class=\"me-stat-label\">{label}</span>\
+             <span class=\"me-stat-value\">{value}</span></button>"
         )
     };
     let bar = if total == 0 {
@@ -262,11 +326,12 @@ fn summary(triggers: usize, spawns: usize, objectives: usize, named: usize) -> S
         )
     };
     format!(
-        "<div class=\"me-summary\"><div class=\"me-stats\">{}{}{}{}</div>{bar}</div>",
-        stat("me-series-1", "Triggers", triggers),
-        stat("me-series-2", "Spawns", spawns),
-        stat("", "Objectives", objectives),
-        stat("", "Named units", named),
+        "<div class=\"me-summary\"><div class=\"me-stats\">{}{}{}{}{}</div>{bar}</div>",
+        tile("me-series-1", "Triggers", triggers, "mission"),
+        tile("me-series-2", "Spawns", spawns, "units"),
+        tile("", "Objectives", objectives, "nouns"),
+        tile("", "Named units", named, "nouns"),
+        tile("", "Modules", modules, "modules"),
     )
 }
 

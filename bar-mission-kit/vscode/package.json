@@ -1,8 +1,8 @@
 {
   "name": "bar-mission-editor",
-  "displayName": "BAR Campaign Editor",
-  "description": "Campaign editor for BAR missions, rendered by bar-mission-kit serve; the .lua files are the source of truth",
-  "version": "0.1.3",
+  "displayName": "BAR: Mission Editor",
+  "description": "Mission and module editors for BAR, rendered by bar-mission-kit serve; the .lua files are the source of truth",
+  "version": "0.2.0",
   "publisher": "beyond-all-reason",
   "license": "GPL-2.0-or-later",
   "engines": {
@@ -20,7 +20,7 @@
       "activitybar": [
         {
           "id": "barMission",
-          "title": "Campaign",
+          "title": "BAR",
           "icon": "media/icon.svg"
         }
       ]
@@ -30,18 +30,27 @@
         {
           "type": "webview",
           "id": "barMissionEditor.form",
-          "name": "Campaign Editor"
+          "name": "BAR: Mission Editor"
+        },
+        {
+          "type": "webview",
+          "id": "barMissionEditor.modules",
+          "name": "BAR: Module Editor"
         }
       ]
     },
     "commands": [
       {
         "command": "barMissionEditor.open",
-        "title": "BAR: Open Campaign Editor"
+        "title": "BAR: Open Mission Editor"
+      },
+      {
+        "command": "barMissionEditor.openModules",
+        "title": "BAR: Open Module Editor"
       }
     ],
     "configuration": {
-      "title": "BAR Mission Editor",
+      "title": "BAR: Mission Editor",
       "properties": {
         "barMissionEditor.serverUrl": {
           "type": "string",
