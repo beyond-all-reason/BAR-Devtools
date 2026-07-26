@@ -92,6 +92,51 @@ async function vocabulary(server) {
 // must not jump to a stale target.
 let lastOpenSeq = null;
 
+const fs = require("fs");
+const path = require("path");
+
+function realpath(p) {
+	try {
+		return fs.realpathSync(p);
+	} catch {
+		return p;
+	}
+}
+
+// Workspace roots plus one level of symlinked children, as [alias, real]
+// pairs — multi-repo layouts (BAR-Devtools) link sibling repos into the
+// workspace, and atomic distros alias /home to /var/home.
+function workspaceRoots() {
+	const roots = [];
+	for (const folder of vscode.workspace.workspaceFolders || []) {
+		const base = folder.uri.fsPath;
+		roots.push([base, realpath(base)]);
+		let entries = [];
+		try {
+			entries = fs.readdirSync(base, { withFileTypes: true });
+		} catch {}
+		for (const entry of entries) {
+			if (!entry.isSymbolicLink()) continue;
+			const alias = path.join(base, entry.name);
+			roots.push([alias, realpath(alias)]);
+		}
+	}
+	return roots;
+}
+
+// serve publishes canonical paths; VS Code's getWorkspaceFolder is a textual,
+// symlink-blind match. Route by RESOLVED prefixes instead, and open through
+// the matching alias so the file lands inside this window's tree.
+function routeIntoWorkspace(file) {
+	const target = realpath(file);
+	for (const [alias, real] of workspaceRoots()) {
+		if (target === real || target.startsWith(real + path.sep)) {
+			return path.join(alias, path.relative(real, target));
+		}
+	}
+	return null;
+}
+
 async function pollOpenTarget(server) {
 	let target;
 	try {
@@ -108,10 +153,10 @@ async function pollOpenTarget(server) {
 	}
 	if (target.seq === lastOpenSeq) return;
 	lastOpenSeq = target.seq;
-	const uri = vscode.Uri.file(target.file);
-	if (!vscode.workspace.getWorkspaceFolder(uri)) return; // another window's project
+	const routed = routeIntoWorkspace(target.file);
+	if (!routed) return; // another window's project
 	const row = Math.max(0, (target.line || 1) - 1);
-	vscode.window.showTextDocument(uri, {
+	vscode.window.showTextDocument(vscode.Uri.file(routed), {
 		preview: false,
 		selection: new vscode.Range(row, 0, row, 0),
 	});
