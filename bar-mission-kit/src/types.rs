@@ -1,21 +1,13 @@
 //! The type surface: the kit's model of the mission DSL, derived from the
-//! game's LuaCATS annotation files (modules/missions/types/dsl.lua and
-//! types/missions.lua). The types are the grammar's source of truth:
+//! game's LuaCATS annotation files under types/. Statement heads and chain
+//! verbs come from the injected globals and chain classes; alias names
+//! become slot semantics (UnitDefName -> unit_def_name), and literal-union
+//! aliases become editor enums. Anything untyped stays the opaque exit
+//! hatch. The parser reads the line-oriented LuaCATS subset those files
+//! use — it is not a full doc-type parser.
 //!
-//!   - statement heads   = injected globals returning a chain class
-//!   - chain verbs       = the chain class's fields (a chain class is one
-//!                         whose fun fields all return the class itself)
-//!   - slot semantics    = parameter types: an alias name becomes the slot's
-//!                         semantic (UnitDefName -> unit_def_name); a plain
-//!                         number parameter falls back to its name (count)
-//!   - editor enums      = aliases whose type is a union of string literals
-//!
-//! Anything typed is understood without kit changes; anything untyped stays
-//! the opaque exit hatch. The parser reads the line-oriented LuaCATS subset
-//! those files use — it is not a full doc-type parser.
-//!
-//! The embedded fixtures are snapshots for tests and a fallback when no
-//! types/ dir is found near the mission; real runs load the game's files.
+//! Embedded fixtures are the snapshot used by tests and as a fallback when
+//! no types/ dir is found near the mission.
 
 use std::collections::BTreeMap;
 
@@ -64,9 +56,8 @@ impl TypeSurface {
     }
 
     /// Load the game's annotation files by walking ancestors of the given
-    /// paths for a types/ dir with surface-marked files (mission dirs live
-    /// under modules/missions, whose types/ sibling holds the truth). Falls
-    /// back to the built-in snapshot when none is found.
+    /// paths for a types/ dir with surface-marked files. Falls back to the
+    /// built-in snapshot when none is found.
     pub fn load_near(paths: &[std::path::PathBuf]) -> TypeSurface {
         for path in paths {
             let start = if path.is_dir() { Some(path.as_path()) } else { path.parent() };
@@ -313,10 +304,9 @@ impl TypeSurface {
     }
 }
 
-/// The self-declaration a file makes to join the published DSL surface: a
-/// named LuaCATS meta marker at the top. Composition is declarative — every
-/// marked .lua file in the discovered types/ dir is parsed, in filename
-/// order; scratch and proposal files stay out by not marking themselves.
+/// A file joins the published DSL surface by opening with this LuaCATS meta
+/// marker; every marked .lua file in the discovered types/ dir is parsed, in
+/// filename order.
 pub const SURFACE_MARKER: &str = "---@meta dsl";
 
 fn declares_surface(source: &str) -> bool {
@@ -498,7 +488,6 @@ mod tests {
         let heads = surface.statement_heads();
         assert_eq!(heads.get("When").map(String::as_str), Some("TriggerChain"));
         assert_eq!(heads.get("Spawn").map(String::as_str), Some("MissionSpawnChain"));
-        // condition/effect builders are not statement heads
         assert!(!heads.contains_key("Objective"));
         assert!(!heads.contains_key("Unit"));
 
@@ -564,13 +553,11 @@ mod tests {
             "---@meta dsl\n\n---@param name UnitDefName\n---@return MissionUnitDefRef\nfunction UnitDef(name) end\n",
         )
         .unwrap();
-        // A second marked file composes in (the distributed-modules shape).
         std::fs::write(
             dir.join("types/extra.lua"),
             "---@meta dsl\n\n---@alias UnitDefName string\n",
         )
         .unwrap();
-        // Scratch stays out: annotation-shaped but not self-declared.
         std::fs::write(
             dir.join("types/dsl_proposed.lua"),
             "---@meta\n\n---@return TriggerChain\nfunction Ban(name) end\n",

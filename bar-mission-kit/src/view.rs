@@ -258,9 +258,8 @@ fn section(key: &str, title: &str, hint: &str, collapsed: bool, body: &str) -> S
     )
 }
 
-/// The noun explorer: every objective, unit, and trigger the mission
-/// mentions, wired to the same live keys the form chips use. Trigger rows
-/// are open-in-editor jumps (data-open-*).
+/// The noun explorer: every objective and unit the mission mentions, wired
+/// to the same live keys the form chips use.
 fn nouns_body(
     ast: &MissionAst,
     domains: &Domains,
@@ -406,9 +405,8 @@ fn file_view(file: &FileAst, ctx: &Ctx) -> Element {
 }
 
 fn trigger_card(trigger: &Trigger, ctx: &Ctx) -> Element {
-    // The head is chrome, not content: a ghost ordinal as the open-in-editor
-    // handle (the file header already names the file) plus the add/remove
-    // cluster at the right — cards spend their height on statements.
+    // Ghost ordinal is the open-in-editor handle; the file header already
+    // names the file.
     let ordinal = trigger.id.rsplit(':').next().unwrap_or_default();
     let title = trigger.label.clone().unwrap_or_else(|| format!("#{ordinal}"));
     let addable = ctx.editable
@@ -1048,14 +1046,11 @@ When(Objective("build_pawns").IsComplete())
         let view = render(&ast(), &domains(), &Scope::default());
         assert_wellformed(&view.form);
         assert!(!view.form.contains("<!--"), "hydration markers leaked");
-        // count literal -> number input with span + CAS hash attributes
         assert!(view.form.contains("data-quote=\"0\""), "{}", view.form);
         assert!(view.form.contains("data-start="));
         assert!(view.form.contains("data-hash="));
-        // unit literal -> dropdown with the current unit selected
         assert!(view.form.contains("value=\"armpw\" selected=\"true\""), "{}", view.form);
         assert!(view.form.contains("Construction Kbot"));
-        // sentence phrase, not raw DSL, in ui style
         assert!(view.form.contains("Player has "));
         assert_eq!(view.generation, 7);
         assert_eq!(view.first_file.as_deref(), Some("triggers/win.lua"));
@@ -1068,14 +1063,11 @@ When(Objective("build_pawns").IsComplete())
             assert!(view.form.contains(&format!("data-section=\"{key}\"")), "missing section {key}");
             assert!(view.form.contains(&format!("data-toggle=\"{key}\"")), "missing toggle {key}");
         }
-        // two sections only: triggers ARE the mission section, API is
-        // intellisense's job
         assert!(!view.form.contains("data-section=\"surface\""));
         assert!(!view.form.contains(">TRIGGERS<"));
-        // card titles jump to source (WIN opens with a newline: line 2)
+        // WIN opens with a newline, so the chain starts on line 2
         assert!(view.form.contains("me-card-title me-jump"));
         assert!(view.form.contains("data-open-line=\"2\""));
-        // noun explorer: human unit label; step chips sit in the status column
         assert!(view.form.contains("Pawn  [armpw]"));
         assert!(view.form.contains("me-live me-step-live"));
         assert_wellformed(&view.form);
@@ -1084,15 +1076,12 @@ When(Objective("build_pawns").IsComplete())
     #[test]
     fn live_probes_are_slotted_and_deduped() {
         let view = render(&ast(), &domains(), &Scope::default());
-        // unit chip in the sentence + a probe describing what to sample
         assert!(view.form.contains("data-live=\"unit:armpw:3\""), "{}", view.form);
         assert!(view.form.contains("data-live=\"obj:build_pawns\""));
-        // build_pawns appears in two triggers -> one probe (content-keyed)
         assert_eq!(view.live.len(), 2, "{:?}", view.live.iter().map(|p| &p.key).collect::<Vec<_>>());
         let unit = view.live.iter().find(|p| p.kind == "unit_count").unwrap();
         assert_eq!(unit.unit_def.as_deref(), Some("armpw"));
         assert_eq!(unit.need, Some(3.0));
-        // telemetry never dirties the markup contract: billboard has no chips
         assert!(!view.billboard.contains("data-live"));
     }
 
@@ -1117,7 +1106,6 @@ When(Objective("build_pawns").IsComplete())
     #[test]
     fn the_vocabulary_rides_the_artifact_for_editor_completion() {
         let view = render(&ast(), &domains(), &Scope::default());
-        // completion offers every verb family the sandbox injects
         let templates = |entries: &[SurfaceEntry]| {
             entries.iter().map(|e| e.template.clone()).collect::<Vec<_>>().join("\n")
         };
@@ -1129,7 +1117,6 @@ When(Objective("build_pawns").IsComplete())
         for verb in [".Complete()", "Units.Transfer(", "Combat.Protect(", ".Until(", "MatchFlow.Victory(", "MatchFlow.Defeat("] {
             assert!(effects.contains(verb), "missing effect template {verb}");
         }
-        // nouns the mission itself defines ride along for slot completion
         assert_eq!(view.vocabulary.objectives, vec!["build_pawns".to_string()]);
         assert_eq!(view.vocabulary.units.len(), 2);
     }
@@ -1165,13 +1152,11 @@ When(Objective("relieve_the_outpost").IsComplete())
         assert!(view.form.contains("the mission has started"), "{}", view.form);
         assert!(view.form.contains("give group "));
         assert!(view.form.contains("protect "));
-        // the Until slot renders the nested condition's own sentence
         assert!(view.form.contains(" until "));
         assert!(view.form.contains("objective "));
         assert!(view.form.contains(" is complete"));
         assert!(view.form.contains(" is destroyed"));
         assert!(view.form.contains("the player has spotted "));
-        // every slot resolved — no literal {semantic} leftovers
         assert!(!view.form.contains("{unit_name}"), "{}", view.form);
         assert!(!view.form.contains("{until}"), "{}", view.form);
         assert!(!view.form.contains("{unit_group}"), "{}", view.form);
@@ -1187,16 +1172,12 @@ When(Objective("relieve_the_outpost").IsComplete())
         let ast = MissionAst { version: 1, generation: 1, files: vec![rec.file], surface };
         let view = render(&ast, &domains(), &Scope::default());
         assert_wellformed(&view.form);
-        // the team role renders as a picker of exactly the alias's literals
         assert!(view.form.contains("me-select-enum"), "{}", view.form);
         for role in ["player", "enemy", "gaia"] {
             assert!(view.form.contains(&format!("value=\"{role}\"")));
         }
-        // the def slot is the usual unit dropdown
         assert!(view.form.contains("value=\"corlab\" selected=\"true\""));
-        // trigger vocabulary stays out of the roster file
         assert!(!view.form.contains("data-add"), "{}", view.form);
-        // declared nouns ride the vocabulary for slot completion
         assert_eq!(view.vocabulary.unit_names, vec!["hub".to_string()]);
         assert_eq!(view.vocabulary.groups, vec!["outpost".to_string()]);
     }
@@ -1209,10 +1190,8 @@ When(Objective("relieve_the_outpost").IsComplete())
         assert_eq!(dead.unit_name.as_deref(), Some("armada_commander"));
         let spotted = view.live.iter().find(|p| p.kind == "unit_spotted").unwrap();
         assert_eq!(spotted.key, "unitspotted:tenebrium_device");
-        // the Protect row's chip delegates to its Until condition
         assert!(view.live.iter().any(|p| p.key == "obj:find_the_enclave"));
         assert!(view.form.contains("data-live=\"obj:find_the_enclave\""));
-        // the noun explorer lists roster-named units
         assert!(view.form.contains(">NAMED UNITS<"));
         assert!(view.form.contains("armada_commander"));
     }
@@ -1244,9 +1223,7 @@ When(Objective("relieve_the_outpost").IsComplete())
         assert!(view.form.contains("me-crumb-here\">cm8_ashfall<"));
         assert!(view.form.contains("data-select-mission=\"hello_pawns\""));
         assert!(view.form.contains("me-mission-row me-mission-current"));
-        // the crumb leads the mission section, before the file view
         assert!(view.form.find("me-crumb").unwrap() < view.form.find("me-file").unwrap());
-        // pinned serve (no root): the path shows, nothing navigates
         let pinned = render(
             &ast(),
             &domains(),
@@ -1255,7 +1232,6 @@ When(Objective("relieve_the_outpost").IsComplete())
         assert!(!pinned.form.contains("data-nav"));
         assert!(!pinned.form.contains("data-select-mission"));
         assert!(pinned.form.contains("me-crumb-here\">solo<"));
-        // no scope at all -> no crumb
         let bare = render(&ast(), &domains(), &Scope::default());
         assert!(!bare.form.contains("me-crumb"));
     }

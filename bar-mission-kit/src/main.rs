@@ -250,7 +250,6 @@ When(Objective("build_pawns").IsComplete())
         let steps: Vec<&str> = triggers[0].steps.iter().map(|s| s.verb.as_str()).collect();
         assert_eq!(steps, vec!["When", "Do"]);
 
-        // When's condition: Team.Player.Has(UnitDef("armpw"), 3)
         match &triggers[0].steps[0].args[0] {
             Value::Verb { path, calls, .. } => {
                 assert_eq!(path, "Team.Player.Has");
@@ -263,7 +262,6 @@ When(Objective("build_pawns").IsComplete())
             other => panic!("expected verb condition, got {other:?}"),
         }
 
-        // Do's effect: MatchFlow.Victory(Team.Player) in trigger 2
         match &triggers[1].steps[1].args[0] {
             Value::Verb { path, calls, .. } => {
                 assert_eq!(path, "MatchFlow.Victory");
@@ -335,7 +333,6 @@ When(C()).Do(E())
         let rec = crate::recognizer::recognize_file("triggers/win.lua", WIN).unwrap();
         assert_eq!(rec.file.objectives, vec!["build_pawns".to_string()]);
         let t1 = &rec.file.groups[0].triggers[0];
-        // UnitDef("armpw") arg is unit-typed; the Has count is count-typed
         match &t1.steps[0].args[0] {
             Value::Verb { calls, .. } => {
                 match &calls[0].args[0] {
@@ -356,7 +353,6 @@ When(C()).Do(E())
             }
             other => panic!("expected Has verb, got {other:?}"),
         }
-        // effect insert point appends past the chain's last line
         let at = t1.insert_effect_at;
         assert!(WIN[..at].trim_end().ends_with(".Do(Objective(\"build_pawns\").Complete())"), "{}", &WIN[..at]);
     }
@@ -392,11 +388,9 @@ When(C()).Do(E())
         assert!(rec.findings.is_empty(), "findings: {:?}", rec.findings);
         let steps: Vec<&str> = rec.file.groups[0].triggers[0].steps.iter().map(|s| s.verb.as_str()).collect();
         assert_eq!(steps, vec!["Spawn", "At", "Named", "Grouped"]);
-        // roster names are DECLARATIONS here, not references
         assert_eq!(rec.file.unit_defs, vec!["hub".to_string()]);
         assert_eq!(rec.file.group_defs, vec!["outpost".to_string()]);
         assert!(rec.file.unit_refs.is_empty());
-        // the team role is stamped from the MissionTeamRole alias
         match &rec.file.groups[0].triggers[0].steps[0].args[1] {
             Value::String { semantic, .. } => assert_eq!(semantic.as_deref(), Some("team_role")),
             other => panic!("expected team role string, got {other:?}"),
@@ -441,7 +435,6 @@ When(C()).Do(E())
         let (ast, findings) = crate::collect_ast(&[dir.clone()], 1);
         assert!(findings.iter().any(|f| f.message.contains("no such name") && f.message.contains("hubb")),
             "{:?}", findings.iter().map(|f| &f.message).collect::<Vec<_>>());
-        // derived enums ride the surface overlay for the terminals
         assert_eq!(
             ast.surface["enums"]["team_role"][0].as_str(),
             Some("player")

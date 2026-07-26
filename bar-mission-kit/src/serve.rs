@@ -597,12 +597,10 @@ mod tests {
         server.follow_active();
         assert_eq!(server.missions_dir, root.join("beta"));
 
-        // path-shaped names are refused; scope stays where it was
         std::fs::write(editor.join("active_mission.json"), "{\"name\":\"../../etc\"}").unwrap();
         server.follow_active();
         assert_eq!(server.missions_dir, root.join("beta"));
 
-        // without --missions-root nothing moves
         let mut pinned = Server::new(root.join("alpha"), editor.clone(), String::new(), None);
         std::fs::write(editor.join("active_mission.json"), "{\"name\":\"beta\"}").unwrap();
         pinned.follow_active();
@@ -618,32 +616,27 @@ mod tests {
         let mut server =
             Server::new(root.join("alpha"), editor.clone(), String::new(), Some(root.clone()));
 
-        // arming re-scopes (a change from nothing)
         std::fs::write(editor.join("active_mission.json"), "{\"name\":\"beta\"}").unwrap();
         server.follow_active();
         assert_eq!(server.missions_dir, root.join("beta"));
 
-        // a crumb pick wins...
         std::fs::write(editor.join("select_mission.json"), "{\"name\":\"alpha\"}").unwrap();
         server.consume_select_mission();
         assert_eq!(server.missions_dir, root.join("alpha"));
         assert!(!editor.join("select_mission.json").exists());
 
-        // ...and the STANDING arm file does not yank it back
+        // a standing (unchanged) arm file must not yank the crumb pick back
         server.follow_active();
         assert_eq!(server.missions_dir, root.join("alpha"));
 
-        // a NEW arming event wins the tick again
         std::fs::write(editor.join("active_mission.json"), "{\"name\":\"beta\",\"t\":2}").unwrap();
         server.follow_active();
         assert_eq!(server.missions_dir, root.join("beta"));
 
-        // path-shaped names are refused
         std::fs::write(editor.join("select_mission.json"), "{\"name\":\"../../etc\"}").unwrap();
         server.consume_select_mission();
         assert_eq!(server.missions_dir, root.join("beta"));
 
-        // pinned serve (no --missions-root) ignores selections, consumes the file
         let mut pinned = Server::new(root.join("alpha"), editor.clone(), String::new(), None);
         std::fs::write(editor.join("select_mission.json"), "{\"name\":\"beta\"}").unwrap();
         pinned.consume_select_mission();
@@ -656,7 +649,7 @@ mod tests {
         let root = tmpdir("list-root");
         std::fs::create_dir_all(root.join("alpha/triggers")).unwrap();
         std::fs::write(root.join("alpha/triggers/win.lua"), "x").unwrap();
-        std::fs::create_dir_all(root.join("lib")).unwrap(); // no triggers -> not a mission
+        std::fs::create_dir_all(root.join("lib")).unwrap();
         std::fs::create_dir_all(root.join("beta/deep/triggers")).unwrap();
         std::fs::write(root.join("beta/deep/triggers/t.lua"), "x").unwrap();
         let server =
