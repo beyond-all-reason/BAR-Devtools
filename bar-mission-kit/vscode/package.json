@@ -2,7 +2,7 @@
   "name": "bar-mission-editor",
   "displayName": "BAR Campaign Editor",
   "description": "Campaign editor for BAR missions, rendered by bar-mission-kit serve; the .lua files are the source of truth",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "beyond-all-reason",
   "license": "GPL-2.0-or-later",
   "engines": {

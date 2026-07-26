@@ -14,7 +14,7 @@ use crate::recognizer;
 use crate::view;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const POLL: Duration = Duration::from_millis(300);
 
@@ -328,8 +328,15 @@ impl Server {
         };
         let file = file.canonicalize().unwrap_or(file);
         self.open_seq += 1;
+        // `ts` lets a freshly started terminal tell a live request from a
+        // stale artifact: seq alone cannot, since it restarts with serve.
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
         let target = serde_json::json!({
             "seq": self.open_seq,
+            "ts": ts,
             "file": file.display().to_string(),
             "line": request.line,
         });

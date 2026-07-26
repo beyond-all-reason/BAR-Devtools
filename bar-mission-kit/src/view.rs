@@ -467,7 +467,11 @@ fn step_row(step: &Step, ctx: &Ctx) -> Element {
         div { class: "me-step",
             span { class: "me-step-verb me-verb-{badge}", "{verb}" }
             span { class: "me-step-body",
-                {comma_list(step.args.iter().map(|a| arg_view(a, ctx)).collect())}
+                if let Some(phrase) = step_phrase_for(&step.verb).filter(|_| ctx.style == Style::Ui) {
+                    {step_phrase_view(phrase, &step.args, ctx)}
+                } else {
+                    {comma_list(step.args.iter().map(|a| arg_view(a, ctx)).collect())}
+                }
             }
             {step_live(step, ctx)}
             span { class: "me-step-tools",
@@ -500,6 +504,20 @@ fn step_row(step: &Step, ctx: &Ctx) -> Element {
 
 /// Sentence templates: schema'd verb shapes read as English; {semantic} slots
 /// bind to the annotated leaves underneath.
+/// Sentence templates for a whole chain STEP, when the step's arguments only
+/// make sense together (`Spawn(UnitDef("corlab"), "gaia")` reads as one
+/// clause, not as two comma-separated values). Slots resolve across every
+/// argument of the step.
+fn step_phrase_for(verb: &str) -> Option<&'static str> {
+    match verb {
+        "Spawn" => Some("spawn {unit_def_name} for {team_role}"),
+        "At" => Some("at {fx}, {fz}"),
+        "Named" => Some("named {unit_name}"),
+        "Grouped" => Some("in group {unit_group}"),
+        _ => None,
+    }
+}
+
 fn phrase_for(key: &str) -> Option<&'static str> {
     match key {
         "Team.Player.Has" => Some("Player has {count} {unit_def_name}"),
@@ -640,11 +658,13 @@ fn probe_for(phrase_key: &str, value: &Value) -> Option<LiveProbe> {
     }
 }
 
-fn phrase_view(phrase: &'static str, value: &Value, ctx: &Ctx) -> Element {
-    enum Seg<'p> {
-        Text(&'p str),
-        Slot(&'p str),
-    }
+enum Seg<'p> {
+    Text(&'p str),
+    Slot(&'p str),
+}
+
+/// Split a phrase into literal text and {semantic} slots.
+fn phrase_segments(phrase: &str) -> Vec<Seg<'_>> {
     let mut segs = Vec::new();
     let mut rest = phrase;
     while let Some(open) = rest.find('{') {
@@ -665,11 +685,35 @@ fn phrase_view(phrase: &'static str, value: &Value, ctx: &Ctx) -> Element {
     if !rest.is_empty() {
         segs.push(Seg::Text(rest));
     }
+    segs
+}
+
+fn phrase_view(phrase: &'static str, value: &Value, ctx: &Ctx) -> Element {
+    let segs = phrase_segments(phrase);
     rsx! {
         for seg in segs.into_iter() {
             match seg {
                 Seg::Text(text) => rsx! { "{text}" },
                 Seg::Slot(semantic) => slot_view(value, semantic, ctx),
+            }
+        }
+    }
+}
+
+/// Render a step-level phrase: slots resolve against the step's whole
+/// argument list, so a slot may come from any argument.
+fn step_phrase_view(phrase: &'static str, args: &[Value], ctx: &Ctx) -> Element {
+    let segs = phrase_segments(phrase);
+    rsx! {
+        for seg in segs.into_iter() {
+            match seg {
+                Seg::Text(text) => rsx! { "{text}" },
+                Seg::Slot(semantic) => {
+                    match args.iter().find(|a| find_semantic_leaf(a, semantic).is_some()) {
+                        Some(arg) => slot_view(arg, semantic, ctx),
+                        None => rsx! { span { class: "me-lit", "?" } },
+                    }
+                }
             }
         }
     }

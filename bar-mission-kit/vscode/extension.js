@@ -93,9 +93,12 @@ async function vocabulary(server) {
 
 // Window routing: serve publishes a sequenced open target; every window's
 // extension polls it, but only the window whose workspace contains the file
-// acts. First sighting is recorded, not acted on — a freshly opened window
-// must not jump to a stale target.
+// acts. A target older than this extension host is stale (leftover from a
+// previous session) and is recorded without acting; anything stamped after
+// we started is a live request, so the first click after a reload still
+// opens — seq alone cannot tell these apart, since it resets with serve.
 let lastOpenSeq = null;
+const startedAt = Date.now();
 
 const fs = require("fs");
 const path = require("path");
@@ -154,9 +157,9 @@ async function pollOpenTarget(server) {
 	if (typeof target.seq !== "number") return;
 	if (lastOpenSeq === null) {
 		lastOpenSeq = target.seq;
-		return;
+		if (!(typeof target.ts === "number" && target.ts > startedAt)) return;
 	}
-	if (target.seq === lastOpenSeq) return;
+	if (target.seq === lastOpenSeq && !(typeof target.ts === "number" && target.ts > startedAt)) return;
 	lastOpenSeq = target.seq;
 	const routed = routeIntoWorkspace(target.file);
 	if (!routed) return; // another window's project
