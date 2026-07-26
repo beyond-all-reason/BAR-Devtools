@@ -76,6 +76,7 @@ fn handle(mut stream: TcpStream, editor_dir: PathBuf) -> std::io::Result<()> {
             include_bytes!("../web/terminal.html"),
         ),
         ("GET", "/view") => respond_file(&mut stream, editor_dir.join("mission_view.json")),
+        ("GET", "/ast") => respond_file(&mut stream, editor_dir.join("mission_ast.json")),
         ("GET", "/status") => respond_file(&mut stream, editor_dir.join("status.json")),
         ("GET", "/state") => respond_file(&mut stream, editor_dir.join("state.json")),
         ("GET", "/open_request") => respond_file(&mut stream, editor_dir.join("open_target.json")),

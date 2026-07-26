@@ -31,8 +31,13 @@ function activate(context) {
 		const server = serverUrl();
 		pollDiagnostics(server);
 		pollOpenTarget(server);
+		paintEdges(server);
 	}, 1500);
 	context.subscriptions.push({ dispose: () => clearInterval(timer) });
+	context.subscriptions.push(
+		vscode.window.onDidChangeActiveTextEditor(() => paintEdges(serverUrl()))
+	);
+	context.subscriptions.push(edgeDecoration);
 
 	// Trigger files are DSL documents, not Lua project members: their
 	// completion comes from serve's vocabulary (surface + objectives +
@@ -160,6 +165,82 @@ async function pollOpenTarget(server) {
 		preview: false,
 		selection: new vscode.Range(row, 0, row, 0),
 	});
+}
+
+// The surface's edge, painted from the published AST: everything the
+// recognizer classified as opaque is OUTSIDE the mission subset — it runs as
+// plain Lua and no mission tooling sees it. emmylua keeps its highlighting;
+// this overlay only marks the boundary. Spans are byte offsets into the
+// exact bytes the AST was built from, so painting is gated on the content
+// hash — a dirty or stale buffer clears instead of lying.
+const edgeDecoration = vscode.window.createTextEditorDecorationType({
+	backgroundColor: "rgba(224, 108, 117, 0.07)",
+	textDecoration: "underline dashed rgba(224, 108, 117, 0.55) 1px",
+});
+
+function fnv1a(text) {
+	const bytes = Buffer.from(text, "utf8");
+	let hash = 0xcbf29ce484222325n;
+	for (const b of bytes) {
+		hash ^= BigInt(b);
+		hash = (hash * 0x100000001b3n) & 0xffffffffffffffffn;
+	}
+	return hash.toString(16).padStart(16, "0");
+}
+
+// Byte offset -> UTF-16 character offset (identity for ASCII files).
+function byteToCharOffsets(text) {
+	const byteLength = Buffer.byteLength(text, "utf8");
+	if (byteLength === text.length) return null; // ASCII: offsets coincide
+	const map = new Array(byteLength + 1);
+	let byte = 0;
+	for (let i = 0; i < text.length; i++) {
+		const width = Buffer.byteLength(text[i], "utf8");
+		for (let k = 0; k < width; k++) map[byte + k] = i;
+		byte += width;
+	}
+	map[byte] = text.length;
+	return map;
+}
+
+let edgeCache = { generation: null, docVersion: null, uri: null };
+
+async function paintEdges(server) {
+	const editor = vscode.window.activeTextEditor;
+	if (!editor) return;
+	const doc = editor.document;
+	if (doc.languageId !== "lua" || !/\/modules\/missions\//.test(doc.uri.fsPath)) return;
+
+	let ast;
+	try {
+		const response = await fetch(server + "/ast");
+		if (!response.ok) return;
+		ast = await response.json();
+	} catch {
+		return;
+	}
+	if (
+		edgeCache.generation === ast.generation &&
+		edgeCache.docVersion === doc.version &&
+		edgeCache.uri === doc.uri.toString()
+	) {
+		return;
+	}
+	edgeCache = { generation: ast.generation, docVersion: doc.version, uri: doc.uri.toString() };
+
+	const file = (ast.files || []).find((f) => doc.uri.fsPath.endsWith("/" + f.path));
+	const text = doc.getText();
+	if (!file || doc.isDirty || fnv1a(text) !== file.hash) {
+		editor.setDecorations(edgeDecoration, []);
+		return;
+	}
+	const map = byteToCharOffsets(text);
+	const at = (byte) => doc.positionAt(map ? map[Math.min(byte, map.length - 1)] : byte);
+	const decorations = (file.opaque || []).map((o) => ({
+		range: new vscode.Range(at(o.span[0]), at(o.span[1])),
+		hoverMessage: `outside the mission surface: ${o.reason} — this runs as plain Lua; no mission tooling sees it`,
+	}));
+	editor.setDecorations(edgeDecoration, decorations);
 }
 
 function frame(server) {
