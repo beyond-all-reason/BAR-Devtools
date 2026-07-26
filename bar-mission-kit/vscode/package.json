@@ -1,8 +1,8 @@
 {
   "name": "bar-mission-editor",
-  "displayName": "BAR: Mission Editor",
+  "displayName": "BAR Runtime",
   "description": "Mission and module editors for BAR, rendered by bar-mission-kit serve; the .lua files are the source of truth",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "publisher": "beyond-all-reason",
   "license": "GPL-2.0-or-later",
   "engines": {
@@ -20,7 +20,7 @@
       "activitybar": [
         {
           "id": "barMission",
-          "title": "BAR",
+          "title": "BAR Runtime",
           "icon": "media/icon.svg"
         }
       ]
@@ -35,7 +35,7 @@
         {
           "type": "webview",
           "id": "barMissionEditor.modules",
-          "name": "Modules"
+          "name": "Reference"
         }
       ]
     },
@@ -46,11 +46,11 @@
       },
       {
         "command": "barMissionEditor.openModules",
-        "title": "BAR: Open Modules"
+        "title": "BAR: Open Reference"
       }
     ],
     "configuration": {
-      "title": "BAR: Mission Editor",
+      "title": "BAR Runtime",
       "properties": {
         "barMissionEditor.serverUrl": {
           "type": "string",

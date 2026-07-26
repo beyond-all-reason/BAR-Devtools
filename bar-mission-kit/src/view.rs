@@ -234,7 +234,7 @@ pub fn render(ast: &MissionAst, domains: &Domains, scope: &Scope) -> ViewArtifac
         ),
         section(
             "modules",
-            "Vocabulary",
+            "Reference",
             &format!("from {} module{}", surface.modules.len(), plural(surface.modules.len())),
             true,
             &modules_body(&surface.modules),
@@ -346,7 +346,7 @@ fn summary(triggers: usize, spawns: usize, objectives: usize, named: usize, modu
         tile("me-series-2", "Spawns", spawns, "units"),
         tile("", "Objectives", objectives, "nouns"),
         tile("", "Named units", named, "nouns"),
-        tile("", "Modules", modules, "modules"),
+        tile("", "Reference", modules, "modules"),
     )
 }
 
