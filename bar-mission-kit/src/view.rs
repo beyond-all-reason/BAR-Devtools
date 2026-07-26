@@ -234,8 +234,8 @@ pub fn render(ast: &MissionAst, domains: &Domains, scope: &Scope) -> ViewArtifac
         ),
         section(
             "modules",
-            "Modules",
-            &format!("{} publishing a DSL surface", surface.modules.len()),
+            "Vocabulary",
+            &format!("from {} module{}", surface.modules.len(), plural(surface.modules.len())),
             true,
             &modules_body(&surface.modules),
         ),
