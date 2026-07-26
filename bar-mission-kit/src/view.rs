@@ -298,6 +298,22 @@ fn nouns_body(
         .filter(|p| p.kind == "unit_count")
         .cloned()
         .collect();
+    // Roster-named units, one row each; prefer the dead-latch chip when a
+    // unit has both destroyed and spotted probes.
+    let named: Vec<LiveProbe> = {
+        let live = live.borrow();
+        let mut seen: Vec<String> = Vec::new();
+        let mut out: Vec<LiveProbe> = Vec::new();
+        for probe in live.iter().filter(|p| p.kind == "unit_dead").chain(live.iter().filter(|p| p.kind == "unit_spotted")) {
+            if let Some(name) = &probe.unit_name {
+                if !seen.contains(name) {
+                    seen.push(name.clone());
+                    out.push(probe.clone());
+                }
+            }
+        }
+        out
+    };
     let unit_label = |name: &str| {
         domains
             .units
@@ -319,6 +335,15 @@ fn nouns_body(
             div { class: "me-noun",
                 span { class: "me-noun-name", {unit_label(probe.unit_def.as_deref().unwrap_or_default())} }
                 span { class: "me-live", "data-live": "{probe.key}", "–" }
+            }
+        }
+        if !named.is_empty() {
+            div { class: "me-noun-group", "NAMED UNITS" }
+            for probe in named.iter() {
+                div { class: "me-noun",
+                    span { class: "me-noun-name", {probe.unit_name.clone().unwrap_or_default()} }
+                    span { class: "me-live", "data-live": "{probe.key}", "–" }
+                }
             }
         }
     }
@@ -480,8 +505,27 @@ fn phrase_for(key: &str) -> Option<&'static str> {
         "Team.Player.Has" => Some("Player has {count} {unit_def_name}"),
         "Objective.IsComplete" => Some("objective {objective_name} is complete"),
         "Objective.Complete" => Some("complete objective {objective_name}"),
+        "MatchFlow.Started" => Some("the mission has started"),
         "MatchFlow.Victory" => Some("victory for the player team"),
         "MatchFlow.Defeat" => Some("defeat for the player team"),
+        "Unit.IsDestroyed" => Some("{unit_name} is destroyed"),
+        "Unit.IsSpotted" => Some("the player has spotted {unit_name}"),
+        "Units.Transfer" => Some("give group {unit_group} to the player"),
+        "Combat.Protect" => Some("protect {unit_name}"),
+        // {until} is not a literal slot: it renders the Until argument's own
+        // sentence (see slot_view).
+        "Combat.Protect.Until" => Some("protect {unit_name} until {until}"),
+        _ => None,
+    }
+}
+
+/// The condition expression inside a `.Until(...)` invocation, if any.
+fn until_arg(value: &Value) -> Option<&Value> {
+    match value {
+        Value::Verb { calls, .. } => calls
+            .iter()
+            .find(|c| c.name.as_deref() == Some("Until"))
+            .and_then(|c| c.args.first()),
         _ => None,
     }
 }
@@ -564,6 +608,34 @@ fn probe_for(phrase_key: &str, value: &Value) -> Option<LiveProbe> {
                 _ => None,
             }
         }
+        "Unit.IsDestroyed" | "Unit.IsSpotted" => {
+            let (prefix, kind) = if phrase_key == "Unit.IsDestroyed" {
+                ("unitdead", "unit_dead")
+            } else {
+                ("unitspotted", "unit_spotted")
+            };
+            match find_semantic_leaf(value, "unit_name") {
+                Some(Value::String { value: name, .. }) => Some(LiveProbe {
+                    key: format!("{prefix}:{name}"),
+                    kind: kind.into(),
+                    unit_def: None,
+                    need: None,
+                    objective: None,
+                    unit_name: Some(name.clone()),
+                }),
+                _ => None,
+            }
+        }
+        // The Protect row's chip tracks its lifetime bound: delegate to the
+        // Until condition's own probe.
+        "Combat.Protect.Until" => {
+            let arg = until_arg(value)?;
+            if let Value::Verb { path, calls, .. } = arg {
+                probe_for(&self::phrase_key(path, calls), arg)
+            } else {
+                None
+            }
+        }
         _ => None,
     }
 }
@@ -604,6 +676,13 @@ fn phrase_view(phrase: &'static str, value: &Value, ctx: &Ctx) -> Element {
 }
 
 fn slot_view(value: &Value, semantic: &str, ctx: &Ctx) -> Element {
+    // The nested-condition slot: render the Until argument as its own
+    // sentence (recursively phrased), not as a literal control.
+    if semantic == "until" {
+        if let Some(arg) = until_arg(value) {
+            return arg_view(arg, ctx);
+        }
+    }
     let leaf = find_semantic_leaf(value, semantic);
     if let Some(leaf) = leaf {
         if let Some(control) = control_for(leaf, ctx) {
@@ -1041,16 +1120,59 @@ When(Objective("build_pawns").IsComplete())
             entries.iter().map(|e| e.template.clone()).collect::<Vec<_>>().join("\n")
         };
         let conditions = templates(&view.vocabulary.conditions);
-        for verb in ["Team.Player.Has", ".IsComplete()"] {
+        for verb in ["MatchFlow.Started()", "Team.Player.Has", ".IsComplete()", ".IsDestroyed()", ".IsSpotted("] {
             assert!(conditions.contains(verb), "missing condition template {verb}");
         }
         let effects = templates(&view.vocabulary.effects);
-        for verb in [".Complete()", "MatchFlow.Victory(", "MatchFlow.Defeat("] {
+        for verb in [".Complete()", "Units.Transfer(", "Combat.Protect(", ".Until(", "MatchFlow.Victory(", "MatchFlow.Defeat("] {
             assert!(effects.contains(verb), "missing effect template {verb}");
         }
         // nouns the mission itself defines ride along for slot completion
         assert_eq!(view.vocabulary.objectives, vec!["build_pawns".to_string()]);
         assert_eq!(view.vocabulary.units.len(), 2);
+    }
+
+    const CM8: &str = r#"
+When(MatchFlow.Started())
+	.Do(Units.Transfer("outpost_auto", Team.Player))
+	.Do(Combat.Protect(Unit("outpost_command_hub"))
+		.Until(Objective("find_the_enclave").IsComplete()))
+
+When(Unit("armada_commander").IsDestroyed())
+	.Do(Objective("kill_the_commander").Complete())
+
+When(Objective("relieve_the_outpost").IsComplete())
+	.When(Unit("tenebrium_device").IsSpotted(Team.Player))
+	.Do(Objective("find_the_enclave").Complete())
+"#;
+
+    fn cm8_ast() -> MissionAst {
+        let rec = crate::recognizer::recognize_file("triggers/outpost.lua", CM8).unwrap();
+        MissionAst {
+            version: 1,
+            generation: 3,
+            files: vec![rec.file],
+            surface: serde_json::from_str(crate::MISSION_SURFACE).unwrap(),
+        }
+    }
+
+    #[test]
+    fn the_combat_vocabulary_renders_as_sentences() {
+        let view = render(&cm8_ast(), &domains(), &Scope::default());
+        assert_wellformed(&view.form);
+        assert!(view.form.contains("the mission has started"), "{}", view.form);
+        assert!(view.form.contains("give group "));
+        assert!(view.form.contains("protect "));
+        // the Until slot renders the nested condition's own sentence
+        assert!(view.form.contains(" until "));
+        assert!(view.form.contains("objective "));
+        assert!(view.form.contains(" is complete"));
+        assert!(view.form.contains(" is destroyed"));
+        assert!(view.form.contains("the player has spotted "));
+        // every slot resolved — no literal {semantic} leftovers
+        assert!(!view.form.contains("{unit_name}"), "{}", view.form);
+        assert!(!view.form.contains("{until}"), "{}", view.form);
+        assert!(!view.form.contains("{unit_group}"), "{}", view.form);
     }
 
     #[test]
@@ -1075,6 +1197,22 @@ When(Objective("build_pawns").IsComplete())
         // declared nouns ride the vocabulary for slot completion
         assert_eq!(view.vocabulary.unit_names, vec!["hub".to_string()]);
         assert_eq!(view.vocabulary.groups, vec!["outpost".to_string()]);
+    }
+
+    #[test]
+    fn named_unit_probes_are_emitted_and_listed() {
+        let view = render(&cm8_ast(), &domains(), &Scope::default());
+        let dead = view.live.iter().find(|p| p.kind == "unit_dead").unwrap();
+        assert_eq!(dead.key, "unitdead:armada_commander");
+        assert_eq!(dead.unit_name.as_deref(), Some("armada_commander"));
+        let spotted = view.live.iter().find(|p| p.kind == "unit_spotted").unwrap();
+        assert_eq!(spotted.key, "unitspotted:tenebrium_device");
+        // the Protect row's chip delegates to its Until condition
+        assert!(view.live.iter().any(|p| p.key == "obj:find_the_enclave"));
+        assert!(view.form.contains("data-live=\"obj:find_the_enclave\""));
+        // the noun explorer lists roster-named units
+        assert!(view.form.contains(">NAMED UNITS<"));
+        assert!(view.form.contains("armada_commander"));
     }
 
     #[test]

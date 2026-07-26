@@ -2,11 +2,17 @@
   "name": "missions",
   "comment": "Presentation overlay only: palette labels and templates. The GRAMMAR (statement heads, chain verbs, slot semantics, editor enums) is derived from the game's LuaCATS annotations at runtime (src/types.rs); collect_ast merges the derived enums into this overlay as 'enums'.",
   "conditions": [
+    { "label": "Mission started", "template": "MatchFlow.Started()" },
     { "label": "Player has units", "template": "Team.Player.Has(UnitDef(\"armpw\"), 3)" },
-    { "label": "Objective complete", "template": "Objective(\"OBJECTIVE\").IsComplete()" }
+    { "label": "Objective complete", "template": "Objective(\"OBJECTIVE\").IsComplete()" },
+    { "label": "Unit destroyed", "template": "Unit(\"UNIT_NAME\").IsDestroyed()" },
+    { "label": "Unit spotted", "template": "Unit(\"UNIT_NAME\").IsSpotted(Team.Player)" }
   ],
   "effects": [
     { "label": "Complete objective", "template": "Objective(\"OBJECTIVE\").Complete()" },
+    { "label": "Transfer group", "template": "Units.Transfer(\"GROUP\", Team.Player)" },
+    { "label": "Protect unit", "template": "Combat.Protect(Unit(\"UNIT_NAME\"))" },
+    { "label": "Protect unit until", "template": "Combat.Protect(Unit(\"UNIT_NAME\")).Until(Objective(\"OBJECTIVE\").IsComplete())" },
     { "label": "Victory", "template": "MatchFlow.Victory(Team.Player)" },
     { "label": "Defeat", "template": "MatchFlow.Defeat(Team.Player)" }
   ]
