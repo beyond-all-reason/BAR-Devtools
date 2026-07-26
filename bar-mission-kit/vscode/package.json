@@ -2,7 +2,7 @@
   "name": "bar-mission-editor",
   "displayName": "Beyond All Reason",
   "description": "Mission and module editors for BAR, rendered by bar-mission-kit serve; the .lua files are the source of truth",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "publisher": "beyond-all-reason",
   "license": "GPL-2.0-or-later",
   "engines": {
@@ -35,7 +35,8 @@
         {
           "type": "webview",
           "id": "barMissionEditor.modules",
-          "name": "Reference"
+          "name": "Reference",
+          "visibility": "collapsed"
         }
       ]
     },
