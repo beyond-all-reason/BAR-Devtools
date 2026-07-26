@@ -59,16 +59,19 @@
 	.me-dsl-line { white-space: nowrap; }
 	.me-dsl-line + .me-dsl-line { padding-left: 1.4em; }
 	.me-dsl-dot { color: #55677a; }
-	.me-dsl-btn { color: #7fa9d8; border-color: #2c405a; padding: 0 7px; font-size: 0.68em; }
+	.me-dsl-btn { color: #7fa9d8; border-color: #2c405a; }
 
 
 
 	.me-card { background: linear-gradient(#16202c, #101720); border: 1px solid #223040;
 		border-left: 3px solid #4f8ce0; border-radius: 8px; margin: 8px 0; padding: 10px 12px;
 		box-shadow: 0 3px 10px rgba(0,0,0,0.3); }
-	.me-card-head { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
-	.me-card-title { color: #4c5d70; font-size: 0.68em; margin-right: auto; }
-	.me-card-head .me-button { padding: 0 7px; font-size: 0.7em; }
+	.me-card-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px;
+		padding: 2px 0 3px; }
+	.me-card-title { color: #4c5d70; font-size: 0.68em; margin-right: auto;
+		padding: 1px 4px; border-radius: 4px; }
+	.me-card-title:hover { background: #16202c; color: #8fa3b8; }
+	.me-card-head .me-button { padding: 2px 9px; font-size: 0.7em; line-height: 1.5; }
 	/* Single-row step grammar: fixed badge column | sentence | status | tools.
 	   Sentences wrap inside their column; tools appear on hover. */
 	.me-step { display: flex; align-items: baseline; gap: 8px; margin: 3px 0; }

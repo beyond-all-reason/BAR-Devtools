@@ -598,7 +598,7 @@ fn trigger_card(trigger: &Trigger, ctx: &Ctx) -> Element {
                     button {
                         class: "me-button me-dsl-btn",
                         "data-dsl": "1",
-                        "dsl"
+                        "code"
                     }
                 }
                 if ctx.editable {
