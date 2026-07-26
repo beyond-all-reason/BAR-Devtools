@@ -11,6 +11,7 @@ mod http;
 mod model;
 mod recognizer;
 mod serve;
+mod types;
 mod view;
 
 use clap::{Parser, Subcommand};
@@ -67,17 +68,27 @@ fn collect_lua_files(paths: &[PathBuf]) -> Vec<PathBuf> {
     let mut files = Vec::new();
     for path in paths {
         if path.is_dir() {
-            // The loader's contract: a mission IS its triggers/ dir. Scanning
-            // wider (missions root mode) must not recognize lib/gadget code.
-            let pattern = format!("{}/**/triggers/*.lua", path.display());
-            for entry in glob::glob(&pattern).expect("valid glob").flatten() {
-                files.push(entry);
+            // The loader's contract: a mission is its triggers/ dir plus an
+            // optional units.lua roster. Scanning wider (missions root mode)
+            // must not recognize lib/gadget code.
+            for pattern in [
+                format!("{}/**/triggers/*.lua", path.display()),
+                format!("{}/**/units.lua", path.display()),
+            ] {
+                for entry in glob::glob(&pattern).expect("valid glob").flatten() {
+                    files.push(entry);
+                }
+            }
+            let roster = path.join("units.lua");
+            if roster.is_file() {
+                files.push(roster);
             }
         } else {
             files.push(path.clone());
         }
     }
     files.sort();
+    files.dedup();
     files
 }
 
@@ -94,7 +105,19 @@ pub(crate) const MISSION_SURFACE: &str = include_str!("../surfaces/missions.json
 
 pub fn collect_ast(paths: &[PathBuf], generation: u64) -> (model::MissionAst, Vec<model::Finding>) {
     let files = collect_lua_files(paths);
-    let surface = serde_json::from_str(MISSION_SURFACE).expect("valid surface overlay");
+    // The grammar's source of truth: the game's LuaCATS types, found near
+    // the mission files (falls back to the built-in snapshot).
+    let type_surface = types::TypeSurface::load_near(paths);
+    let mut surface: serde_json::Value =
+        serde_json::from_str(MISSION_SURFACE).expect("valid surface overlay");
+    if let Some(overlay) = surface.as_object_mut() {
+        // Derived editor enums ride the artifact so every terminal renders
+        // literal-union parameters as pickers.
+        overlay.insert(
+            "enums".into(),
+            serde_json::to_value(type_surface.enums()).expect("serializable enums"),
+        );
+    }
     let mut ast = model::MissionAst { version: 1, generation, files: Vec::new(), surface };
     let mut findings = Vec::new();
     for file in &files {
@@ -110,7 +133,7 @@ pub fn collect_ast(paths: &[PathBuf], generation: u64) -> (model::MissionAst, Ve
                 continue;
             }
         };
-        match recognizer::recognize_file(&rel, &source) {
+        match recognizer::recognize_file_with(&rel, &source, &type_surface) {
             Ok(recognized) => {
                 findings.extend(recognized.findings);
                 ast.files.push(recognized.file);
@@ -122,7 +145,43 @@ pub fn collect_ast(paths: &[PathBuf], generation: u64) -> (model::MissionAst, Ve
             }),
         }
     }
+    findings.extend(cross_check_names(&ast.files));
     (ast, findings)
+}
+
+/// Cross-file noun check: every Unit()/Units reference must name something
+/// units.lua declared. Only meaningful when a roster was walked — a partial
+/// (single-file) invocation stays quiet.
+fn cross_check_names(files: &[model::FileAst]) -> Vec<model::Finding> {
+    if !files.iter().any(|f| f.path.ends_with("units.lua")) {
+        return Vec::new();
+    }
+    let unit_defs: std::collections::HashSet<&str> =
+        files.iter().flat_map(|f| f.unit_defs.iter().map(String::as_str)).collect();
+    let group_defs: std::collections::HashSet<&str> =
+        files.iter().flat_map(|f| f.group_defs.iter().map(String::as_str)).collect();
+    let mut findings = Vec::new();
+    for file in files {
+        for r in &file.unit_refs {
+            if !unit_defs.contains(r.name.as_str()) {
+                findings.push(model::Finding {
+                    path: file.path.clone(),
+                    line: r.line,
+                    message: format!("Unit(\"{}\"): units.lua declares no such name", r.name),
+                });
+            }
+        }
+        for r in &file.group_refs {
+            if !group_defs.contains(r.name.as_str()) {
+                findings.push(model::Finding {
+                    path: file.path.clone(),
+                    line: r.line,
+                    message: format!("group \"{}\": units.lua declares no such group", r.name),
+                });
+            }
+        }
+    }
+    findings
 }
 
 fn main() -> ExitCode {
@@ -314,5 +373,79 @@ When(C()).Do(E())
         let src = "When(C()).Do(E()).Register()\n";
         let rec = crate::recognizer::recognize_file("triggers/r.lua", src).unwrap();
         assert!(rec.findings.iter().any(|f| f.message.contains("Register is gone")));
+    }
+
+    #[test]
+    fn an_undeclared_statement_verb_is_a_finding() {
+        let src = "Spwan(UnitDef(\"corlab\"), \"gaia\").At(0.1, 0.1)\n";
+        let rec = crate::recognizer::recognize_file("units.lua", src).unwrap();
+        assert!(rec.findings.iter().any(|f| f.message.contains("unknown statement verb 'Spwan'")
+            && f.message.contains("When")
+            && f.message.contains("Spawn")), "{:?}", rec.findings);
+        assert_eq!(rec.file.opaque.len(), 1);
+    }
+
+    #[test]
+    fn spawn_chains_are_recognized_from_the_types() {
+        let src = "Spawn(UnitDef(\"corlab\"), \"gaia\")\n\t.At(0.42, 0.42)\n\t.Named(\"hub\")\n\t.Grouped(\"outpost\")\n";
+        let rec = crate::recognizer::recognize_file("units.lua", src).unwrap();
+        assert!(rec.findings.is_empty(), "findings: {:?}", rec.findings);
+        let steps: Vec<&str> = rec.file.groups[0].triggers[0].steps.iter().map(|s| s.verb.as_str()).collect();
+        assert_eq!(steps, vec!["Spawn", "At", "Named", "Grouped"]);
+        // roster names are DECLARATIONS here, not references
+        assert_eq!(rec.file.unit_defs, vec!["hub".to_string()]);
+        assert_eq!(rec.file.group_defs, vec!["outpost".to_string()]);
+        assert!(rec.file.unit_refs.is_empty());
+        // the team role is stamped from the MissionTeamRole alias
+        match &rec.file.groups[0].triggers[0].steps[0].args[1] {
+            Value::String { semantic, .. } => assert_eq!(semantic.as_deref(), Some("team_role")),
+            other => panic!("expected team role string, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_spawn_without_at_is_a_finding_and_unknown_chain_verbs_name_the_chain() {
+        let src = "Spawn(UnitDef(\"corlab\"), \"gaia\").Armed(true)\n";
+        let rec = crate::recognizer::recognize_file("units.lua", src).unwrap();
+        assert!(rec.findings.iter().any(|f| f.message.contains("no At")), "{:?}", rec.findings);
+        assert!(rec.findings.iter().any(|f| f.message.contains("unknown chain verb 'Armed'")
+            && f.message.contains("At")), "{:?}", rec.findings);
+    }
+
+    #[test]
+    fn trigger_files_reference_roster_names_for_the_cross_check() {
+        let src = "When(Unit(\"hub\").IsDestroyed())\n\t.Do(Units.Transfer(\"outpost\", Team.Player))\n";
+        let rec = crate::recognizer::recognize_file("triggers/t.lua", src).unwrap();
+        let units: Vec<&str> = rec.file.unit_refs.iter().map(|r| r.name.as_str()).collect();
+        let groups: Vec<&str> = rec.file.group_refs.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(units, vec!["hub"]);
+        assert_eq!(groups, vec!["outpost"]);
+        assert!(rec.file.unit_defs.is_empty());
+    }
+
+    #[test]
+    fn the_mission_walk_cross_checks_names_against_the_roster() {
+        let dir = std::env::temp_dir().join(format!("bmk-crosscheck-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("triggers")).unwrap();
+        std::fs::write(
+            dir.join("units.lua"),
+            "Spawn(UnitDef(\"corlab\"), \"gaia\")\n\t.At(0.4, 0.4)\n\t.Named(\"hub\")\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("triggers/t.lua"),
+            "When(Unit(\"hubb\").IsDestroyed())\n\t.Do(Objective(\"x\").Complete())\n",
+        )
+        .unwrap();
+        let (ast, findings) = crate::collect_ast(&[dir.clone()], 1);
+        assert!(findings.iter().any(|f| f.message.contains("no such name") && f.message.contains("hubb")),
+            "{:?}", findings.iter().map(|f| &f.message).collect::<Vec<_>>());
+        // derived enums ride the surface overlay for the terminals
+        assert_eq!(
+            ast.surface["enums"]["team_role"][0].as_str(),
+            Some("player")
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

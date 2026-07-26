@@ -29,6 +29,14 @@ pub struct FileAst {
     pub hash: String,
     /// Every Objective("name") seen in this file — dropdown fodder.
     pub objectives: Vec<String>,
+    /// Unit/group names this file DECLARES (units.lua Named/Grouped) — the
+    /// definition sites Unit()/Units.* references are cross-checked against.
+    pub unit_defs: Vec<String>,
+    pub group_defs: Vec<String>,
+    /// Unit/group references this file makes (trigger files), with lines for
+    /// cross-check findings.
+    pub unit_refs: Vec<NameRef>,
+    pub group_refs: Vec<NameRef>,
     /// Byte offset where a whole new trigger chain can be appended (EOF).
     pub insert_trigger_at: usize,
     /// Sections in file order. Chains before any `---@group` land in an
@@ -149,6 +157,13 @@ pub struct Field {
 pub struct Opaque {
     pub span: Span,
     pub reason: String,
+}
+
+/// One named-noun reference (a Unit/Units argument) with its source line.
+#[derive(Serialize, Debug, Clone)]
+pub struct NameRef {
+    pub name: String,
+    pub line: usize,
 }
 
 /// A validator finding, printed `path:line: message` in check mode.

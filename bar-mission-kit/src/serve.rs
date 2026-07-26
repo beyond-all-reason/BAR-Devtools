@@ -391,7 +391,9 @@ pub fn apply_edit(missions_dir: &Path, intent: &EditIntent) -> Result<(), String
     edited.push_str(&intent.new_text);
     edited.push_str(&source[intent.end..]);
 
-    let recognized = recognizer::recognize_file(&intent.file, &edited)
+    // Gate against the same type-derived grammar the view was built from.
+    let surface = crate::types::TypeSurface::load_near(&[missions_dir.to_path_buf()]);
+    let recognized = recognizer::recognize_file_with(&intent.file, &edited, &surface)
         .map_err(|e| format!("edit rejected — result does not parse: {e}"))?;
     if !recognized.findings.is_empty() {
         let msgs = recognized
@@ -421,8 +423,22 @@ fn file_stamp(path: &Path) -> String {
 /// Cheap change detection: every .lua path + mtime + size, concatenated.
 fn fingerprint_dir(dir: &Path) -> String {
     let mut entries: Vec<String> = Vec::new();
-    let pattern = format!("{}/**/triggers/*.lua", dir.display());
-    for path in glob::glob(&pattern).into_iter().flatten().flatten() {
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for pattern in [
+        format!("{}/**/triggers/*.lua", dir.display()),
+        format!("{}/**/units.lua", dir.display()),
+    ] {
+        for path in glob::glob(&pattern).into_iter().flatten().flatten() {
+            paths.push(path);
+        }
+    }
+    let roster = dir.join("units.lua");
+    if roster.is_file() {
+        paths.push(roster);
+    }
+    paths.sort();
+    paths.dedup();
+    for path in paths {
         let meta = std::fs::metadata(&path).ok();
         let mtime = meta
             .as_ref()

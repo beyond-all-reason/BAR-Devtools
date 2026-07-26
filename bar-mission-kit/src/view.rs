@@ -60,6 +60,10 @@ pub struct Vocabulary {
     pub effects: Vec<SurfaceEntry>,
     pub objectives: Vec<String>,
     pub units: Vec<DomainOption>,
+    /// Roster-declared unit and group names (units.lua) — the legal values
+    /// for Unit()/Units.* slots.
+    pub unit_names: Vec<String>,
+    pub groups: Vec<String>,
 }
 
 /// One thing the game should sample. `key` matches a data-live attribute in
@@ -74,6 +78,9 @@ pub struct LiveProbe {
     pub need: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub objective: Option<String>,
+    /// Roster name for the named-unit kinds (unit_dead, unit_spotted).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unit_name: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -112,6 +119,10 @@ struct Surface {
     conditions: Vec<SurfaceEntry>,
     #[serde(default)]
     effects: Vec<SurfaceEntry>,
+    /// semantic -> options, derived from literal-union type aliases
+    /// (collect_ast merges them into the surface overlay).
+    #[serde(default)]
+    enums: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -144,13 +155,12 @@ pub fn render(ast: &MissionAst, domains: &Domains, scope: &Scope) -> ViewArtifac
     let nouns = xmlize(&dioxus_ssr::render_element(nouns_body(ast, domains, &live)));
 
     let files = ast.files.len();
-    let objectives: Vec<String> = ast
-        .files
-        .iter()
-        .flat_map(|f| f.objectives.iter().cloned())
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect();
+    let sorted_set = |iter: &mut dyn Iterator<Item = String>| -> Vec<String> {
+        iter.collect::<std::collections::BTreeSet<_>>().into_iter().collect()
+    };
+    let objectives = sorted_set(&mut ast.files.iter().flat_map(|f| f.objectives.iter().cloned()));
+    let unit_names = sorted_set(&mut ast.files.iter().flat_map(|f| f.unit_defs.iter().cloned()));
+    let groups = sorted_set(&mut ast.files.iter().flat_map(|f| f.group_defs.iter().cloned()));
     let objective_count = objectives.len();
     let unit_count = live.borrow().iter().filter(|p| p.kind == "unit_count").count();
     let vocabulary = Vocabulary {
@@ -158,6 +168,8 @@ pub fn render(ast: &MissionAst, domains: &Domains, scope: &Scope) -> ViewArtifac
         effects: surface.effects.clone(),
         objectives,
         units: domains.units.clone(),
+        unit_names,
+        groups,
     };
     let form = [
         section(
@@ -275,6 +287,7 @@ fn nouns_body(
                     unit_def: None,
                     need: None,
                     objective: Some(objective.clone()),
+                    unit_name: None,
                 });
             }
         }
@@ -345,7 +358,9 @@ fn file_view(file: &FileAst, ctx: &Ctx) -> Element {
                 {trigger_card(trigger, ctx)}
             }
         }
-        if ctx.editable && !ctx.surface.conditions.is_empty() {
+        // The add-statement palette is trigger vocabulary; the roster file's
+        // spawn chains don't take it.
+        if ctx.editable && !ctx.surface.conditions.is_empty() && !file.path.ends_with("units.lua") {
             div { class: "me-add-row me-add-statement-row",
                 button {
                     class: "me-button me-add-btn",
@@ -391,7 +406,10 @@ fn trigger_card(trigger: &Trigger, ctx: &Ctx) -> Element {
             for step in trigger.steps.iter().filter(|s| s.verb != "Register") {
                 {step_row(step, ctx)}
             }
-            if ctx.editable && !(ctx.surface.conditions.is_empty() && ctx.surface.effects.is_empty()) {
+            if ctx.editable
+                && !(ctx.surface.conditions.is_empty() && ctx.surface.effects.is_empty())
+                && trigger.steps.first().map(|s| s.verb == "When").unwrap_or(false)
+            {
                 div { class: "me-add-row",
                     button {
                         class: "me-button me-add-btn",
@@ -527,6 +545,7 @@ fn probe_for(phrase_key: &str, value: &Value) -> Option<LiveProbe> {
                         unit_def: Some(unit.clone()),
                         need: Some(*need),
                         objective: None,
+                        unit_name: None,
                     })
                 }
                 _ => None,
@@ -540,6 +559,7 @@ fn probe_for(phrase_key: &str, value: &Value) -> Option<LiveProbe> {
                     unit_def: None,
                     need: None,
                     objective: Some(objective.clone()),
+                    unit_name: None,
                 }),
                 _ => None,
             }
@@ -663,6 +683,11 @@ fn control_for(value: &Value, ctx: &Ctx) -> Option<Element> {
     }
     match value {
         Value::String { value, span, semantic } => match semantic.as_deref() {
+            // A literal-union parameter type renders as a picker of exactly
+            // its literals — the enum came from the LuaCATS alias.
+            Some(semantic) if ctx.surface.enums.contains_key(semantic) => {
+                Some(enum_select(value, &ctx.surface.enums[semantic], *span, ctx))
+            }
             Some("unit_def_name") => Some(unit_select(value, *span, ctx)),
             Some("objective_name") => Some(text_input(value, *span, ctx, "me-input me-input-obj")),
             _ if !value.contains('"') => Some(text_input(value, *span, ctx, "me-input")),
@@ -670,6 +695,30 @@ fn control_for(value: &Value, ctx: &Ctx) -> Option<Element> {
         },
         Value::Number { value, span, .. } => Some(number_input(*value, *span, ctx)),
         _ => None,
+    }
+}
+
+fn enum_select(current: &str, options: &[String], span: Span, ctx: &Ctx) -> Element {
+    let known = options.iter().any(|o| o == current);
+    rsx! {
+        select {
+            class: "me-select me-select-enum",
+            "data-file": "{ctx.file}",
+            "data-start": "{span.0}",
+            "data-end": "{span.1}",
+            "data-hash": "{ctx.hash}",
+            "data-quote": "1",
+            if !known {
+                option { value: "{current}", "selected": "true", "{current}" }
+            }
+            for opt in options.iter() {
+                option {
+                    value: "{opt}",
+                    "selected": if opt == current { "true" },
+                    "{opt}"
+                }
+            }
+        }
     }
 }
 
@@ -987,10 +1036,45 @@ When(Objective("build_pawns").IsComplete())
     #[test]
     fn the_vocabulary_rides_the_artifact_for_editor_completion() {
         let view = render(&ast(), &domains(), &Scope::default());
-        assert_eq!(view.vocabulary.conditions.len(), 2);
-        assert_eq!(view.vocabulary.effects.len(), 3);
+        // completion offers every verb family the sandbox injects
+        let templates = |entries: &[SurfaceEntry]| {
+            entries.iter().map(|e| e.template.clone()).collect::<Vec<_>>().join("\n")
+        };
+        let conditions = templates(&view.vocabulary.conditions);
+        for verb in ["Team.Player.Has", ".IsComplete()"] {
+            assert!(conditions.contains(verb), "missing condition template {verb}");
+        }
+        let effects = templates(&view.vocabulary.effects);
+        for verb in [".Complete()", "MatchFlow.Victory(", "MatchFlow.Defeat("] {
+            assert!(effects.contains(verb), "missing effect template {verb}");
+        }
+        // nouns the mission itself defines ride along for slot completion
         assert_eq!(view.vocabulary.objectives, vec!["build_pawns".to_string()]);
         assert_eq!(view.vocabulary.units.len(), 2);
+    }
+
+    #[test]
+    fn the_roster_renders_with_typed_pickers_and_no_trigger_palette() {
+        let roster = "Spawn(UnitDef(\"corlab\"), \"gaia\")\n\t.At(0.42, 0.42)\n\t.Named(\"hub\")\n\t.Grouped(\"outpost\")\n";
+        let rec = crate::recognizer::recognize_file("units.lua", roster).unwrap();
+        let mut surface: serde_json::Value = serde_json::from_str(crate::MISSION_SURFACE).unwrap();
+        surface["enums"] =
+            serde_json::to_value(crate::types::TypeSurface::builtin().enums()).unwrap();
+        let ast = MissionAst { version: 1, generation: 1, files: vec![rec.file], surface };
+        let view = render(&ast, &domains(), &Scope::default());
+        assert_wellformed(&view.form);
+        // the team role renders as a picker of exactly the alias's literals
+        assert!(view.form.contains("me-select-enum"), "{}", view.form);
+        for role in ["player", "enemy", "gaia"] {
+            assert!(view.form.contains(&format!("value=\"{role}\"")));
+        }
+        // the def slot is the usual unit dropdown
+        assert!(view.form.contains("value=\"corlab\" selected=\"true\""));
+        // trigger vocabulary stays out of the roster file
+        assert!(!view.form.contains("data-add"), "{}", view.form);
+        // declared nouns ride the vocabulary for slot completion
+        assert_eq!(view.vocabulary.unit_names, vec!["hub".to_string()]);
+        assert_eq!(view.vocabulary.groups, vec!["outpost".to_string()]);
     }
 
     #[test]
