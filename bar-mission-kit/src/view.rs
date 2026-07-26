@@ -150,11 +150,11 @@ struct Ctx<'a> {
 pub fn render(ast: &MissionAst, domains: &Domains, scope: &Scope) -> ViewArtifact {
     let surface: Surface = serde_json::from_value(ast.surface.clone()).unwrap_or_default();
     let live = std::cell::RefCell::new(Vec::new());
-    let mission = xmlize(&dioxus_ssr::render_element(body(ast, &surface, domains, true, &live)));
-    let billboard = xmlize(&dioxus_ssr::render_element(body(ast, &surface, domains, false, &live)));
+    let triggers = xmlize(&dioxus_ssr::render_element(body(ast, &surface, domains, true, &live, Some(false))));
+    let units = xmlize(&dioxus_ssr::render_element(body(ast, &surface, domains, true, &live, Some(true))));
+    let billboard = xmlize(&dioxus_ssr::render_element(body(ast, &surface, domains, false, &live, None)));
     let nouns = xmlize(&dioxus_ssr::render_element(nouns_body(ast, domains, &live)));
 
-    let files = ast.files.len();
     let sorted_set = |iter: &mut dyn Iterator<Item = String>| -> Vec<String> {
         iter.collect::<std::collections::BTreeSet<_>>().into_iter().collect()
     };
@@ -171,13 +171,28 @@ pub fn render(ast: &MissionAst, domains: &Domains, scope: &Scope) -> ViewArtifac
         unit_names,
         groups,
     };
+    let trigger_files = ast.files.iter().filter(|f| !is_roster(&f.path)).count();
+    let spawn_count: usize = ast
+        .files
+        .iter()
+        .filter(|f| is_roster(&f.path))
+        .flat_map(|f| f.groups.iter())
+        .map(|g| g.triggers.len())
+        .sum();
     let form = [
         section(
             "mission",
-            "Mission Editor",
-            &format!("{files} file{}", plural(files)),
+            "Triggers",
+            &format!("{trigger_files} file{}", plural(trigger_files)),
             false,
-            &format!("{}{mission}", crumb(scope)),
+            &format!("{}{triggers}", crumb(scope)),
+        ),
+        section(
+            "units",
+            "Units",
+            &format!("{spawn_count} spawn{}", plural(spawn_count)),
+            false,
+            &units,
         ),
         section(
             "nouns",
@@ -348,16 +363,24 @@ fn nouns_body(
     }
 }
 
+/// A mission's files split by what they author: roster (units.lua) or
+/// triggers. They get their own sections — a spawn list and a rule list are
+/// different work, and mixing them buries both.
+fn is_roster(path: &str) -> bool {
+    path.ends_with("units.lua")
+}
+
 fn body<'a>(
     ast: &'a MissionAst,
     surface: &'a Surface,
     domains: &'a Domains,
     editable: bool,
     live: &'a std::cell::RefCell<Vec<LiveProbe>>,
+    roster: Option<bool>,
 ) -> Element {
     let style = if editable { Style::Ui } else { Style::Dsl };
     rsx! {
-        for file in ast.files.iter() {
+        for file in ast.files.iter().filter(|f| roster.is_none_or(|r| is_roster(&f.path) == r)) {
             {file_view(file, &Ctx {
                 file: &file.path,
                 hash: &file.hash,
@@ -509,11 +532,13 @@ fn step_row(step: &Step, ctx: &Ctx) -> Element {
 /// clause, not as two comma-separated values). Slots resolve across every
 /// argument of the step.
 fn step_phrase_for(verb: &str) -> Option<&'static str> {
+    // The verb pill already says SPAWN/AT/NAMED/GROUPED — the phrase carries
+    // only what the pill cannot.
     match verb {
-        "Spawn" => Some("spawn {unit_def_name} for {team_role}"),
-        "At" => Some("at {fx}, {fz}"),
-        "Named" => Some("named {unit_name}"),
-        "Grouped" => Some("in group {unit_group}"),
+        "Spawn" => Some("{unit_def_name} for {team_role}"),
+        "At" => Some("{fx}, {fz}"),
+        "Named" => Some("{unit_name}"),
+        "Grouped" => Some("{unit_group}"),
         _ => None,
     }
 }
