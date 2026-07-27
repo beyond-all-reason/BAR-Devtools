@@ -312,6 +312,3 @@ mission-dev *args: require-bar
     trap 'kill "$serve_pid" 2>/dev/null || true' EXIT
     just bar::launch {{args}}
 
-# Inspect or restack the mission api / multiplayer stack (status|rebase|test|push|all)
-mission-restack *args: require-bar
-    @bash "{{DEVTOOLS_DIR}}/scripts/mission-stack/restack.sh" {{args}}
