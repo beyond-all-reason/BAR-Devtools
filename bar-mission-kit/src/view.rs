@@ -370,21 +370,21 @@ fn modules_graph(modules: &[ModuleInfo]) -> String {
         .collect();
     rows.sort_by(|a, b| (a.0, &a.1.name).cmp(&(b.0, &b.1.name)));
 
-    // Two readings of the same set: a flat roll-call, and the dependency tree
-    // indented by depth. Flat is the default because most of the time the
-    // question is "what is here", not "what rests on what".
+    // Three readings of the same set. Flat is the default because most of the
+    // time the question is "what is here"; the diagram answers "what rests on
+    // what"; the mermaid source is for pasting where mermaid renders (a PR
+    // body, a design doc). The diagram is drawn here rather than by a client
+    // library so it needs no network and works in a sandboxed webview.
     let mut out = String::from(
         "<div class=\"me-graph-modes\">\
          <button class=\"me-graph-mode me-graph-mode-on\" data-graph-mode=\"flat\">Flat</button>\
-         <button class=\"me-graph-mode\" data-graph-mode=\"tree\">Graph</button></div>",
+         <button class=\"me-graph-mode\" data-graph-mode=\"graph\">Graph</button>\
+         <button class=\"me-graph-mode\" data-graph-mode=\"mermaid\">Mermaid</button></div>",
     );
-    for pass in ["flat", "tree"] {
-        out.push_str(&format!(
-            "<div class=\"me-graph me-graph-{pass}{}\" data-graph-pass=\"{pass}\">",
-            if pass == "tree" { " collapsed" } else { "" }
-        ));
-        let indented = pass == "tree";
-    for &(d, m) in rows.iter() {
+
+    // --- flat: the roll-call ------------------------------------------------
+    out.push_str("<div class=\"me-graph me-graph-flat\" data-graph-pass=\"flat\">");
+    for &(_, m) in rows.iter() {
         let deps = requires.get(m.name.as_str()).cloned().unwrap_or_default();
         let arrows = if deps.is_empty() {
             String::new()
@@ -396,16 +396,77 @@ fn modules_graph(modules: &[ModuleInfo]) -> String {
             format!("<span class=\"me-graph-arrow\">needs</span>{chips}")
         };
         out.push_str(&format!(
-            "<div class=\"me-graph-row\" style=\"margin-left: {}px;\">\
+            "<div class=\"me-graph-row\">\
              <button class=\"me-chip me-chip-stmt me-graph-node\" data-select-module=\"{}\">{}</button>\
              {arrows}</div>",
-            if indented { d * 18 } else { 0 },
-            m.name,
-            m.name
+            m.name, m.name
         ));
     }
-        out.push_str("</div>");
+    out.push_str("</div>");
+
+    // --- graph: nodes and edges, laid out by depth ---------------------------
+    const COL: usize = 168;
+    const ROW: usize = 44;
+    const W: usize = 132;
+    const H: usize = 26;
+    let mut slot: HashMap<&str, (usize, usize)> = HashMap::new();
+    let mut per_depth: HashMap<usize, usize> = HashMap::new();
+    for &(d, m) in rows.iter() {
+        let i = per_depth.entry(d).or_insert(0);
+        slot.insert(m.name.as_str(), (d, *i));
+        *i += 1;
     }
+    let width = (rows.iter().map(|(d, _)| d + 1).max().unwrap_or(1)) * COL;
+    let height = per_depth.values().max().copied().unwrap_or(1) * ROW + 12;
+    let xy = |d: usize, i: usize| (d * COL + 8, i * ROW + 8);
+
+    out.push_str(&format!(
+        "<div class=\"me-graph me-graph-graph collapsed\" data-graph-pass=\"graph\">\
+         <svg class=\"me-svg\" viewBox=\"0 0 {width} {height}\" width=\"100%\" height=\"{height}\">"
+    ));
+    // Edges first, so nodes paint over them.
+    for &(_, m) in rows.iter() {
+        let (d, i) = slot[m.name.as_str()];
+        let (x, y) = xy(d, i);
+        for dep in requires.get(m.name.as_str()).cloned().unwrap_or_default() {
+            if let Some(&(dd, di)) = slot.get(dep) {
+                let (dx, dy) = xy(dd, di);
+                out.push_str(&format!(
+                    "<line class=\"me-svg-edge\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\"/>",
+                    x, y + H / 2, dx + W, dy + H / 2
+                ));
+            }
+        }
+    }
+    for &(_, m) in rows.iter() {
+        let (d, i) = slot[m.name.as_str()];
+        let (x, y) = xy(d, i);
+        out.push_str(&format!(
+            "<g class=\"me-svg-node\" data-select-module=\"{name}\">\
+             <rect x=\"{x}\" y=\"{y}\" width=\"{W}\" height=\"{H}\" rx=\"5\"/>\
+             <text x=\"{tx}\" y=\"{ty}\">{name}</text></g>",
+            name = m.name,
+            tx = x + W / 2,
+            ty = y + H / 2 + 4
+        ));
+    }
+    out.push_str("</svg></div>");
+
+    // --- mermaid: the same edges, as source ---------------------------------
+    let mut mermaid = String::from("graph LR\n");
+    for &(_, m) in rows.iter() {
+        let deps = requires.get(m.name.as_str()).cloned().unwrap_or_default();
+        if deps.is_empty() {
+            mermaid.push_str(&format!("  {}\n", m.name));
+        }
+        for dep in deps {
+            mermaid.push_str(&format!("  {} --&gt; {}\n", m.name, dep));
+        }
+    }
+    out.push_str(&format!(
+        "<div class=\"me-graph me-graph-mermaid collapsed\" data-graph-pass=\"mermaid\">\
+         <pre class=\"me-mermaid\">{mermaid}</pre></div>"
+    ));
     out
 }
 
@@ -1441,15 +1502,20 @@ When(Objective("build_pawns").IsComplete())
     }
 
     #[test]
-    fn the_graph_offers_both_readings_and_defaults_to_flat() {
+    fn the_graph_reads_three_ways_and_defaults_to_flat() {
         let view = render(&ast(), &domains(), &Scope::default());
-        assert!(view.form.contains("data-graph-mode=\"flat\""));
-        assert!(view.form.contains("data-graph-mode=\"tree\""));
-        assert!(view.form.contains("data-graph-pass=\"flat\""));
-        assert!(view.form.contains("data-graph-pass=\"tree\""));
-        // Flat is what opens; the tree is the second reading.
-        assert!(view.form.contains("me-graph-tree collapsed"), "tree should start closed");
-        assert!(!view.form.contains("me-graph-flat collapsed"), "flat should start open");
+        for mode in ["flat", "graph", "mermaid"] {
+            assert!(view.form.contains(&format!("data-graph-mode=\"{mode}\"")), "no {mode} button");
+            assert!(view.form.contains(&format!("data-graph-pass=\"{mode}\"")), "no {mode} pass");
+        }
+        // Flat is what opens; the diagram and the source are second readings.
+        assert!(view.form.contains("me-graph-graph collapsed"));
+        assert!(view.form.contains("me-graph-mermaid collapsed"));
+        assert!(!view.form.contains("me-graph-flat collapsed"));
+        // The diagram is drawn here, not by a client library: no network, and
+        // it survives a sandboxed webview.
+        assert!(view.form.contains("<svg class=\"me-svg\""), "no diagram");
+        assert!(view.form.contains("graph LR"), "no mermaid source");
     }
 
     #[test]

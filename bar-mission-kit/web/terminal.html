@@ -38,6 +38,14 @@
 	.me-propbar { display: flex; height: 6px; }
 	.me-propseg { height: 6px; border-radius: 3px; }
 	.me-propseg + .me-propseg { margin-left: 2px; }   /* 2px surface gap */
+	.me-svg { display: block; max-width: 100%; }
+	.me-svg-edge { stroke: #33517a; stroke-width: 1.5; }
+	.me-svg-node rect { fill: #16283c; stroke: #33517a; stroke-width: 1; }
+	.me-svg-node text { fill: #8fbcff; font-size: 11px; text-anchor: middle; }
+	.me-svg-node { cursor: pointer; }
+	.me-svg-node:hover rect { fill: #24384f; stroke: #8fbcff; }
+	.me-svg-node.me-node-on rect { stroke: #8fbcff; stroke-width: 2; }
+	.me-mermaid { margin: 0; padding: 8px; background: #0f1620; border: 1px solid #1d2938; border-radius: 5px; color: #9fb3c8; font-size: 0.72em; white-space: pre; overflow-x: auto; }
 	.me-graph-modes { display: flex; gap: 4px; margin-bottom: 6px; }
 	.me-graph-mode { background: none; border: 1px solid #263544; color: #8fa3b8; border-radius: 5px; padding: 1px 9px; font-size: 0.68em; cursor: pointer; }
 	.me-graph-mode-on { background: #1d2d40; border-color: #3a5f8a; color: #cfe4ff; }
@@ -362,7 +370,7 @@
 		document.querySelectorAll(".me-verb[data-owner]").forEach((el) => {
 			el.classList.toggle("me-owned", !!name && el.dataset.owner === name);
 		});
-		document.querySelectorAll(".me-graph-node").forEach((el) => {
+		document.querySelectorAll(".me-graph-node, .me-svg-node").forEach((el) => {
 			el.classList.toggle("me-node-on", !!name && el.dataset.selectModule === name);
 		});
 		if (name) { document.body.dataset.owner = name; } else { delete document.body.dataset.owner; }
