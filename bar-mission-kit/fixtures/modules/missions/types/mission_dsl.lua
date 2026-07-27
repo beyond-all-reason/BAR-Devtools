@@ -1,5 +1,9 @@
 ---@meta mission_dsl
 
+--- The trigger-file authoring environment: the statements and handles only
+--- a mission speaks. Actions a module can perform live in its own
+--- types/actions.lua, where every grammar can read them.
+---
 --- The trigger-file authoring environment. These globals exist in no real
 --- scope: mission_loader injects them into each triggers/*.lua sandbox (the
 --- sandbox IS the API surface). This meta file mirrors that injection so the

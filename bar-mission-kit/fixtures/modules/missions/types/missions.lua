@@ -1,4 +1,4 @@
----@meta mission_dsl
+---@meta actions
 
 --- Mission-runtime types: trigger engine descriptors and the authoring DSL's
 --- chain/condition/effect shapes, dot-only and closure-free. Mission files must load identically in the synced sandbox (which strips rawset) and in busted.

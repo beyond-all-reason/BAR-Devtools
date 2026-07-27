@@ -16,11 +16,11 @@ use std::collections::BTreeMap;
 /// vocabulary fused into one file cannot be diffed against either module.
 /// `just bar::sync-kit-fixtures --check` fails when these drift.
 pub const SNAPSHOTS: &[&str] = &[
+    include_str!("../fixtures/modules/missions/types/mission_dsl.lua"),
     include_str!("../fixtures/modules/missions/types/missions.lua"),
     include_str!("../fixtures/modules/missions/types/mode_dsl.lua"),
-    include_str!("../fixtures/modules/missions/types/dsl.lua"),
-    include_str!("../fixtures/modules/combat/types/dsl.lua"),
-    include_str!("../fixtures/modules/matchflow/types/dsl.lua"),
+    include_str!("../fixtures/modules/combat/types/actions.lua"),
+    include_str!("../fixtures/modules/matchflow/types/actions.lua"),
     include_str!("../fixtures/modules/transfer/types/actions.lua"),
     include_str!("../fixtures/modules/transfer/types/mode_dsl.lua"),
 ];
@@ -397,8 +397,11 @@ impl TypeSurface {
             if fields.contains_key(field) {
                 continue; // already reported through its call signature
             }
+            // Only a declared class is vocabulary; a field typed `integer` or
+            // `string` is the shape of a handle, not something to name.
+            let Some(members) = self.classes.get(ty) else { continue };
             let name = format!("{prefix}.{field}");
-            if self.classes.get(ty).map(|f| f.is_empty()).unwrap_or(true) {
+            if members.is_empty() {
                 roles.nouns.push(name);
             } else {
                 self.walk_class(ty, &name, roles);
