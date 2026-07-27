@@ -284,7 +284,10 @@ impl Server {
 
     fn regenerate(&mut self) {
         self.generation += 1;
-        let (ast, findings) = crate::collect_ast(&[self.missions_dir.clone()], self.generation);
+        let (ast, mut findings) = crate::collect_ast(&[self.missions_dir.clone()], self.generation);
+        // Unit defs are game content, so they can only be checked against what
+        // the game published; the roster's own names are checked at parse time.
+        findings.extend(view::unknown_unit_defs(&ast, &self.domains()));
         let message = findings
             .iter()
             .map(|f| format!("{}:{}: {}", f.path, f.line, f.message))
@@ -310,11 +313,17 @@ impl Server {
         }
     }
 
-    fn write_view(&self, ast: &MissionAst) {
-        let domains: view::Domains = std::fs::read_to_string(self.editor_dir.join("domains.json"))
+    /// What the game published about itself. Absent until a game has run, so
+    /// every consumer treats an empty set as "no authority", not "nothing valid".
+    fn domains(&self) -> view::Domains {
+        std::fs::read_to_string(self.editor_dir.join("domains.json"))
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default();
+            .unwrap_or_default()
+    }
+
+    fn write_view(&self, ast: &MissionAst) {
+        let domains = self.domains();
         let scope = view::Scope {
             mission: self
                 .missions_dir

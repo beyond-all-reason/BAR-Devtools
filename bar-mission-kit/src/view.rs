@@ -176,6 +176,62 @@ struct Ctx<'a> {
     live: &'a std::cell::RefCell<Vec<LiveProbe>>,
 }
 
+/// Unit def names the game does not publish. The roster's own names are
+/// cross-checked against units.lua; these are game content, so the only
+/// authority is what the bridge published in domains.json — and when nothing
+/// has been published (a headless check, a game that has not run) there is no
+/// authority and no finding, rather than a wall of false positives.
+pub fn unknown_unit_defs(ast: &MissionAst, domains: &Domains) -> Vec<crate::model::Finding> {
+    if domains.units.is_empty() {
+        return Vec::new();
+    }
+    let known: std::collections::HashSet<&str> =
+        domains.units.iter().map(|u| u.value.as_str()).collect();
+    fn walk<'a>(value: &'a Value, out: &mut Vec<&'a str>) {
+        match value {
+            Value::String { value, semantic: Some(s), .. } if s == "unit_def_name" => out.push(value),
+            Value::Verb { calls, .. } => {
+                for c in calls {
+                    for a in &c.args {
+                        walk(a, out);
+                    }
+                }
+            }
+            Value::Table { fields, .. } => {
+                for f in fields {
+                    walk(&f.value, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut findings = Vec::new();
+    for file in &ast.files {
+        for group in &file.groups {
+            for trigger in &group.triggers {
+                for step in &trigger.steps {
+                    let mut names = Vec::new();
+                    for arg in &step.args {
+                        walk(arg, &mut names);
+                    }
+                    for name in names {
+                        if !known.contains(name) {
+                            findings.push(crate::model::Finding {
+                                path: file.path.clone(),
+                                line: step.line,
+                                message: format!(
+                                    "UnitDef(\"{name}\"): the game publishes no such unit def"
+                                ),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    findings
+}
+
 pub fn render(ast: &MissionAst, domains: &Domains, scope: &Scope) -> ViewArtifact {
     let surface: Surface = serde_json::from_value(ast.surface.clone()).unwrap_or_default();
     let live = std::cell::RefCell::new(Vec::new());
@@ -1619,6 +1675,27 @@ When(Objective("build_pawns").IsComplete())
         // Mermaid rides on the copy button rather than a tab of its own.
         assert!(view.form.contains("data-copy-mermaid="), "no copy button");
         assert!(view.form.contains("graph LR"), "no mermaid source");
+    }
+
+    #[test]
+    fn unit_defs_are_checked_against_what_the_game_published() {
+        let ast = ast();
+        let domains = |names: &[&str]| Domains {
+            units: names
+                .iter()
+                .map(|n| DomainOption { value: n.to_string(), label: n.to_string() })
+                .collect(),
+        };
+        // No published set is no authority: a headless check must not invent
+        // findings for content it cannot see.
+        assert!(unknown_unit_defs(&ast, &Domains::default()).is_empty());
+        // Published and present.
+        assert!(unknown_unit_defs(&ast, &domains(&["armpw"])).is_empty());
+        // Published and missing: named, with the file and line to fix.
+        let found = unknown_unit_defs(&ast, &domains(&["armcom"]));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].message.contains("armpw"), "{}", found[0].message);
+        assert!(found[0].line > 0);
     }
 
     #[test]
