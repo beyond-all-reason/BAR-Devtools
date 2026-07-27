@@ -477,7 +477,10 @@
 		const swap = event.target.closest("[data-pool]");
 		if (swap) return openModal("swap_" + swap.dataset.pool, swap);
 		const add = event.target.closest("[data-add]");
-		if (add) return openModal(add.dataset.add === "statement" ? "add_statement" : "add_step", add);
+		if (add) {
+			const modal = { statement: "add_statement", spawn: "add_spawn" }[add.dataset.add] || "add_step";
+			return openModal(modal, add);
+		}
 	});
 
 	function positionFor(kind, opener) {

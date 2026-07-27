@@ -87,6 +87,8 @@ pub struct LiveProbe {
 pub struct Modals {
     pub add_step: Modal,
     pub add_statement: Modal,
+    /// The roster's own palette: spawn chains, not trigger vocabulary.
+    pub add_spawn: Modal,
     pub swap_conditions: Modal,
     pub swap_effects: Modal,
 }
@@ -152,6 +154,10 @@ struct Surface {
     /// Modules publishing a marked DSL surface (the explorer's rows).
     #[serde(default)]
     modules: Vec<ModuleInfo>,
+    /// Roster chains. Curated, not derived: a spawn position is a map
+    /// fraction, and `number` cannot say that.
+    #[serde(default)]
+    spawns: Vec<SurfaceEntry>,
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -933,8 +939,20 @@ fn file_view(file: &FileAst, ctx: &Ctx) -> Element {
                 {trigger_card(trigger, ctx)}
             }
         }
-        // The add-statement palette is trigger vocabulary; the roster file's
-        // spawn chains don't take it.
+        // Two palettes, one per file kind: trigger vocabulary for trigger
+        // files, spawn chains for the roster.
+        if ctx.editable && file.path.ends_with("units.lua") && !ctx.surface.spawns.is_empty() {
+            div { class: "me-add-row me-add-statement-row",
+                button {
+                    class: "me-button me-add-btn",
+                    "data-add": "spawn",
+                    "data-insert": "{file.insert_trigger_at}",
+                    "data-file": "{ctx.file}",
+                    "data-hash": "{ctx.hash}",
+                    "+ add spawn"
+                }
+            }
+        }
         if ctx.editable && !ctx.surface.conditions.is_empty() && !file.path.ends_with("units.lua") {
             div { class: "me-add-row me-add-statement-row",
                 button {
@@ -1500,6 +1518,11 @@ fn modals(surface: &Surface) -> Modals {
         add_step.push(row("effect", e, format!("\t.Do({})\n", e.template)));
     }
 
+    let mut add_spawn = vec![group("SPAWN")];
+    for sp in &surface.spawns {
+        add_spawn.push(row("spawn", sp, sp.template.clone()));
+    }
+
     let mut add_statement = vec![group("STARTS WHEN...")];
     for c in &surface.conditions {
         add_statement.push(row(
@@ -1522,6 +1545,7 @@ fn modals(surface: &Surface) -> Modals {
     Modals {
         add_step: Modal { title: "Add to this trigger".into(), rows: add_step },
         add_statement: Modal { title: "New statement".into(), rows: add_statement },
+        add_spawn: Modal { title: "Add a spawn".into(), rows: add_spawn },
         swap_conditions: Modal { title: "Swap condition".into(), rows: swap(&surface.conditions) },
         swap_effects: Modal { title: "Swap effect".into(), rows: swap(&surface.effects) },
     }
@@ -1932,7 +1956,12 @@ When(Objective("relieve_the_outpost").IsComplete())
             assert!(view.form.contains(&format!("value=\"{role}\"")));
         }
         assert!(view.form.contains("value=\"corlab\" selected=\"true\""));
-        assert!(!view.form.contains("data-add"), "{}", view.form);
+        // The roster takes spawn chains, not trigger vocabulary.
+        assert!(view.form.contains("data-add=\"spawn\""), "{}", view.form);
+        assert!(!view.form.contains("data-add=\"statement\""), "{}", view.form);
+        assert!(view.form.contains("+ add spawn"));
+        // Removing a spawn is the same control a trigger card carries.
+        assert!(view.form.contains("data-op=\"remove\""), "{}", view.form);
         assert_eq!(view.vocabulary.unit_names, vec!["hub".to_string()]);
         assert_eq!(view.vocabulary.groups, vec!["outpost".to_string()]);
     }

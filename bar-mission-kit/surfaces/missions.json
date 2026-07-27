@@ -1,6 +1,6 @@
 {
   "name": "missions",
-  "comment": "Labels and curated extras only. The palette itself is derived: every verb a module publishes becomes an entry, with an example call built from its signature (src/types.rs template_for). A label here overrides the humanised default; extras are compositions no signature implies.",
+  "comment": "Labels and curated extras only. The palette itself is derived: every verb a module publishes becomes an entry, with an example call built from its signature (src/types.rs template_for). A label here overrides the humanised default; extras are compositions no signature implies. Spawn rows are curated: a position is a map fraction, which the number type cannot say.",
   "labels": {
     "MatchFlow.Started": "Mission started",
     "Team.Player.Has": "Player has units",
@@ -17,6 +17,24 @@
     {
       "label": "Protect unit until",
       "template": "Combat.Protect(Unit(\"UNIT_NAME\")).Until(Objective(\"OBJECTIVE\").IsComplete())"
+    }
+  ],
+  "spawns": [
+    {
+      "label": "Spawn a unit",
+      "template": "\nSpawn(UnitDef(\"armpw\"), \"player\")\n\t.At(0.50, 0.50)\n"
+    },
+    {
+      "label": "Spawn a named unit",
+      "template": "\nSpawn(UnitDef(\"armpw\"), \"player\")\n\t.At(0.50, 0.50)\n\t.Named(\"NEW_UNIT\")\n"
+    },
+    {
+      "label": "Spawn into a group",
+      "template": "\nSpawn(UnitDef(\"armpw\"), \"player\")\n\t.At(0.50, 0.50)\n\t.Grouped(\"GROUP\")\n"
+    },
+    {
+      "label": "Spawn for the enemy",
+      "template": "\nSpawn(UnitDef(\"armpw\"), \"enemy\")\n\t.At(0.50, 0.50)\n"
     }
   ]
 }
