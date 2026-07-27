@@ -57,11 +57,6 @@
 ---@field IsDestroyed fun(): MissionCondition
 ---@field IsSpotted fun(team: MissionTeam): MissionCondition
 
---- The injected Units verbs: effects over roster-declared groups (validated
---- at load, like unit names).
----@class MissionTransfer
----@field Units fun(group: MissionUnitGroup, team: MissionTeam): MissionEffect
-
 --- The dot-only builder chain returned by Spawn. Positions are map fractions
 --- until real maps pin real coordinates; At is required — a chain without one fails the load.
 ---@class MissionSpawnChain
@@ -118,6 +113,8 @@
 ---@class MissionDslFile
 ---@field filename string mission-relative trigger file path
 ---@field Register fun(descriptor: TriggerDescriptor)
+---@field names table<string, boolean> roster unit names, for load-time validation
+---@field groups table<string, boolean> roster group names, for load-time validation
 
 ---@class MissionDslContribution
 ---@field ForFile fun(file: MissionDslFile): { env: table<string, any>, Finalize: fun()|nil }

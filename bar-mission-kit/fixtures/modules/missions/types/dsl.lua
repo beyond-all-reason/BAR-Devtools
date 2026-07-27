@@ -40,5 +40,3 @@ function Spawn(unitDef, team) end
 ---@type { Player: MissionTeam }
 Team = {}
 
----@type MissionTransfer
-Transfer = {}

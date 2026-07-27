@@ -16,12 +16,13 @@ use std::collections::BTreeMap;
 /// vocabulary fused into one file cannot be diffed against either module.
 /// `just bar::sync-kit-fixtures --check` fails when these drift.
 pub const SNAPSHOTS: &[&str] = &[
-    include_str!("../fixtures/modules/missions/types/dsl.lua"),
     include_str!("../fixtures/modules/missions/types/missions.lua"),
     include_str!("../fixtures/modules/missions/types/mode_dsl.lua"),
-    include_str!("../fixtures/modules/matchflow/types/dsl.lua"),
+    include_str!("../fixtures/modules/missions/types/dsl.lua"),
     include_str!("../fixtures/modules/combat/types/dsl.lua"),
+    include_str!("../fixtures/modules/matchflow/types/dsl.lua"),
     include_str!("../fixtures/modules/transfer/types/mode_dsl.lua"),
+    include_str!("../fixtures/modules/transfer/types/dsl.lua"),
 ];
 
 #[derive(Debug, Clone)]

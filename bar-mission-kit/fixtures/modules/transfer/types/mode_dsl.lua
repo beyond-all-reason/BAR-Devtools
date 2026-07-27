@@ -35,7 +35,7 @@
 function Mode(name) end
 
 ---@type { Units: SharingModeNoun, Resources: SharingModeNoun }
-Share = {}
+Transfer = {}
 
 ---@type { Allied: SharingModeNoun }
 Assist = {}
