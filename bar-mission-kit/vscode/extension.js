@@ -105,7 +105,7 @@ async function vocabulary(server) {
 // previous session) and is recorded without acting; anything stamped after
 // we started is a live request, so the first click after a reload still
 // opens — seq alone cannot tell these apart, since it resets with serve.
-let lastOpenSeq = null;
+let lastOpenId = null;
 const startedAt = Date.now();
 
 const fs = require("fs");
@@ -162,18 +162,25 @@ async function pollOpenTarget(server) {
 	} catch {
 		return;
 	}
-	if (typeof target.seq !== "number") return;
-	// Act once per request: on a new seq, or on the first sighting of a target
-	// stamped after this extension host started (a live click, not a leftover).
-	// The seq must be recorded either way, or a live target reopens every poll.
-	const fresh = typeof target.ts === "number" && target.ts > startedAt;
-	const firstSighting = lastOpenSeq === null;
-	const changed = !firstSighting && target.seq !== lastOpenSeq;
-	lastOpenSeq = target.seq;
-	if (!changed && !(firstSighting && fresh)) return;
-	lastOpenSeq = target.seq;
+	if (typeof target.seq !== "number" || typeof target.ts !== "number") return;
+	// Identity is the timestamp, not the sequence: serve restarts reset seq to
+	// zero, so a click after a restart can reuse a number this host already
+	// recorded and be dropped as "unchanged". ts also dates the request, which
+	// is what tells a live click from an artifact left by an earlier serve.
+	const id = `${target.ts}:${target.seq}`;
+	const seen = id === lastOpenId;
+	lastOpenId = id;
+	if (seen || target.ts <= startedAt) return;
 	const routed = routeIntoWorkspace(target.file);
-	if (!routed) return; // another window's project
+	if (!routed) {
+		// Silence here reads as "the button is broken". Say which file was
+		// asked for and which roots were considered.
+		console.warn(
+			`[bar-mission-editor] ${target.file} is outside this window: ` +
+				workspaceRoots().map(([, real]) => real).join(", ")
+		);
+		return;
+	}
 	const row = Math.max(0, (target.line || 1) - 1);
 	vscode.window.showTextDocument(vscode.Uri.file(routed), {
 		preview: false,

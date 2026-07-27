@@ -12,3 +12,8 @@ print("\n".join(re.findall(r"<script[^>]*>(.*?)</script>", src, re.S)))
 PY
 node --check /tmp/bar_terminal_script.js
 echo "terminal.html script: syntax-ok"
+
+# The VS Code extension is plain JS with no build step: nothing else catches a
+# syntax error before VS Code silently fails to activate it.
+node --check vscode/extension.js
+echo "vscode/extension.js: syntax-ok"
