@@ -279,6 +279,59 @@ pub fn render(ast: &MissionAst, domains: &Domains, scope: &Scope) -> ViewArtifac
 /// The dependency graph as the Reference's overview: modules laid out by
 /// depth (what nothing depends on sits at the left), each showing what it
 /// requires. No SVG in the RML intersection — the layering IS the drawing.
+/// Which module published a verb's root namespace. Identity is the module
+/// NAME, not a colour: eight modules cannot be told apart by hue (the
+/// categorical palette fails all-pairs CVD past three), so selection
+/// highlights and labels carry it instead.
+fn module_owner<'a>(root: &str, surface: &'a Surface) -> Option<&'a str> {
+    // A call arrives either bare ("Objective") or dotted
+    // ("MatchFlow.Started"), and a module publishes the dotted form. Compare
+    // namespaces, which is the part that identifies the owner either way.
+    let root = root.split('.').next().unwrap_or(root);
+    surface
+        .modules
+        .iter()
+        .find(|m| {
+            m.conditions
+                .iter()
+                .chain(m.effects.iter())
+                .chain(m.nouns.iter())
+                .any(|v| v.split('.').next() == Some(root))
+                || m.statements.iter().any(|st| st.name == root)
+        })
+        .map(|m| m.name.as_str())
+}
+
+/// The module a step belongs to, from the verb it invokes. The card view
+/// renders steps as phrases rather than calls, so the row carries the
+/// attribution: selecting a module has to light up "the mission has started"
+/// as readily as `MatchFlow.Started()`.
+fn step_owner<'a>(step: &Step, surface: &'a Surface) -> Option<&'a str> {
+    step.args
+        .iter()
+        .find_map(|arg| match arg {
+            Value::Verb { path, .. } => module_owner(path, surface),
+            _ => None,
+        })
+        // Steps whose args are literals (.At(0.5, 0.5)) are identified by the
+        // statement they belong to instead.
+        .or_else(|| {
+            surface
+                .modules
+                .iter()
+                .find(|m| {
+                    m.statements
+                        .iter()
+                        .any(|st| {
+                            // Statement steps are published dotted (".At").
+                            st.name == step.verb
+                                || st.steps.iter().any(|s| s.trim_start_matches('.') == step.verb)
+                        })
+                })
+                .map(|m| m.name.as_str())
+        })
+}
+
 fn modules_graph(modules: &[ModuleInfo]) -> String {
     use std::collections::HashMap;
     let known: Vec<&str> = modules.iter().map(|m| m.name.as_str()).collect();
@@ -317,8 +370,21 @@ fn modules_graph(modules: &[ModuleInfo]) -> String {
         .collect();
     rows.sort_by(|a, b| (a.0, &a.1.name).cmp(&(b.0, &b.1.name)));
 
-    let mut out = String::from("<div class=\"me-graph\">");
-    for (d, m) in rows {
+    // Two readings of the same set: a flat roll-call, and the dependency tree
+    // indented by depth. Flat is the default because most of the time the
+    // question is "what is here", not "what rests on what".
+    let mut out = String::from(
+        "<div class=\"me-graph-modes\">\
+         <button class=\"me-graph-mode me-graph-mode-on\" data-graph-mode=\"flat\">Flat</button>\
+         <button class=\"me-graph-mode\" data-graph-mode=\"tree\">Graph</button></div>",
+    );
+    for pass in ["flat", "tree"] {
+        out.push_str(&format!(
+            "<div class=\"me-graph me-graph-{pass}{}\" data-graph-pass=\"{pass}\">",
+            if pass == "tree" { " collapsed" } else { "" }
+        ));
+        let indented = pass == "tree";
+    for &(d, m) in rows.iter() {
         let deps = requires.get(m.name.as_str()).cloned().unwrap_or_default();
         let arrows = if deps.is_empty() {
             String::new()
@@ -333,12 +399,13 @@ fn modules_graph(modules: &[ModuleInfo]) -> String {
             "<div class=\"me-graph-row\" style=\"margin-left: {}px;\">\
              <button class=\"me-chip me-chip-stmt me-graph-node\" data-select-module=\"{}\">{}</button>\
              {arrows}</div>",
-            d * 18,
+            if indented { d * 18 } else { 0 },
             m.name,
             m.name
         ));
     }
-    out.push_str("</div>");
+        out.push_str("</div>");
+    }
     out
 }
 
@@ -732,6 +799,7 @@ fn step_row(step: &Step, ctx: &Ctx) -> Element {
             class: "me-step me-jump",
             "data-open-file": "{ctx.file}",
             "data-open-line": "{step.line}",
+            "data-owner": "{step_owner(step, ctx.surface).unwrap_or(\"\")}",
             span { class: "me-step-verb me-verb-{badge}", "{verb}" }
             span { class: "me-step-body",
                 if let Some(phrase) = step_phrase_for(&step.verb).filter(|_| ctx.style == Style::Ui) {
@@ -1041,8 +1109,10 @@ fn value_view(value: &Value, ctx: &Ctx) -> Element {
         Value::String { value, .. } => rsx! { span { class: "me-lit", "\"{value}\"" } },
         Value::Boolean { value, .. } => rsx! { span { class: "me-lit", "{value}" } },
         Value::Name { path, .. } => rsx! { span { class: "me-ref", "{path}" } },
-        Value::Verb { path, calls, .. } => rsx! {
-            span { class: "me-verb", "{path}" }
+        Value::Verb { path, calls, .. } => {
+            let owner = module_owner(path, ctx.surface).unwrap_or("");
+            rsx! {
+            span { class: "me-verb", "data-owner": "{owner}", "{path}" }
             for call in calls.iter() {
                 if call.name.is_some() {
                     "."
@@ -1052,7 +1122,8 @@ fn value_view(value: &Value, ctx: &Ctx) -> Element {
                 {comma_list(call.args.iter().map(|a| value_view(a, ctx)).collect())}
                 ")"
             }
-        },
+            }
+        }
         Value::Table { fields, .. } => rsx! {
             "{{ "
             for (i, field) in fields.iter().enumerate() {
@@ -1367,6 +1438,45 @@ When(Objective("build_pawns").IsComplete())
         assert!(view.form.contains("Player has "));
         assert_eq!(view.generation, 7);
         assert_eq!(view.first_file.as_deref(), Some("triggers/win.lua"));
+    }
+
+    #[test]
+    fn the_graph_offers_both_readings_and_defaults_to_flat() {
+        let view = render(&ast(), &domains(), &Scope::default());
+        assert!(view.form.contains("data-graph-mode=\"flat\""));
+        assert!(view.form.contains("data-graph-mode=\"tree\""));
+        assert!(view.form.contains("data-graph-pass=\"flat\""));
+        assert!(view.form.contains("data-graph-pass=\"tree\""));
+        // Flat is what opens; the tree is the second reading.
+        assert!(view.form.contains("me-graph-tree collapsed"), "tree should start closed");
+        assert!(!view.form.contains("me-graph-flat collapsed"), "flat should start open");
+    }
+
+    #[test]
+    fn every_step_names_the_module_that_published_its_verb() {
+        // Selecting a module lights up its steps, so a step with no owner is
+        // one the highlight can never reach. Steps whose args are literals
+        // (.At) are attributed through the statement they belong to.
+        let mut with_modules = ast();
+        with_modules.surface = serde_json::json!({
+            "modules": [{
+                "name": "demo",
+                "description": "",
+                "requires": [],
+                "statements": [{ "name": "When", "steps": [".Do", ".Once"] }],
+                "conditions": ["Team.Player.Has"],
+                "effects": ["Objective.Complete"],
+                "nouns": [],
+                "modes": [],
+            }],
+            // Surface-level entries are label/template pairs; the module's own
+            // lists are the plain names it publishes.
+            "conditions": [{ "label": "Player has", "template": "Team.Player.Has(UnitDef(\"armpw\"), 3)" }],
+            "effects": [{ "label": "complete", "template": "Objective(\"x\").Complete()" }],
+        });
+        let view = render(&with_modules, &domains(), &Scope::default());
+        assert!(view.form.contains("data-owner=\"demo\""), "{}", view.form);
+        assert!(!view.form.contains("data-owner=\"\""), "unattributed step: {}", view.form);
     }
 
     #[test]

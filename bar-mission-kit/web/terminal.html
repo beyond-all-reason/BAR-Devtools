@@ -38,6 +38,12 @@
 	.me-propbar { display: flex; height: 6px; }
 	.me-propseg { height: 6px; border-radius: 3px; }
 	.me-propseg + .me-propseg { margin-left: 2px; }   /* 2px surface gap */
+	.me-graph-modes { display: flex; gap: 4px; margin-bottom: 6px; }
+	.me-graph-mode { background: none; border: 1px solid #263544; color: #8fa3b8; border-radius: 5px; padding: 1px 9px; font-size: 0.68em; cursor: pointer; }
+	.me-graph-mode-on { background: #1d2d40; border-color: #3a5f8a; color: #cfe4ff; }
+	.me-graph.collapsed { display: none; }
+	.me-owned { background: #24384f; color: #cfe4ff; border-radius: 3px; }
+	.me-node-on { outline: 1px solid #8fbcff; }
 	.me-series-1 { background: #3987e5; }
 	.me-series-2 { background: #d95926; }
 	/* Module explorer: one row per module publishing a marked DSL surface. */
@@ -349,6 +355,19 @@
 		}
 	}
 
+	// A module's verbs, lit wherever they are used. Selecting again clears it.
+	// Identity is the name, not a hue: eight modules cannot be told apart by
+	// colour (the categorical palette fails all-pairs CVD past three).
+	function highlightOwner(name) {
+		document.querySelectorAll(".me-verb[data-owner]").forEach((el) => {
+			el.classList.toggle("me-owned", !!name && el.dataset.owner === name);
+		});
+		document.querySelectorAll(".me-graph-node").forEach((el) => {
+			el.classList.toggle("me-node-on", !!name && el.dataset.selectModule === name);
+		});
+		if (name) { document.body.dataset.owner = name; } else { delete document.body.dataset.owner; }
+	}
+
 	$("content").addEventListener("click", (event) => {
 		// Dashboard tile -> open that section and bring it into view.
 		const open = event.target.closest("[data-open-section]");
@@ -377,11 +396,26 @@
 			if (list) list.classList.toggle("collapsed");
 			return;
 		}
+		const graphMode = event.target.closest("[data-graph-mode]");
+		if (graphMode) {
+			const want = graphMode.dataset.graphMode;
+			document.querySelectorAll("[data-graph-pass]").forEach((pass) => {
+				pass.classList.toggle("collapsed", pass.dataset.graphPass !== want);
+			});
+			document.querySelectorAll("[data-graph-mode]").forEach((btn) => {
+				btn.classList.toggle("me-graph-mode-on", btn === graphMode);
+			});
+			return;
+		}
 		const modulePick = event.target.closest("[data-select-module]");
 		if (modulePick) {
-			const row = document.querySelector(
-				`.me-module[data-module="${modulePick.dataset.selectModule}"]`
-			);
+			// Selecting a module answers "where does this show up": every verb
+			// it publishes lights up wherever it is used, across every trigger.
+			const name = modulePick.dataset.selectModule;
+			const already = document.body.dataset.owner === name;
+			highlightOwner(already ? null : name);
+			if (already) return;
+			const row = document.querySelector(`.me-module[data-module="${name}"]`);
 			if (row) row.scrollIntoView({ behavior: "smooth", block: "start" });
 			const list = document.querySelector("[data-module-list]");
 			if (list) list.classList.add("collapsed");
