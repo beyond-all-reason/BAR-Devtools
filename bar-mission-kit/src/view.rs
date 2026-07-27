@@ -349,7 +349,7 @@ fn modules_body(modules: &[ModuleInfo]) -> String {
     let mut out = format!(
         "<div class=\"me-crumb\">\
          <button class=\"me-crumb-root\" data-nav=\"modules\">modules</button>\
-         <span class=\"me-crumb-sep\"></span>\
+         <span class=\"me-crumb-sep\">\u{25b8}</span>\
          <span class=\"me-crumb-here\">{} publishing a surface</span></div>",
         modules.len()
     );
@@ -470,7 +470,7 @@ fn crumb(scope: &Scope) -> String {
     };
     let mut out = format!(
         "<div class=\"me-crumb\">{root}\
-         <span class=\"me-crumb-sep\"></span>\
+         <span class=\"me-crumb-sep\">\u{25b8}</span>\
          <span class=\"me-crumb-here\">{name}</span></div>"
     );
     if navigable {
