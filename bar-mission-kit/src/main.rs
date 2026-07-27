@@ -150,6 +150,7 @@ pub fn collect_ast(paths: &[PathBuf], generation: u64) -> (model::MissionAst, Ve
                     path: rel,
                     line: 0,
                     message: format!("cannot read: {e}"),
+                    span: None,
                 });
                 continue;
             }
@@ -165,6 +166,7 @@ pub fn collect_ast(paths: &[PathBuf], generation: u64) -> (model::MissionAst, Ve
                 path: rel,
                 line: 0,
                 message: format!("parse error: {e}"),
+                span: None,
             }),
         }
     }
@@ -209,6 +211,7 @@ fn cross_check_names(files: &[model::FileAst]) -> Vec<model::Finding> {
                     path: file.path.clone(),
                     line: r.line,
                     message: format!("Unit(\"{}\"): units.lua declares no such name", r.name),
+                    span: None,
                 });
             }
         }
@@ -218,6 +221,7 @@ fn cross_check_names(files: &[model::FileAst]) -> Vec<model::Finding> {
                     path: file.path.clone(),
                     line: r.line,
                     message: format!("group \"{}\": units.lua declares no such group", r.name),
+                    span: None,
                 });
             }
         }

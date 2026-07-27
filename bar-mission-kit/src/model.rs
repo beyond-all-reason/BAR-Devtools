@@ -174,4 +174,7 @@ pub struct Finding {
     pub path: String,
     pub line: usize,
     pub message: String,
+    /// Byte span of the token at fault, when the finding is about one. Editors
+    /// underline this rather than the whole line; None means line-wide.
+    pub span: Option<Span>,
 }

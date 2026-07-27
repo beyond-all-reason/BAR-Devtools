@@ -169,7 +169,7 @@ impl<'s> Rec<'s> {
     fn finding(&mut self, span: Span, message: String) {
         let line = self.line_of(span.0);
         let path = self.path.clone();
-        self.findings.push(Finding { path, line, message });
+        self.findings.push(Finding { path, line, message, span: None });
     }
 
     fn mark_opaque(&mut self, span: Span, reason: &str) {

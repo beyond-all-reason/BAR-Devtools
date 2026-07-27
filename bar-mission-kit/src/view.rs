@@ -187,9 +187,11 @@ pub fn unknown_unit_defs(ast: &MissionAst, domains: &Domains) -> Vec<crate::mode
     }
     let known: std::collections::HashSet<&str> =
         domains.units.iter().map(|u| u.value.as_str()).collect();
-    fn walk<'a>(value: &'a Value, out: &mut Vec<&'a str>) {
+    fn walk<'a>(value: &'a Value, out: &mut Vec<(&'a str, crate::model::Span)>) {
         match value {
-            Value::String { value, semantic: Some(s), .. } if s == "unit_def_name" => out.push(value),
+            Value::String { value, span, semantic: Some(s) } if s == "unit_def_name" => {
+                out.push((value, *span))
+            }
             Value::Verb { calls, .. } => {
                 for c in calls {
                     for a in &c.args {
@@ -214,7 +216,7 @@ pub fn unknown_unit_defs(ast: &MissionAst, domains: &Domains) -> Vec<crate::mode
                     for arg in &step.args {
                         walk(arg, &mut names);
                     }
-                    for name in names {
+                    for (name, span) in names {
                         if !known.contains(name) {
                             findings.push(crate::model::Finding {
                                 path: file.path.clone(),
@@ -222,6 +224,7 @@ pub fn unknown_unit_defs(ast: &MissionAst, domains: &Domains) -> Vec<crate::mode
                                 message: format!(
                                     "UnitDef(\"{name}\"): the game publishes no such unit def"
                                 ),
+                                span: Some(span),
                             });
                         }
                     }

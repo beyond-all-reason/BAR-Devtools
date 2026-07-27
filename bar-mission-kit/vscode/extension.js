@@ -350,7 +350,28 @@ async function pollDiagnostics(server) {
 		return;
 	}
 	const byFile = new Map();
-	for (const line of String(status.message).split("\n")) {
+	// Structured findings carry the byte span of the token at fault, so the
+	// squiggle sits under the bad name instead of the whole line. EmmyLua sees
+	// only a string there and has nothing to say; this is our layer over it.
+	for (const finding of status.findings || []) {
+		const uri = vscode.Uri.joinPath(vscode.Uri.file(status.missions_dir), finding.path);
+		const doc = vscode.workspace.textDocuments.find((d) => d.uri.fsPath === uri.fsPath);
+		const row = Math.max(0, Number(finding.line) - 1);
+		let range = new vscode.Range(row, 0, row, 999);
+		if (doc && typeof finding.start === "number" && typeof finding.end === "number") {
+			const map = byteToCharOffsets(doc.getText());
+			const at = (byte) => doc.positionAt(map ? map[Math.min(byte, map.length - 1)] : byte);
+			range = new vscode.Range(at(finding.start), at(finding.end));
+		}
+		const diagnostic = new vscode.Diagnostic(range, finding.message, vscode.DiagnosticSeverity.Warning);
+		diagnostic.source = "bar-mission-kit";
+		const key = uri.toString();
+		if (!byFile.has(key)) byFile.set(key, { uri, list: [] });
+		byFile.get(key).list.push(diagnostic);
+	}
+	// Older serve, or status text that is not a finding: fall back to the
+	// line-wide reading of the message.
+	for (const line of (status.findings || []).length ? [] : String(status.message).split("\n")) {
 		// Recognizer findings are `rel/path.lua:line: message`; other status
 		// text (rejected edits) doesn't match and stays out of the editor.
 		const match = line.match(/^(.*?\.lua):(\d+): (.*)$/);

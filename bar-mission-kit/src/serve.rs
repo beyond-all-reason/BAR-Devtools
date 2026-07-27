@@ -126,6 +126,22 @@ struct Status {
     /// Absolute missions root, so editor clients can map `path:line` findings
     /// in `message` onto real files (VS Code diagnostics).
     missions_dir: String,
+    /// The same findings, structured. `message` stays the human reading; this
+    /// carries the byte span so an editor can underline the token at fault
+    /// rather than the whole line.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    findings: Vec<FindingOut>,
+}
+
+#[derive(Serialize, Default)]
+struct FindingOut {
+    path: String,
+    line: usize,
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    start: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    end: Option<usize>,
 }
 
 pub struct Server {
@@ -297,7 +313,7 @@ impl Server {
         self.write_view(&ast);
         let dot = crate::graph::dot(&ast);
         std::fs::write(self.editor_dir.join("mission_graph.dot"), dot).ok();
-        self.write_status(findings.is_empty(), &message);
+        self.write_status_with(findings.is_empty(), &message, &findings);
         if findings.is_empty() {
             eprintln!("[gen {}] AST regenerated", self.generation);
         } else {
@@ -341,13 +357,32 @@ impl Server {
     }
 
     fn write_status(&self, ok: bool, message: &str) {
+        self.write_status_with(ok, message, &[]);
+    }
+
+    fn write_status_with(&self, ok: bool, message: &str, findings: &[crate::model::Finding]) {
         let missions_dir = self
             .missions_dir
             .canonicalize()
             .unwrap_or_else(|_| self.missions_dir.clone())
             .display()
             .to_string();
-        let status = Status { generation: self.generation, ok, message: message.to_string(), missions_dir };
+        let status = Status {
+            generation: self.generation,
+            ok,
+            message: message.to_string(),
+            missions_dir,
+            findings: findings
+                .iter()
+                .map(|f| FindingOut {
+                    path: f.path.clone(),
+                    line: f.line,
+                    message: f.message.clone(),
+                    start: f.span.map(|s| s.0),
+                    end: f.span.map(|s| s.1),
+                })
+                .collect(),
+        };
         let json = serde_json::to_string_pretty(&status).expect("serializable status");
         std::fs::write(self.editor_dir.join("status.json"), json).ok();
     }
