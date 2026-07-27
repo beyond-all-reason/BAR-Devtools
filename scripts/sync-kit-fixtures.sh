@@ -26,7 +26,15 @@ while IFS= read -r src; do
     else
         sed 's/\r$//' "$src" > "$out"
     fi
-done < <(grep -rl "@meta dsl" "$BAR_DIR"/modules/*/types/*.lua | sort)
+done < <(grep -rlE "@meta (mission|mode)_dsl" "$BAR_DIR"/modules/*/types/*.lua | sort)
+
+# A file still on the old undifferentiated marker publishes into no sandbox at
+# all: the kit would simply stop seeing it. Loudly, then.
+if orphans="$(grep -rl "@meta dsl$" "$BAR_DIR"/modules/*/types/*.lua 2>/dev/null)"; then
+    echo "surfaces on the retired '@meta dsl' marker (use mission_dsl or mode_dsl):" >&2
+    echo "$orphans" >&2
+    stale=1
+fi
 
 # The kit compiles the mirror in, so a fixture nobody include_str!s is a file
 # the kit cannot see: a module publishing new vocabulary would land here and

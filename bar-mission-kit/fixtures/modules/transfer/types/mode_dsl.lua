@@ -1,4 +1,4 @@
----@meta dsl
+---@meta mode_dsl
 
 --- The sharing mode-preset surface: what modules/transfer/modes/*.lua files
 --- author against (via mode_dsl.lua over modules/mode_builder.lua).

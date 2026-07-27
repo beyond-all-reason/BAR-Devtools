@@ -1,4 +1,4 @@
----@meta dsl
+---@meta mode_dsl
 
 --- The missions mode-preset surface: what modules/missions/modes/*.lua files
 --- author against (via lib/mode_dsl.lua over modules/mode_builder.lua).

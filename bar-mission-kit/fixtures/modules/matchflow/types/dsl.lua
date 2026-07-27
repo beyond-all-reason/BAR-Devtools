@@ -1,4 +1,4 @@
----@meta dsl
+---@meta mission_dsl
 
 --- The MatchFlow vocabulary matchflow contributes to the mission sandbox:
 --- lazy mirrors of the module api, plus the Started condition. They take the

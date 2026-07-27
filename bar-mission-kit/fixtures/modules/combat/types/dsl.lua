@@ -1,4 +1,4 @@
----@meta dsl
+---@meta mission_dsl
 
 --- The Combat vocabulary combat contributes to the mission sandbox. Protect
 --- is an effect; its Until sugar bounds that protection's lifetime with a

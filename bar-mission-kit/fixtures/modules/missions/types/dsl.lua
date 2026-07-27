@@ -1,4 +1,4 @@
----@meta dsl
+---@meta mission_dsl
 
 --- The trigger-file authoring environment. These globals exist in no real
 --- scope: mission_loader injects them into each triggers/*.lua sandbox (the

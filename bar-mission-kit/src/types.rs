@@ -86,12 +86,12 @@ impl TypeSurface {
                     for name in manifest_requires(&types_dir) {
                         if let Some(module_dir) = types_dir.parent().and_then(|m| m.parent()) {
                             let required = module_dir.join(&name).join("types");
-                            if !surface_sources(&required).is_empty() {
+                            if !surface_sources(&required, Sandbox::Mission).is_empty() {
                                 queue.push(required);
                             }
                         }
                     }
-                    sources.extend(surface_sources(&types_dir));
+                    sources.extend(surface_sources(&types_dir, Sandbox::Mission));
                 }
                 let refs: Vec<&str> = sources.iter().map(String::as_str).collect();
                 return TypeSurface::parse(&refs);
@@ -107,7 +107,7 @@ impl TypeSurface {
         let mut ancestor = start;
         while let Some(dir) = ancestor {
             let candidate = dir.join("types");
-            if !surface_sources(&candidate).is_empty() {
+            if !surface_sources(&candidate, Sandbox::Mission).is_empty() {
                 return Some(candidate);
             }
             ancestor = dir.parent();
@@ -367,13 +367,30 @@ impl TypeSurface {
     }
 }
 
-/// A file joins the published DSL surface by opening with this LuaCATS meta
-/// marker; every marked .lua file in the discovered types/ dir is parsed, in
-/// filename order.
-pub const SURFACE_MARKER: &str = "---@meta dsl";
+/// A file joins a published DSL surface by opening with one of these LuaCATS
+/// meta markers, which name WHICH surface. Both grammars talk about the same
+/// module actions — Transfer.Units is a thing a mission does and a thing a
+/// mode permits — but they say different things about them, so they are
+/// parsed apart. Merged, the winner was whichever file was read last, and the
+/// two readers disagreed on the order.
+pub const MISSION_MARKER: &str = "---@meta mission_dsl";
+pub const MODE_MARKER: &str = "---@meta mode_dsl";
 
-fn declares_surface(source: &str) -> bool {
-    source.lines().take(4).any(|line| line.trim() == SURFACE_MARKER)
+/// Which sandbox a surface file publishes into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sandbox {
+    /// A mission's trigger files: do this action, now.
+    Mission,
+    /// A mode preset: this action is permitted, on these terms.
+    Mode,
+}
+
+fn sandbox_of(source: &str) -> Option<Sandbox> {
+    source.lines().take(4).find_map(|line| match line.trim() {
+        MISSION_MARKER => Some(Sandbox::Mission),
+        MODE_MARKER => Some(Sandbox::Mode),
+        _ => None,
+    })
 }
 
 /// The `requires = { "name", ... }` list from the module.lua manifest sitting
@@ -403,7 +420,7 @@ fn manifest_requires(types_dir: &std::path::Path) -> Vec<String> {
         .collect()
 }
 
-fn surface_sources(types_dir: &std::path::Path) -> Vec<String> {
+fn surface_sources(types_dir: &std::path::Path, sandbox: Sandbox) -> Vec<String> {
     let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(types_dir)
         .into_iter()
         .flatten()
@@ -415,7 +432,7 @@ fn surface_sources(types_dir: &std::path::Path) -> Vec<String> {
     files
         .into_iter()
         .filter_map(|path| std::fs::read_to_string(path).ok())
-        .filter(|source| declares_surface(source))
+        .filter(|source| sandbox_of(source) == Some(sandbox))
         .collect()
 }
 
@@ -598,9 +615,10 @@ pub fn explore_modules(modules_root: &std::path::Path) -> Vec<ModuleInfo> {
         entries.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
     dirs.sort();
     for dir in dirs {
-        let sources = surface_sources(&dir.join("types"));
+        let mission_sources = surface_sources(&dir.join("types"), Sandbox::Mission);
+        let mode_sources = surface_sources(&dir.join("types"), Sandbox::Mode);
         let manifest = std::fs::read_to_string(dir.join("module.lua")).unwrap_or_default();
-        if sources.is_empty() && manifest.is_empty() {
+        if mission_sources.is_empty() && mode_sources.is_empty() && manifest.is_empty() {
             continue;
         }
         let name = dir
@@ -608,16 +626,26 @@ pub fn explore_modules(modules_root: &std::path::Path) -> Vec<ModuleInfo> {
             .and_then(|n| n.to_str())
             .unwrap_or_default()
             .to_string();
-        let surface = {
-            let refs: Vec<&str> = sources.iter().map(String::as_str).collect();
-            TypeSurface::parse(&refs)
-        };
         // Roles are derivable from return types, so derive them: a callable
         // returning a condition is something a When can ask, one returning an
         // effect is something a Do can run, and a self-returning chain field
-        // is a step of the statement it belongs to.
-        let roles = surface.roles();
-        let Roles { mut statements, mut conditions, mut effects, mut nouns } = roles;
+        // is a step of the statement it belongs to. Each sandbox derives from
+        // its own parse — the module card shows both, but a mode grant never
+        // becomes the answer to what a mission verb means.
+        let roles_of = |sources: &[String]| {
+            let refs: Vec<&str> = sources.iter().map(String::as_str).collect();
+            TypeSurface::parse(&refs).roles()
+        };
+        let mission = roles_of(&mission_sources);
+        let mode = roles_of(&mode_sources);
+        let mut statements = mission.statements;
+        let mut conditions = mission.conditions;
+        let mut effects = mission.effects;
+        let mut nouns = mission.nouns;
+        statements.extend(mode.statements);
+        conditions.extend(mode.conditions);
+        effects.extend(mode.effects);
+        nouns.extend(mode.nouns);
         statements.sort_by(|a, b| a.name.cmp(&b.name));
         for list in [&mut conditions, &mut effects, &mut nouns] {
             list.sort();
@@ -870,12 +898,12 @@ mod tests {
         std::fs::create_dir_all(dir.join("types")).unwrap();
         std::fs::write(
             dir.join("types/dsl.lua"),
-            "---@meta dsl\n\n---@param name UnitDefName\n---@return MissionUnitDefRef\nfunction UnitDef(name) end\n",
+            "---@meta mission_dsl\n\n---@param name UnitDefName\n---@return MissionUnitDefRef\nfunction UnitDef(name) end\n",
         )
         .unwrap();
         std::fs::write(
             dir.join("types/extra.lua"),
-            "---@meta dsl\n\n---@alias UnitDefName string\n",
+            "---@meta mission_dsl\n\n---@alias UnitDefName string\n",
         )
         .unwrap();
         std::fs::write(
@@ -905,12 +933,12 @@ mod tests {
         .unwrap();
         std::fs::write(
             dir.join("modules/alpha/types/dsl.lua"),
-            "---@meta dsl\n\n---@class AlphaChain\n---@field Do fun(e: table): AlphaChain\n\n---@return AlphaChain\nfunction When(c) end\n",
+            "---@meta mission_dsl\n\n---@class AlphaChain\n---@field Do fun(e: table): AlphaChain\n\n---@return AlphaChain\nfunction When(c) end\n",
         )
         .unwrap();
         std::fs::write(
             dir.join("modules/beta/types/dsl.lua"),
-            "---@meta dsl\n\n---@class BetaVerbs\n---@field Zap fun(): table\n\n---@type BetaVerbs\nBeta = {}\n",
+            "---@meta mission_dsl\n\n---@class BetaVerbs\n---@field Zap fun(): table\n\n---@type BetaVerbs\nBeta = {}\n",
         )
         .unwrap();
 

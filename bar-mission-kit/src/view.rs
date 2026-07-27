@@ -1105,8 +1105,14 @@ fn phrase_for(key: &str) -> Option<&'static str> {
         "MatchFlow.Defeat" => Some("defeat for the player team"),
         "Unit.IsDestroyed" => Some("{unit_name} is destroyed"),
         "Unit.IsSpotted" => Some("the player has spotted {unit_name}"),
-        "Transfer.Units" => Some("give group {unit_group} to the player"),
+        // The receiving team is not a slot: slots fill from string and number
+        // leaves, and a team arrives as a noun path (Team.Player). Every
+        // mission hands to the player today, so the sentence says so — a
+        // handover to anyone else would read wrong until nouns can fill slots.
+        "Transfer.Units" => Some("share group {unit_group} with the player"),
+        "Transfer.Give" => Some("give group {unit_group} to the player, mode or no mode"),
         "Combat.Protect" => Some("protect {unit_name}"),
+        "Combat.Unprotect" => Some("stop protecting {unit_name}"),
         // {until} is not a literal slot: it renders the Until argument's own
         // sentence (see slot_view).
         "Combat.Protect.Until" => Some("protect {unit_name} until {until}"),
@@ -1929,7 +1935,7 @@ When(Objective("relieve_the_outpost").IsComplete())
         let view = render(&cm8_ast(), &domains(), &Scope::default());
         assert_wellformed(&view.form);
         assert!(view.form.contains("the mission has started"), "{}", view.form);
-        assert!(view.form.contains("give group "));
+        assert!(view.form.contains("share group "));
         assert!(view.form.contains("protect "));
         assert!(view.form.contains(" until "));
         assert!(view.form.contains("objective "));
