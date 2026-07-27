@@ -9,6 +9,11 @@ let diagnostics;
 function activate(context) {
 	const serverUrl = () => vscode.workspace.getConfiguration("barMissionEditor").get("serverUrl");
 
+	log = vscode.window.createOutputChannel("BAR Mission Editor");
+	context.subscriptions.push(log);
+	note(`activated; polling ${serverUrl()}`);
+	note(`workspace roots: ${workspaceRoots().map(([alias, real]) => (alias === real ? alias : `${alias} -> ${real}`)).join(" | ") || "(none)"}`);
+
 	diagnostics = vscode.languages.createDiagnosticCollection("bar-mission-kit");
 	context.subscriptions.push(diagnostics);
 
@@ -41,6 +46,7 @@ function activate(context) {
 		const up = await reachable(server);
 		if (up !== serverUp) {
 			serverUp = up;
+			note(up ? `serve reachable at ${server}` : `serve unreachable at ${server}`);
 			// An unreachable server is a blank panel otherwise, which reads as
 			// the extension being broken rather than serve not running.
 			for (const { view, focus } of views.values()) {
@@ -118,6 +124,8 @@ async function vocabulary(server) {
 // opens — seq alone cannot tell these apart, since it resets with serve.
 let lastOpenId = null;
 let serverUp = null;
+let log = null;
+const note = (m) => log && log.appendLine(`${new Date().toISOString().slice(11, 19)}  ${m}`);
 const views = new Map();
 const startedAt = Date.now();
 
@@ -183,17 +191,19 @@ async function pollOpenTarget(server) {
 	const id = `${target.ts}:${target.seq}`;
 	const seen = id === lastOpenId;
 	lastOpenId = id;
-	if (seen || target.ts <= startedAt) return;
-	const routed = routeIntoWorkspace(target.file);
-	if (!routed) {
-		// Silence here reads as "the button is broken". Say which file was
-		// asked for and which roots were considered.
-		console.warn(
-			`[bar-mission-editor] ${target.file} is outside this window: ` +
-				workspaceRoots().map(([, real]) => real).join(", ")
-		);
+	if (seen) return;
+	if (target.ts <= startedAt) {
+		note(`ignoring ${target.file}:${target.line} — written before this window opened`);
 		return;
 	}
+	note(`open request ${target.file}:${target.line}`);
+	const routed = routeIntoWorkspace(target.file);
+	if (!routed) {
+		// Silence here reads as "the button is broken".
+		note(`  not in this window; roots: ${workspaceRoots().map(([, real]) => real).join(", ")}`);
+		return;
+	}
+	note(`  opening ${routed}`);
 	const row = Math.max(0, (target.line || 1) - 1);
 	vscode.window.showTextDocument(vscode.Uri.file(routed), {
 		preview: false,

@@ -192,8 +192,10 @@
 	.me-noun-open { cursor: pointer; }
 	.me-noun-open:hover { background: #1a2634; }
 	.me-step-live { flex: 0 0 auto; }
-	.me-jump { cursor: pointer; }
-	.me-jump:hover { color: #cfe4ff; text-decoration: underline; }
+	/* The row is the target, not the text — a tint says "clickable" without
+	   claiming the words are a link. */
+	.me-jump { cursor: pointer; border-radius: 4px; }
+	.me-jump:hover { background: #16202c; }
 
 	/* Embedded (?embed=1, the VS Code sidebar): the host provides the chrome. */
 	body.embed { padding: 4px 6px; }
