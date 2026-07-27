@@ -1,19 +1,22 @@
 {
   "name": "missions",
-  "comment": "Presentation overlay only: palette labels and templates. The GRAMMAR (statement heads, chain verbs, slot semantics, editor enums) is derived from the game's LuaCATS annotations at runtime (src/types.rs); collect_ast merges the derived enums into this overlay as 'enums'.",
-  "conditions": [
-    { "label": "Mission started", "template": "MatchFlow.Started()" },
-    { "label": "Player has units", "template": "Team.Player.Has(UnitDef(\"armpw\"), 3)" },
-    { "label": "Objective complete", "template": "Objective(\"OBJECTIVE\").IsComplete()" },
-    { "label": "Unit destroyed", "template": "Unit(\"UNIT_NAME\").IsDestroyed()" },
-    { "label": "Unit spotted", "template": "Unit(\"UNIT_NAME\").IsSpotted(Team.Player)" }
-  ],
+  "comment": "Labels and curated extras only. The palette itself is derived: every verb a module publishes becomes an entry, with an example call built from its signature (src/types.rs template_for). A label here overrides the humanised default; extras are compositions no signature implies.",
+  "labels": {
+    "MatchFlow.Started": "Mission started",
+    "Team.Player.Has": "Player has units",
+    "Objective.IsComplete": "Objective complete",
+    "Unit.IsDestroyed": "Unit destroyed",
+    "Unit.IsSpotted": "Unit spotted",
+    "Objective.Complete": "Complete objective",
+    "Transfer.Units": "Transfer group",
+    "Combat.Protect": "Protect unit",
+    "MatchFlow.Victory": "Victory",
+    "MatchFlow.Defeat": "Defeat"
+  },
   "effects": [
-    { "label": "Complete objective", "template": "Objective(\"OBJECTIVE\").Complete()" },
-    { "label": "Transfer group", "template": "Transfer.Units(\"GROUP\", Team.Player)" },
-    { "label": "Protect unit", "template": "Combat.Protect(Unit(\"UNIT_NAME\"))" },
-    { "label": "Protect unit until", "template": "Combat.Protect(Unit(\"UNIT_NAME\")).Until(Objective(\"OBJECTIVE\").IsComplete())" },
-    { "label": "Victory", "template": "MatchFlow.Victory(Team.Player)" },
-    { "label": "Defeat", "template": "MatchFlow.Defeat(Team.Player)" }
+    {
+      "label": "Protect unit until",
+      "template": "Combat.Protect(Unit(\"UNIT_NAME\")).Until(Objective(\"OBJECTIVE\").IsComplete())"
+    }
   ]
 }

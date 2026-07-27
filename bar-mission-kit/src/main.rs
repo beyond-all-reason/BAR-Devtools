@@ -117,6 +117,57 @@ fn display_path(file: &Path, roots: &[PathBuf]) -> String {
     file.display().to_string()
 }
 
+/// Every verb a module publishes becomes a palette entry, with the example call
+/// built from its signature. Labels and compositions come from the overlay;
+/// nothing here is a second copy of the vocabulary.
+fn palette(
+    overlay: &mut serde_json::Map<String, serde_json::Value>,
+    types: &types::TypeSurface,
+    modules: &[types::ModuleInfo],
+) {
+    let labels: std::collections::BTreeMap<String, String> = overlay
+        .get("labels")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    let derived = types.roles();
+    for (role, paths) in [
+        ("conditions", if modules.is_empty() { derived.conditions.clone() }
+            else { modules.iter().flat_map(|m| m.conditions.iter().cloned()).collect() }),
+        ("effects", if modules.is_empty() { derived.effects.clone() }
+            else { modules.iter().flat_map(|m| m.effects.iter().cloned()).collect() }),
+    ] {
+        let mut entries: Vec<serde_json::Value> = Vec::new();
+        for path in paths {
+            let Some(template) = types.template_for(&path) else { continue };
+            entries.push(serde_json::json!({
+                "label": labels.get(&path).cloned().unwrap_or_else(|| humanize(&path)),
+                "template": template,
+            }));
+        }
+        if let Some(extra) = overlay.get(role).and_then(|v| v.as_array()) {
+            entries.extend(extra.iter().cloned());
+        }
+        overlay.insert(role.into(), serde_json::Value::Array(entries));
+    }
+}
+
+/// "Transfer.Units" -> "Transfer units". A label the overlay does not override.
+fn humanize(path: &str) -> String {
+    let mut words: Vec<String> = Vec::new();
+    for (i, segment) in path.split('.').enumerate() {
+        let mut current = String::new();
+        for (j, ch) in segment.char_indices() {
+            if ch.is_uppercase() && j > 0 {
+                words.push(std::mem::take(&mut current));
+            }
+            current.push(if i == 0 && j == 0 { ch } else { ch.to_ascii_lowercase() });
+        }
+        words.push(current);
+    }
+    words.retain(|w| !w.is_empty());
+    words.join(" ")
+}
+
 pub(crate) const MISSION_SURFACE: &str = include_str!("../surfaces/missions.json");
 
 pub fn collect_ast(paths: &[PathBuf], generation: u64) -> (model::MissionAst, Vec<model::Finding>) {
@@ -181,10 +232,23 @@ pub fn collect_ast(paths: &[PathBuf], generation: u64) -> (model::MissionAst, Ve
             .and_then(|f| types::TypeSurface::types_dir_near(f))
             .and_then(|t| t.parent().and_then(|m| m.parent()).map(|p| p.to_path_buf()))
         {
+            let modules = types::explore_modules(&root);
+            palette(overlay, &types::TypeSurface::load_near(&files), &modules);
             overlay.insert(
                 "modules".into(),
-                serde_json::to_value(types::explore_modules(&root)).expect("serializable modules"),
+                serde_json::to_value(modules).expect("serializable modules"),
             );
+        }
+    }
+    if surface
+        .get("conditions")
+        .and_then(|v| v.as_array())
+        .is_none_or(|a| a.is_empty())
+    {
+        // No modules tree in reach (a mission opened on its own): derive the
+        // palette from the types the kit mirrors, so the editor is still usable.
+        if let Some(overlay) = surface.as_object_mut() {
+            palette(overlay, types::TypeSurface::builtin(), &[]);
         }
     }
     ast.surface = surface;

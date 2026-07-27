@@ -1587,13 +1587,45 @@ When(Objective("build_pawns").IsComplete())
 	.Do(MatchFlow.Victory(Team.Player))
 "#;
 
+    /// The overlay plus a derived palette — the same shape collect_ast builds,
+    /// so a test sees what the editor sees rather than the raw overlay.
+    fn test_surface() -> serde_json::Value {
+        let mut surface: serde_json::Value = serde_json::from_str(crate::MISSION_SURFACE).unwrap();
+        let types = crate::types::TypeSurface::builtin();
+        let labels: std::collections::BTreeMap<String, String> =
+            serde_json::from_value(surface["labels"].clone()).unwrap_or_default();
+        for (role, paths) in [
+            ("conditions", vec!["MatchFlow.Started", "Team.Player.Has", "Objective.IsComplete",
+                                "Unit.IsDestroyed", "Unit.IsSpotted"]),
+            ("effects", vec!["Objective.Complete", "Transfer.Units", "Combat.Protect",
+                             "MatchFlow.Victory", "MatchFlow.Defeat"]),
+        ] {
+            let mut entries: Vec<serde_json::Value> = paths
+                .iter()
+                .filter_map(|p| {
+                    types.template_for(p).map(|template| {
+                        serde_json::json!({
+                            "label": labels.get(*p).cloned().unwrap_or_else(|| (*p).to_string()),
+                            "template": template,
+                        })
+                    })
+                })
+                .collect();
+            if let Some(extra) = surface.get(role).and_then(|v| v.as_array()) {
+                entries.extend(extra.iter().cloned());
+            }
+            surface[role] = serde_json::Value::Array(entries);
+        }
+        surface
+    }
+
     fn ast() -> MissionAst {
         let rec = crate::recognizer::recognize_file("triggers/win.lua", WIN).unwrap();
         MissionAst {
             version: 1,
             generation: 7,
             files: vec![rec.file],
-            surface: serde_json::from_str(crate::MISSION_SURFACE).unwrap(),
+            surface: test_surface(),
         }
     }
 
@@ -1864,7 +1896,7 @@ When(Objective("relieve_the_outpost").IsComplete())
             version: 1,
             generation: 3,
             files: vec![rec.file],
-            surface: serde_json::from_str(crate::MISSION_SURFACE).unwrap(),
+            surface: test_surface(),
         }
     }
 
@@ -1889,7 +1921,7 @@ When(Objective("relieve_the_outpost").IsComplete())
     fn the_roster_renders_with_typed_pickers_and_no_trigger_palette() {
         let roster = "Spawn(UnitDef(\"corlab\"), \"gaia\")\n\t.At(0.42, 0.42)\n\t.Named(\"hub\")\n\t.Grouped(\"outpost\")\n";
         let rec = crate::recognizer::recognize_file("units.lua", roster).unwrap();
-        let mut surface: serde_json::Value = serde_json::from_str(crate::MISSION_SURFACE).unwrap();
+        let mut surface: serde_json::Value = test_surface();
         surface["enums"] =
             serde_json::to_value(crate::types::TypeSurface::builtin().enums()).unwrap();
         let ast = MissionAst { version: 1, generation: 1, files: vec![rec.file], surface };

@@ -434,6 +434,122 @@ pub struct Roles {
     pub nouns: Vec<String>,
 }
 
+/// An example call for a published verb, built from its signature. The palette
+/// used to hand-write these, which meant a renamed verb left a template nobody
+/// could run — the types are the only authored copy, so derive from them.
+impl TypeSurface {
+    /// Roles derived from return types: a callable returning a condition is
+    /// something a When can ask, one returning an effect is something a Do can
+    /// run, a self-returning chain field is a step of its statement.
+    pub fn roles(&self) -> Roles {
+        let mut roles = Roles::default();
+        for (name, global) in &self.globals {
+            match global {
+                Global::Fn(sig) => match sig.ret.as_deref() {
+                    Some(ret) if self.is_chain_class(ret) => {
+                        let mut steps: Vec<String> = self
+                            .classes
+                            .get(ret)
+                            .map(|fields| fields.keys().map(|f| format!(".{f}")).collect())
+                            .unwrap_or_default();
+                        steps.sort();
+                        roles.statements.push(Statement { name: name.clone(), steps });
+                    }
+                    Some(ret) => self.walk_class(ret, name, &mut roles),
+                    None => {}
+                },
+                Global::Object(members) => {
+                    if let Some(class) = members.get("") {
+                        self.walk_class(class, name, &mut roles);
+                    } else {
+                        for (member, class) in members {
+                            self.walk_class(class, &format!("{name}.{member}"), &mut roles);
+                        }
+                    }
+                }
+            }
+        }
+        roles
+    }
+
+    pub fn template_for(&self, path: &str) -> Option<String> {
+        let mut segments = path.split('.');
+        let root = segments.next()?;
+        let mut out = String::from(root);
+        let mut class = match self.globals.get(root)? {
+            Global::Fn(sig) => {
+                out.push_str(&self.arguments(sig));
+                sig.ret.clone()?
+            }
+            Global::Object(members) => match members.get("") {
+                // `---@type Class`: the global IS the class; segments that
+                // follow are its fields.
+                Some(class) => class.clone(),
+                // `---@type { Member: Class }`: the next segment names a member.
+                None => {
+                    let next = segments.next()?;
+                    out.push('.');
+                    out.push_str(next);
+                    members.get(next)?.clone()
+                }
+            },
+        };
+        for segment in segments {
+            let sig = self.classes.get(&class)?.get(segment)?;
+            out.push('.');
+            out.push_str(segment);
+            // Namespace or call, decided exactly as walk_class decides roles:
+            // conditions and effects are calls even though their returns are
+            // classes; anything else returning a class is a namespace.
+            let namespace = match sig.ret.as_deref() {
+                Some("MissionCondition") => false,
+                Some(ret) if ret.contains("Effect") => false,
+                Some(ret) => self.classes.contains_key(ret),
+                None => false,
+            };
+            if !namespace {
+                out.push_str(&self.arguments(sig));
+            }
+            class = sig.ret.clone().unwrap_or_default();
+        }
+        Some(out)
+    }
+
+    fn arguments(&self, sig: &FnSig) -> String {
+        let args: Vec<String> = sig.params.iter().map(|(_, ty)| self.example(ty)).collect();
+        format!("({})", args.join(", "))
+    }
+
+    /// A stand-in value per parameter type. Placeholders are shouted so an
+    /// author sees what still needs filling in.
+    fn example(&self, ty: &str) -> String {
+        match ty.trim_end_matches('?') {
+            "MissionUnitGroup" => "\"GROUP\"".into(),
+            "MissionUnitName" => "\"UNIT_NAME\"".into(),
+            "ObjectiveName" => "\"OBJECTIVE\"".into(),
+            "MissionUnitGroupName" => "\"GROUP\"".into(),
+            "UnitDefName" => "\"armpw\"".into(),
+            "MissionTeam" => "Team.Player".into(),
+            "MissionTeamRole" => "\"player\"".into(),
+            "MissionUnitRef" => "Unit(\"UNIT_NAME\")".into(),
+            "MissionUnitDefRef" => "UnitDef(\"armpw\")".into(),
+            "MissionObjective" => "Objective(\"OBJECTIVE\")".into(),
+            "MissionCondition" => "Objective(\"OBJECTIVE\").IsComplete()".into(),
+            "MissionEffect" => "Objective(\"OBJECTIVE\").Complete()".into(),
+            "integer" | "number" => "3".into(),
+            "boolean" => "true".into(),
+            "string" => "\"TEXT\"".into(),
+            other => {
+                // A literal-union alias is its own best example.
+                match self.aliases.get(other) {
+                    Some(Some(values)) if !values.is_empty() => format!("\"{}\"", values[0]),
+                    _ => "nil".into(),
+                }
+            }
+        }
+    }
+}
+
 /// One module as the editor shows it: what it is, what it requires, and what
 /// vocabulary it puts in the sandbox. Derived from the same marked types the
 /// grammar comes from — a module that publishes a surface is explorable, no
@@ -499,33 +615,7 @@ pub fn explore_modules(modules_root: &std::path::Path) -> Vec<ModuleInfo> {
         // returning a condition is something a When can ask, one returning an
         // effect is something a Do can run, and a self-returning chain field
         // is a step of the statement it belongs to.
-        let mut roles = Roles::default();
-        for (name, global) in &surface.globals {
-            match global {
-                Global::Fn(sig) => match sig.ret.as_deref() {
-                    Some(ret) if surface.is_chain_class(ret) => {
-                        let mut steps: Vec<String> = surface
-                            .classes
-                            .get(ret)
-                            .map(|fields| fields.keys().map(|f| format!(".{f}")).collect())
-                            .unwrap_or_default();
-                        steps.sort();
-                        roles.statements.push(Statement { name: name.clone(), steps });
-                    }
-                    Some(ret) => surface.walk_class(ret, name, &mut roles),
-                    None => {}
-                },
-                Global::Object(members) => {
-                    if let Some(class) = members.get("") {
-                        surface.walk_class(class, name, &mut roles);
-                    } else {
-                        for (member, class) in members {
-                            surface.walk_class(class, &format!("{name}.{member}"), &mut roles);
-                        }
-                    }
-                }
-            }
-        }
+        let roles = surface.roles();
         let Roles { mut statements, mut conditions, mut effects, mut nouns } = roles;
         statements.sort_by(|a, b| a.name.cmp(&b.name));
         for list in [&mut conditions, &mut effects, &mut nouns] {
