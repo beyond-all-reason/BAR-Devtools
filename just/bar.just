@@ -270,11 +270,10 @@ mission-editor-install:
     bash "$DEVTOOLS_DIR/scripts/mission-kit-cargo.sh" build --release
     mkdir -p "$src/server"
     cp "$DEVTOOLS_DIR/bar-mission-kit/target/release/bar-mission-kit" "$src/server/"
-    # Older version dirs shadow nothing, but they do accumulate and VS Code
-    # scans every one of them at startup.
-    for stale in "$HOME/.vscode/extensions/beyond-all-reason.bar-mission-editor-"*; do
-        [ "$stale" = "$dest" ] || rm -rf "$stale"
-    done
+    # Replace, never overwrite in place: the extension runs the bundled server
+    # straight out of this directory, and cp onto a running binary is ETXTBSY.
+    # Older version dirs go too - they accumulate and VS Code scans each one.
+    rm -rf "$HOME/.vscode/extensions/beyond-all-reason.bar-mission-editor-"*
     mkdir -p "$dest"
     cp -r "$src/." "$dest/"
     ok "installed to $dest"
