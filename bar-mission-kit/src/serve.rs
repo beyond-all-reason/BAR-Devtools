@@ -7,7 +7,7 @@
 //!
 //! Every write to a mission file goes through the recognizer first: an edit
 //! that produces a parse error or a grammar finding is rejected and reported
-//! in <editor-dir>/status.json. The .lua file stays the source of truth.
+//! in <editor-dir>/status.json. The mission's .lua files stay the source of truth.
 
 use crate::model::{MissionAst, Span};
 use crate::recognizer;
