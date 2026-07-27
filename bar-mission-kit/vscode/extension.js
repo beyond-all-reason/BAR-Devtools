@@ -20,7 +20,8 @@ function activate(context) {
 			vscode.window.registerWebviewViewProvider(id, {
 				resolveWebviewView(view) {
 					view.webview.options = { enableScripts: true };
-					view.webview.html = frame(serverUrl(), focus);
+					views.set(id, { view, focus });
+					view.webview.html = paint(serverUrl(), focus);
 				},
 			})
 		);
@@ -35,8 +36,18 @@ function activate(context) {
 		)
 	);
 
-	const timer = setInterval(() => {
+	const timer = setInterval(async () => {
 		const server = serverUrl();
+		const up = await reachable(server);
+		if (up !== serverUp) {
+			serverUp = up;
+			// An unreachable server is a blank panel otherwise, which reads as
+			// the extension being broken rather than serve not running.
+			for (const { view, focus } of views.values()) {
+				view.webview.html = paint(server, focus);
+			}
+		}
+		if (!up) return;
 		pollDiagnostics(server);
 		pollOpenTarget(server);
 		paintEdges(server);
@@ -106,6 +117,8 @@ async function vocabulary(server) {
 // we started is a live request, so the first click after a reload still
 // opens — seq alone cannot tell these apart, since it resets with serve.
 let lastOpenId = null;
+let serverUp = null;
+const views = new Map();
 const startedAt = Date.now();
 
 const fs = require("fs");
@@ -262,6 +275,45 @@ async function paintEdges(server) {
 		hoverMessage: `outside the mission surface: ${o.reason} — this runs as plain Lua; no mission tooling sees it`,
 	}));
 	editor.setDecorations(edgeDecoration, decorations);
+}
+
+// Any answer means serve is listening; only a transport error means it is not.
+async function reachable(server) {
+	try {
+		await fetch(server + "/open_request");
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function paint(server, focus) {
+	return serverUp === false ? waitingFrame(server) : frame(server, focus);
+}
+
+// Names the command and the directory to run it in, because "nothing here" is
+// not an actionable message.
+function waitingFrame(server) {
+	return `<!DOCTYPE html><html>
+<head>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';"/>
+<style>
+ body { margin: 0; padding: 14px; font-family: var(--vscode-font-family); font-size: var(--vscode-font-size);
+        color: var(--vscode-foreground); background: var(--vscode-sideBar-background); }
+ h3 { margin: 0 0 6px; font-size: 1em; }
+ p { margin: 0 0 10px; color: var(--vscode-descriptionForeground); }
+ code { display: block; padding: 7px 9px; border-radius: 4px; user-select: all;
+        background: var(--vscode-textCodeBlock-background); font-family: var(--vscode-editor-font-family); }
+ small { color: var(--vscode-descriptionForeground); }
+</style>
+</head>
+<body>
+ <h3>The mission editor is not being served</h3>
+ <p>Start it in <strong>BAR-Devtools</strong>:</p>
+ <code>just bar::mission-serve</code>
+ <p></p>
+ <small>Watching ${server} — this panel opens as soon as it answers.</small>
+</body></html>`;
 }
 
 function frame(server, focus) {
