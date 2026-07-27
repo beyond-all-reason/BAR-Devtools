@@ -57,16 +57,22 @@ require_clean() {
     fi
 }
 
-# Every branch must exist and be an ancestor of the next. A break means the
-# stack is not the one described, so refuse to act on it.
+assert_exists() {
+    local missing=0
+    for branch in "${STACK[@]}"; do
+        git rev-parse --verify --quiet "$branch" >/dev/null || { err "branch $branch does not exist"; missing=1; }
+    done
+    [ "$missing" -eq 0 ] || exit 1
+}
+
+# Every branch must be an ancestor of the next. A break means the stack is not
+# the one described, so reporting and pushing refuse to act on it — but rebase
+# does not check this, because a broken chain is exactly what it repairs:
+# amending a branch mid-stack orphans everything above it by definition.
 assert_chain() {
+    assert_exists
     local prev="" broken=0
     for branch in "${STACK[@]}"; do
-        if ! git rev-parse --verify --quiet "$branch" >/dev/null; then
-            err "branch $branch does not exist"
-            broken=1
-            continue
-        fi
         if [ -n "$prev" ] && ! git merge-base --is-ancestor "$prev" "$branch"; then
             err "$prev is not an ancestor of $branch - the chain is broken"
             broken=1
@@ -140,7 +146,7 @@ cmd_status() {
 
 cmd_rebase() {
     require_clean
-    assert_chain
+    assert_exists
     git fetch "$STACK_REMOTE" --quiet
     local base stamp branch prev
     base="$(resolve_base)"
