@@ -251,6 +251,19 @@ mission-kit-test:
     enter_distrobox bash "$DEVTOOLS_DIR/bar-mission-kit/check_terminal_js.sh"
     ok "All tests passed"
 
+# Install the VS Code extension (copies over any previous install; reload the window after)
+mission-editor-install:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    src="$DEVTOOLS_DIR/bar-mission-kit/vscode"
+    version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$src/package.json")"
+    dest="$HOME/.vscode/extensions/beyond-all-reason.bar-mission-editor-$version"
+    mkdir -p "$dest"
+    cp -r "$src/." "$dest/"
+    ok "installed to $dest"
+    info "Reload the VS Code window (Developer: Reload Window) to pick it up."
+
 # Validate mission trigger files (default: hello_pawns)
 mission-check *args: require-bar
     #!/usr/bin/env bash
