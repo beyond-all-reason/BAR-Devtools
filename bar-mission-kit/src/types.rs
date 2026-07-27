@@ -11,8 +11,18 @@
 
 use std::collections::BTreeMap;
 
-pub const DSL_SNAPSHOT: &str = include_str!("../fixtures/dsl.lua");
-pub const MISSIONS_TYPES_SNAPSHOT: &str = include_str!("../fixtures/missions_types.lua");
+/// The game's published DSL types, one file per module exactly as the game
+/// ships them — never merged. A merged copy hid a rename once: two modules'
+/// vocabulary fused into one file cannot be diffed against either module.
+/// `just bar::sync-kit-fixtures --check` fails when these drift.
+pub const SNAPSHOTS: &[&str] = &[
+    include_str!("../fixtures/modules/missions/types/dsl.lua"),
+    include_str!("../fixtures/modules/missions/types/missions.lua"),
+    include_str!("../fixtures/modules/missions/types/mode_dsl.lua"),
+    include_str!("../fixtures/modules/matchflow/types/dsl.lua"),
+    include_str!("../fixtures/modules/combat/types/dsl.lua"),
+    include_str!("../fixtures/modules/transfer/types/mode_dsl.lua"),
+];
 
 #[derive(Debug, Clone)]
 pub struct FnSig {
@@ -52,7 +62,7 @@ impl TypeSurface {
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn builtin() -> &'static TypeSurface {
         static BUILTIN: std::sync::OnceLock<TypeSurface> = std::sync::OnceLock::new();
-        BUILTIN.get_or_init(|| TypeSurface::parse(&[DSL_SNAPSHOT, MISSIONS_TYPES_SNAPSHOT]))
+        BUILTIN.get_or_init(|| TypeSurface::parse(SNAPSHOTS))
     }
 
     /// Load the game's annotation files by walking ancestors of the given
@@ -86,7 +96,7 @@ impl TypeSurface {
                 return TypeSurface::parse(&refs);
             }
         }
-        TypeSurface::parse(&[DSL_SNAPSHOT, MISSIONS_TYPES_SNAPSHOT])
+        TypeSurface::parse(SNAPSHOTS)
     }
 
     /// The nearest ancestor types/ dir containing surface-marked files —

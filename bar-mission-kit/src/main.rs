@@ -453,7 +453,7 @@ When(C()).Do(E())
 
     #[test]
     fn trigger_files_reference_roster_names_for_the_cross_check() {
-        let src = "When(Unit(\"hub\").IsDestroyed())\n\t.Do(Units.Transfer(\"outpost\", Team.Player))\n";
+        let src = "When(Unit(\"hub\").IsDestroyed())\n\t.Do(Transfer.Units(\"outpost\", Team.Player))\n";
         let rec = crate::recognizer::recognize_file("triggers/t.lua", src).unwrap();
         let units: Vec<&str> = rec.file.unit_refs.iter().map(|r| r.name.as_str()).collect();
         let groups: Vec<&str> = rec.file.group_refs.iter().map(|r| r.name.as_str()).collect();

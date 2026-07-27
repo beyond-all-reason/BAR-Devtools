@@ -247,9 +247,15 @@ mission-kit-test:
     bash "$DEVTOOLS_DIR/scripts/mission-kit-cargo.sh" test
     # The terminal's script is embedded HTML: cargo cannot see a syntax error
     # in it, only a blank panel at runtime can.
+    step "Checking the kit's type fixtures against the game..."
+    bash "$DEVTOOLS_DIR/scripts/sync-kit-fixtures.sh" --check
     step "Checking the browser terminal's script..."
     enter_distrobox bash "$DEVTOOLS_DIR/bar-mission-kit/check_terminal_js.sh"
     ok "All tests passed"
+
+# Mirror the game's DSL types into the kit's fixtures (--check fails if stale)
+sync-kit-fixtures *args: require-bar
+    @bash "$DEVTOOLS_DIR/scripts/sync-kit-fixtures.sh" {{args}}
 
 # Install the VS Code extension (copies over any previous install; reload the window after)
 mission-editor-install:

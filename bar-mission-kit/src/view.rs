@@ -1087,7 +1087,7 @@ fn phrase_for(key: &str) -> Option<&'static str> {
         "MatchFlow.Defeat" => Some("defeat for the player team"),
         "Unit.IsDestroyed" => Some("{unit_name} is destroyed"),
         "Unit.IsSpotted" => Some("the player has spotted {unit_name}"),
-        "Units.Transfer" => Some("give group {unit_group} to the player"),
+        "Transfer.Units" => Some("give group {unit_group} to the player"),
         "Combat.Protect" => Some("protect {unit_name}"),
         // {until} is not a literal slot: it renders the Until argument's own
         // sentence (see slot_view).
@@ -1837,7 +1837,7 @@ When(Objective("build_pawns").IsComplete())
             assert!(conditions.contains(verb), "missing condition template {verb}");
         }
         let effects = templates(&view.vocabulary.effects);
-        for verb in [".Complete()", "Units.Transfer(", "Combat.Protect(", ".Until(", "MatchFlow.Victory(", "MatchFlow.Defeat("] {
+        for verb in [".Complete()", "Transfer.Units(", "Combat.Protect(", ".Until(", "MatchFlow.Victory(", "MatchFlow.Defeat("] {
             assert!(effects.contains(verb), "missing effect template {verb}");
         }
         assert_eq!(view.vocabulary.objectives, vec!["build_pawns".to_string()]);
@@ -1846,7 +1846,7 @@ When(Objective("build_pawns").IsComplete())
 
     const CM8: &str = r#"
 When(MatchFlow.Started())
-	.Do(Units.Transfer("outpost_auto", Team.Player))
+	.Do(Transfer.Units("outpost_auto", Team.Player))
 	.Do(Combat.Protect(Unit("outpost_command_hub"))
 		.Until(Objective("find_the_enclave").IsComplete()))
 

@@ -10,7 +10,7 @@
   ],
   "effects": [
     { "label": "Complete objective", "template": "Objective(\"OBJECTIVE\").Complete()" },
-    { "label": "Transfer group", "template": "Units.Transfer(\"GROUP\", Team.Player)" },
+    { "label": "Transfer group", "template": "Transfer.Units(\"GROUP\", Team.Player)" },
     { "label": "Protect unit", "template": "Combat.Protect(Unit(\"UNIT_NAME\"))" },
     { "label": "Protect unit until", "template": "Combat.Protect(Unit(\"UNIT_NAME\")).Until(Objective(\"OBJECTIVE\").IsComplete())" },
     { "label": "Victory", "template": "MatchFlow.Victory(Team.Player)" },
