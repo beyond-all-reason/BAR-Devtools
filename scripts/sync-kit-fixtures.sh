@@ -26,12 +26,12 @@ while IFS= read -r src; do
     else
         sed 's/\r$//' "$src" > "$out"
     fi
-done < <(grep -rlE "@meta ((mission|mode)_dsl|actions)" "$BAR_DIR"/modules/*/types/*.lua | sort)
+done < <(grep -rlE "@meta (actions|policy )" "$BAR_DIR"/modules/*/types/*.lua | sort)
 
 # A file still on the old undifferentiated marker publishes into no sandbox at
 # all: the kit would simply stop seeing it. Loudly, then.
-if orphans="$(grep -rl "@meta dsl$" "$BAR_DIR"/modules/*/types/*.lua 2>/dev/null)"; then
-    echo "surfaces on the retired '@meta dsl' marker (use mission_dsl, mode_dsl or actions):" >&2
+if orphans="$(grep -rlE "@meta (dsl|(mission|mode)_dsl)$" "$BAR_DIR"/modules/*/types/*.lua 2>/dev/null)"; then
+    echo "surfaces on a retired marker (use "actions" or "policy <language>"):" >&2
     echo "$orphans" >&2
     stale=1
 fi

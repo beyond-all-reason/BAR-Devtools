@@ -1,4 +1,4 @@
----@meta mission_dsl
+---@meta policy trigger
 
 --- The trigger-file authoring environment: the statements and handles only
 --- a mission speaks. Actions a module can perform live in its own

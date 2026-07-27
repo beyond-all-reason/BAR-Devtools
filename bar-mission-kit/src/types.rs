@@ -16,13 +16,13 @@ use std::collections::BTreeMap;
 /// vocabulary fused into one file cannot be diffed against either module.
 /// `just bar::sync-kit-fixtures --check` fails when these drift.
 pub const SNAPSHOTS: &[&str] = &[
-    include_str!("../fixtures/modules/missions/types/mission_dsl.lua"),
     include_str!("../fixtures/modules/missions/types/missions.lua"),
-    include_str!("../fixtures/modules/missions/types/mode_dsl.lua"),
+    include_str!("../fixtures/modules/missions/types/mode_policy.lua"),
+    include_str!("../fixtures/modules/missions/types/trigger_policy.lua"),
     include_str!("../fixtures/modules/combat/types/actions.lua"),
     include_str!("../fixtures/modules/matchflow/types/actions.lua"),
     include_str!("../fixtures/modules/transfer/types/actions.lua"),
-    include_str!("../fixtures/modules/transfer/types/mode_dsl.lua"),
+    include_str!("../fixtures/modules/transfer/types/mode_policy.lua"),
 ];
 
 #[derive(Debug, Clone)]
@@ -110,12 +110,12 @@ impl TypeSurface {
                     for name in manifest_requires(&types_dir) {
                         if let Some(module_dir) = types_dir.parent().and_then(|m| m.parent()) {
                             let required = module_dir.join(&name).join("types");
-                            if !surface_sources(&required, Sandbox::Mission).is_empty() {
+                            if !surface_sources(&required, "trigger").is_empty() {
                                 queue.push(required);
                             }
                         }
                     }
-                    sources.extend(surface_sources(&types_dir, Sandbox::Mission));
+                    sources.extend(surface_sources(&types_dir, "trigger"));
                 }
                 let refs: Vec<&str> = sources.iter().map(String::as_str).collect();
                 return TypeSurface::parse(&refs);
@@ -131,7 +131,7 @@ impl TypeSurface {
         let mut ancestor = start;
         while let Some(dir) = ancestor {
             let candidate = dir.join("types");
-            if !surface_sources(&candidate, Sandbox::Mission).is_empty() {
+            if !surface_sources(&candidate, "trigger").is_empty() {
                 return Some(candidate);
             }
             ancestor = dir.parent();
@@ -432,38 +432,38 @@ impl TypeSurface {
     }
 }
 
-/// A file joins a published DSL surface by opening with one of these LuaCATS
-/// meta markers, which name WHICH surface. Both grammars talk about the same
-/// module actions — Transfer.Units is a thing a mission does and a thing a
-/// mode permits — but they say different things about them, so they are
-/// parsed apart. Merged, the winner was whichever file was read last, and the
-/// two readers disagreed on the order.
 /// Reserved field key for a class's own call signature (`---@overload`).
 pub const CALLABLE: &str = "__call";
 
-pub const MISSION_MARKER: &str = "---@meta mission_dsl";
-pub const MODE_MARKER: &str = "---@meta mode_dsl";
-/// A module's actions, declared once and read by both grammars. This is the
-/// marker that makes .Allow(Transfer.Units) and Do(Transfer.Units(...)) the
-/// same entry rather than two that agree.
+/// Two tiers, and a file opens by naming which one it is.
+///
+/// `---@meta actions` — what a module can DO. Read by every policy language,
+/// because they are all talking about the same capabilities: this is what
+/// makes .Allow(Transfer.Units) and Do(Transfer.Units(...)) one entry rather
+/// than two that agree.
+///
+/// `---@meta policy <language>` — how RULES over those actions are written. A
+/// trigger says when to perform one, a mode says whether it may be performed.
+/// Same tier, different languages, so they are parsed apart — and the language
+/// is a parameter, not a list here: hosting a new one costs a module a file
+/// and costs the kit nothing.
 pub const ACTIONS_MARKER: &str = "---@meta actions";
+pub const POLICY_MARKER: &str = "---@meta policy";
 
-/// Which sandbox a surface file publishes into.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Sandbox {
-    /// A mission's trigger files: do this action, now.
-    Mission,
-    /// A mode preset: this action is permitted, on these terms.
-    Mode,
-}
+/// The policy language a file is written for, named by the file itself.
+/// "trigger" is a mission's When ... Do; "mode" is a preset's grants.
+pub type Policy<'a> = &'a str;
 
-/// Whether a file publishes into the given sandbox: its own, or both.
-fn publishes_into(source: &str, sandbox: Sandbox) -> bool {
-    source.lines().take(4).any(|line| match line.trim() {
-        ACTIONS_MARKER => true,
-        MISSION_MARKER => sandbox == Sandbox::Mission,
-        MODE_MARKER => sandbox == Sandbox::Mode,
-        _ => false,
+/// Whether a file publishes into the given policy language: either it declares
+/// actions (which every language reads) or it names that language.
+fn publishes_into(source: &str, policy: Policy) -> bool {
+    source.lines().take(4).any(|line| {
+        let line = line.trim();
+        line == ACTIONS_MARKER
+            || line
+                .strip_prefix(POLICY_MARKER)
+                .map(|rest| rest.trim() == policy)
+                .unwrap_or(false)
     })
 }
 
@@ -494,7 +494,7 @@ fn manifest_requires(types_dir: &std::path::Path) -> Vec<String> {
         .collect()
 }
 
-fn surface_sources(types_dir: &std::path::Path, sandbox: Sandbox) -> Vec<String> {
+fn surface_sources(types_dir: &std::path::Path, policy: Policy) -> Vec<String> {
     let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(types_dir)
         .into_iter()
         .flatten()
@@ -506,7 +506,7 @@ fn surface_sources(types_dir: &std::path::Path, sandbox: Sandbox) -> Vec<String>
     files
         .into_iter()
         .filter_map(|path| std::fs::read_to_string(path).ok())
-        .filter(|source| publishes_into(source, sandbox))
+        .filter(|source| publishes_into(source, policy))
         .collect()
 }
 
@@ -689,8 +689,8 @@ pub fn explore_modules(modules_root: &std::path::Path) -> Vec<ModuleInfo> {
         entries.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
     dirs.sort();
     for dir in dirs {
-        let mission_sources = surface_sources(&dir.join("types"), Sandbox::Mission);
-        let mode_sources = surface_sources(&dir.join("types"), Sandbox::Mode);
+        let mission_sources = surface_sources(&dir.join("types"), "trigger");
+        let mode_sources = surface_sources(&dir.join("types"), "mode");
         let manifest = std::fs::read_to_string(dir.join("module.lua")).unwrap_or_default();
         if mission_sources.is_empty() && mode_sources.is_empty() && manifest.is_empty() {
             continue;
@@ -972,12 +972,12 @@ mod tests {
         std::fs::create_dir_all(dir.join("types")).unwrap();
         std::fs::write(
             dir.join("types/dsl.lua"),
-            "---@meta mission_dsl\n\n---@param name UnitDefName\n---@return MissionUnitDefRef\nfunction UnitDef(name) end\n",
+            "---@meta policy trigger\n\n---@param name UnitDefName\n---@return MissionUnitDefRef\nfunction UnitDef(name) end\n",
         )
         .unwrap();
         std::fs::write(
             dir.join("types/extra.lua"),
-            "---@meta mission_dsl\n\n---@alias UnitDefName string\n",
+            "---@meta policy trigger\n\n---@alias UnitDefName string\n",
         )
         .unwrap();
         std::fs::write(
@@ -1007,12 +1007,12 @@ mod tests {
         .unwrap();
         std::fs::write(
             dir.join("modules/alpha/types/dsl.lua"),
-            "---@meta mission_dsl\n\n---@class AlphaChain\n---@field Do fun(e: table): AlphaChain\n\n---@return AlphaChain\nfunction When(c) end\n",
+            "---@meta policy trigger\n\n---@class AlphaChain\n---@field Do fun(e: table): AlphaChain\n\n---@return AlphaChain\nfunction When(c) end\n",
         )
         .unwrap();
         std::fs::write(
             dir.join("modules/beta/types/dsl.lua"),
-            "---@meta mission_dsl\n\n---@class BetaVerbs\n---@field Zap fun(): table\n\n---@type BetaVerbs\nBeta = {}\n",
+            "---@meta policy trigger\n\n---@class BetaVerbs\n---@field Zap fun(): table\n\n---@type BetaVerbs\nBeta = {}\n",
         )
         .unwrap();
 
