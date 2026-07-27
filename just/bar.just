@@ -259,6 +259,11 @@ mission-editor-install:
     src="$DEVTOOLS_DIR/bar-mission-kit/vscode"
     version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$src/package.json")"
     dest="$HOME/.vscode/extensions/beyond-all-reason.bar-mission-editor-$version"
+    # Ship the server with the plugin: the whole point is that BAR-Devtools is
+    # not required to use it. The extension still adopts a running server first.
+    bash "$DEVTOOLS_DIR/scripts/mission-kit-cargo.sh" build --release
+    mkdir -p "$src/server"
+    cp "$DEVTOOLS_DIR/bar-mission-kit/target/release/bar-mission-kit" "$src/server/"
     mkdir -p "$dest"
     cp -r "$src/." "$dest/"
     ok "installed to $dest"

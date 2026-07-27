@@ -57,6 +57,16 @@
           "type": "string",
           "default": "http://127.0.0.1:8571",
           "description": "bar-mission-kit serve HTTP address (its --listen flag)"
+        },
+        "barMissionEditor.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the bar-mission-kit binary. Empty uses the one bundled with this extension, then whatever is on PATH."
+        },
+        "barMissionEditor.writeDir": {
+          "type": "string",
+          "default": "",
+          "description": "Engine write directory, where the editor artifact is published so the in-game panel can read it. Empty auto-detects the usual install locations."
         }
       }
     }

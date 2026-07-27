@@ -44,6 +44,7 @@ function activate(context) {
 	const timer = setInterval(async () => {
 		const server = serverUrl();
 		const up = await reachable(server);
+		if (!up) await ensureServing(server);
 		if (up !== serverUp) {
 			serverUp = up;
 			note(up ? `serve reachable at ${server}` : `serve unreachable at ${server}`);
@@ -124,6 +125,7 @@ async function vocabulary(server) {
 // opens — seq alone cannot tell these apart, since it resets with serve.
 let lastOpenId = null;
 let serverUp = null;
+let owned = null;
 let log = null;
 const note = (m) => log && log.appendLine(`${new Date().toISOString().slice(11, 19)}  ${m}`);
 const views = new Map();
@@ -131,6 +133,8 @@ const startedAt = Date.now();
 
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
+const { spawn } = require("child_process");
 
 function realpath(p) {
 	try {
@@ -287,6 +291,88 @@ async function paintEdges(server) {
 	editor.setDecorations(edgeDecoration, decorations);
 }
 
+// --- serving ---------------------------------------------------------------
+// The point of this extension is that BAR-Devtools is not required, so it can
+// start the server itself. It ADOPTS first and only spawns when nothing
+// answers: one server feeds this panel, the browser terminal and the in-game
+// view, and a second writer into the same .editor directory would race the
+// first over edit intents.
+
+/// The bundled binary, then anything the user pointed at, then PATH.
+function serverBinary() {
+	const configured = vscode.workspace.getConfiguration("barMissionEditor").get("serverPath");
+	if (configured) return configured;
+	const exe = process.platform === "win32" ? "bar-mission-kit.exe" : "bar-mission-kit";
+	const bundled = path.join(__dirname, "server", exe);
+	return fs.existsSync(bundled) ? bundled : exe;
+}
+
+/// Where the game reads the artifact from. serve must write there, or the
+/// in-game panel sees nothing; falls back to the mission tree when no install
+/// is present.
+function editorDir(missionsRoot) {
+	const configured = vscode.workspace.getConfiguration("barMissionEditor").get("writeDir");
+	const candidates = configured
+		? [configured]
+		: [
+				path.join(os.homedir(), ".local", "state", "Beyond All Reason"),
+				path.join(os.homedir(), "Documents", "Beyond All Reason"),
+				process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "Beyond All Reason") : null,
+			].filter(Boolean);
+	for (const base of candidates) {
+		if (fs.existsSync(base)) return path.join(base, "modules", "missions", ".editor");
+	}
+	return path.join(missionsRoot, ".editor");
+}
+
+/// modules/missions under any workspace folder.
+function missionsRoot() {
+	for (const folder of vscode.workspace.workspaceFolders || []) {
+		const direct = path.join(folder.uri.fsPath, "modules", "missions");
+		if (fs.existsSync(direct)) return direct;
+		let entries = [];
+		try {
+			entries = fs.readdirSync(folder.uri.fsPath, { withFileTypes: true });
+		} catch {}
+		for (const entry of entries) {
+			const nested = path.join(folder.uri.fsPath, entry.name, "modules", "missions");
+			if (fs.existsSync(nested)) return nested;
+		}
+	}
+	return null;
+}
+
+async function ensureServing(server) {
+	if (await reachable(server)) return;
+	if (owned) return; // already starting or running ours
+	const root = missionsRoot();
+	if (!root) {
+		note("no modules/missions in this workspace; not starting a server");
+		return;
+	}
+	const bin = serverBinary();
+	const args = ["serve", "--missions-root", root, "--editor-dir", editorDir(root)];
+	note(`starting ${bin} ${args.join(" ")}`);
+	try {
+		owned = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
+	} catch (e) {
+		note(`could not start the server: ${e.message}`);
+		owned = null;
+		return;
+	}
+	owned.on("error", (e) => {
+		note(`server failed to start: ${e.message} — install bar-mission-kit or set barMissionEditor.serverPath`);
+		owned = null;
+	});
+	owned.on("exit", (code) => {
+		note(`server exited (${code})`);
+		owned = null;
+	});
+	for (const stream of [owned.stdout, owned.stderr]) {
+		stream.on("data", (d) => String(d).trimEnd().split("\n").forEach((l) => note(`  ${l}`)));
+	}
+}
+
 // Any answer means serve is listening; only a transport error means it is not.
 async function reachable(server) {
 	try {
@@ -394,6 +480,13 @@ async function pollDiagnostics(server) {
 	}
 }
 
-function deactivate() {}
+function deactivate() {
+	// Only ours: an adopted server outlives this window, and the in-game panel
+	// may still be reading from it.
+	if (owned) {
+		owned.kill();
+		owned = null;
+	}
+}
 
 module.exports = { activate, deactivate };
