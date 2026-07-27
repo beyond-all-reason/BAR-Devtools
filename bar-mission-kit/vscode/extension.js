@@ -126,6 +126,7 @@ async function vocabulary(server) {
 let lastOpenId = null;
 let serverUp = null;
 let owned = null;
+let blocked = null; // why there is no server, in the user's words
 let log = null;
 const note = (m) => log && log.appendLine(`${new Date().toISOString().slice(11, 19)}  ${m}`);
 const views = new Map();
@@ -325,19 +326,39 @@ function editorDir(missionsRoot) {
 	return path.join(missionsRoot, ".editor");
 }
 
-/// modules/missions under any workspace folder.
+/// A missions root the server can watch. The panel is often open in a window
+/// that is not the game repo — docs, devtools, a mission checkout — and one
+/// server serves them all, so look wider than this workspace: what the user
+/// configured, then inside each folder, then beside it, then the install.
 function missionsRoot() {
-	for (const folder of vscode.workspace.workspaceFolders || []) {
-		const direct = path.join(folder.uri.fsPath, "modules", "missions");
-		if (fs.existsSync(direct)) return direct;
-		let entries = [];
+	const configured = vscode.workspace.getConfiguration("barMissionEditor").get("missionsRoot");
+	if (configured) return fs.existsSync(configured) ? configured : null;
+	const dirs = (base) => {
 		try {
-			entries = fs.readdirSync(folder.uri.fsPath, { withFileTypes: true });
-		} catch {}
-		for (const entry of entries) {
-			const nested = path.join(folder.uri.fsPath, entry.name, "modules", "missions");
-			if (fs.existsSync(nested)) return nested;
+			return fs
+				.readdirSync(base, { withFileTypes: true })
+				.filter((e) => e.isDirectory() || e.isSymbolicLink())
+				.map((e) => path.join(base, e.name));
+		} catch {
+			return [];
 		}
+	};
+	const candidates = [];
+	for (const folder of vscode.workspace.workspaceFolders || []) {
+		const here = folder.uri.fsPath;
+		candidates.push(here, ...dirs(here));
+		// Siblings: BAR, the docs and the devtools usually live side by side,
+		// and the window with the panel open is as often one of the others.
+		const parent = path.dirname(here);
+		if (parent !== here && parent !== path.dirname(parent)) candidates.push(...dirs(parent));
+	}
+	candidates.push(
+		path.join(os.homedir(), ".local", "state", "Beyond All Reason"),
+		path.join(os.homedir(), "Documents", "Beyond All Reason"),
+	);
+	for (const base of candidates) {
+		const root = path.join(base, "modules", "missions");
+		if (fs.existsSync(root)) return root;
 	}
 	return null;
 }
@@ -347,22 +368,29 @@ async function ensureServing(server) {
 	if (owned) return; // already starting or running ours
 	const root = missionsRoot();
 	if (!root) {
-		note("no modules/missions in this workspace; not starting a server");
+		blocked = "No modules/missions found in or beside this workspace.";
+		note(`${blocked} Set barMissionEditor.missionsRoot to point at one.`);
+		repaint(server);
 		return;
 	}
 	const bin = serverBinary();
 	const args = ["serve", "--missions-root", root, "--editor-dir", editorDir(root)];
+	blocked = null;
 	note(`starting ${bin} ${args.join(" ")}`);
 	try {
 		owned = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
 	} catch (e) {
-		note(`could not start the server: ${e.message}`);
+		blocked = `Could not start the bundled server: ${e.message}`;
+		note(blocked);
 		owned = null;
+		repaint(server);
 		return;
 	}
 	owned.on("error", (e) => {
-		note(`server failed to start: ${e.message} — install bar-mission-kit or set barMissionEditor.serverPath`);
+		blocked = `The bundled server failed to start: ${e.message}`;
+		note(`${blocked} — set barMissionEditor.serverPath, or run just bar::mission-serve`);
 		owned = null;
+		repaint(server);
 	});
 	owned.on("exit", (code) => {
 		note(`server exited (${code})`);
@@ -381,6 +409,10 @@ async function reachable(server) {
 	} catch {
 		return false;
 	}
+}
+
+function repaint(server) {
+	for (const { view, focus } of views.values()) view.webview.html = paint(server, focus);
 }
 
 function paint(server, focus) {
@@ -404,10 +436,9 @@ function waitingFrame(server) {
 </style>
 </head>
 <body>
- <h3>The mission editor is not being served</h3>
- <p>Start it in <strong>BAR-Devtools</strong>:</p>
- <code>just bar::mission-serve</code>
- <p></p>
+ <h3>${blocked ? "The mission editor cannot start" : "Starting the mission editor…"}</h3>
+ <p>${blocked || "This extension ships its own server; it should answer in a moment."}</p>
+ ${blocked ? "<p>Or start one yourself, in <strong>BAR-Devtools</strong>:</p><code>just bar::mission-serve</code><p></p>" : ""}
  <small>Watching ${server} — this panel opens as soon as it answers.</small>
 </body></html>`;
 }
