@@ -26,15 +26,29 @@ while IFS= read -r src; do
     else
         sed 's/\r$//' "$src" > "$out"
     fi
-done < <(grep -rlE "@meta (mission|mode)_dsl" "$BAR_DIR"/modules/*/types/*.lua | sort)
+done < <(grep -rlE "@meta ((mission|mode)_dsl|actions)" "$BAR_DIR"/modules/*/types/*.lua | sort)
 
 # A file still on the old undifferentiated marker publishes into no sandbox at
 # all: the kit would simply stop seeing it. Loudly, then.
 if orphans="$(grep -rl "@meta dsl$" "$BAR_DIR"/modules/*/types/*.lua 2>/dev/null)"; then
-    echo "surfaces on the retired '@meta dsl' marker (use mission_dsl or mode_dsl):" >&2
+    echo "surfaces on the retired '@meta dsl' marker (use mission_dsl, mode_dsl or actions):" >&2
     echo "$orphans" >&2
     stale=1
 fi
+
+# A surface the game deleted must leave the mirror too: the kit compiles these
+# in, so a leftover keeps declaring vocabulary nothing publishes any more.
+while IFS= read -r fixture; do
+    rel="${fixture#"$DEST"/}"
+    [ -f "$BAR_DIR/modules/$rel" ] && continue
+    if [ "$check" -eq 1 ]; then
+        echo "orphaned fixture: $rel" >&2
+        stale=1
+    else
+        rm -f "$fixture"
+        echo "removed orphaned fixture: $rel"
+    fi
+done < <(find "$DEST" -name '*.lua' | sort)
 
 # The kit compiles the mirror in, so a fixture nobody include_str!s is a file
 # the kit cannot see: a module publishing new vocabulary would land here and

@@ -21,8 +21,8 @@ pub const SNAPSHOTS: &[&str] = &[
     include_str!("../fixtures/modules/missions/types/dsl.lua"),
     include_str!("../fixtures/modules/combat/types/dsl.lua"),
     include_str!("../fixtures/modules/matchflow/types/dsl.lua"),
+    include_str!("../fixtures/modules/transfer/types/actions.lua"),
     include_str!("../fixtures/modules/transfer/types/mode_dsl.lua"),
-    include_str!("../fixtures/modules/transfer/types/dsl.lua"),
 ];
 
 #[derive(Debug, Clone)]
@@ -47,6 +47,10 @@ pub struct TypeSurface {
     /// class name -> field name -> signature (fun-typed fields only).
     pub classes: BTreeMap<String, BTreeMap<String, FnSig>>,
     pub globals: BTreeMap<String, Global>,
+    /// class name -> field name -> the class that field is typed as. Kept so a
+    /// field whose type is a CALLABLE class (an action: `---@overload`) can be
+    /// resolved into a signature once every source has been read.
+    class_typed_fields: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 impl TypeSurface {
@@ -55,7 +59,27 @@ impl TypeSurface {
         for source in sources {
             surface.parse_source(source);
         }
+        surface.resolve_callable_fields();
         surface
+    }
+
+    /// An action is declared as a class that is callable (`---@overload`), and
+    /// referenced as a field typed with that class. Resolve those fields to
+    /// the call signature, so one declaration answers both grammars: the mode
+    /// reads the field, the mission calls it.
+    fn resolve_callable_fields(&mut self) {
+        let resolved: Vec<(String, String, FnSig)> = self
+            .class_typed_fields
+            .iter()
+            .flat_map(|(class, fields)| fields.iter().map(move |(f, ty)| (class, f, ty)))
+            .filter_map(|(class, field, ty)| {
+                let sig = self.classes.get(ty)?.get(CALLABLE)?;
+                Some((class.clone(), field.clone(), sig.clone()))
+            })
+            .collect();
+        for (class, field, sig) in resolved {
+            self.classes.entry(class).or_default().insert(field, sig);
+        }
     }
 
     /// The snapshot surface: tests, and the fallback when the game tree's
@@ -150,6 +174,27 @@ impl TypeSurface {
                                     .entry(class.clone())
                                     .or_default()
                                     .insert(name.to_string(), sig);
+                            } else {
+                                // Not a fun: remember what class it IS, in case
+                                // that class turns out to be callable.
+                                let (ty, _) = split_word(rest);
+                                self.class_typed_fields
+                                    .entry(class.clone())
+                                    .or_default()
+                                    .insert(name.to_string(), ty.to_string());
+                            }
+                        }
+                    }
+                    // `---@overload fun(...)` on a class: the class itself is
+                    // callable. Stored under a reserved key so a field typed
+                    // with it resolves to this signature.
+                    "overload" => {
+                        if let Some(class) = &current_class {
+                            if let Some(sig) = parse_fun(rest) {
+                                self.classes
+                                    .entry(class.clone())
+                                    .or_default()
+                                    .insert(CALLABLE.to_string(), sig);
                             }
                         }
                     }
@@ -333,6 +378,9 @@ impl TypeSurface {
             return;
         }
         for (field, sig) in fields {
+            if field == CALLABLE {
+                continue; // the class's own call, reported by whoever names it
+            }
             let name = format!("{prefix}.{field}");
             match sig.ret.as_deref() {
                 Some(ret) if ret == class => {}
@@ -340,6 +388,20 @@ impl TypeSurface {
                 Some(ret) if ret.contains("Effect") => roles.effects.push(name),
                 Some(ret) if self.classes.contains_key(ret) => self.walk_class(ret, &name, roles),
                 _ => roles.nouns.push(name),
+            }
+        }
+        // Fields typed with a class that is NOT callable: an action's mode
+        // facet, which a grant is written against. Dropping them would lose
+        // half of what a single declaration says.
+        for (field, ty) in self.class_typed_fields.get(class).into_iter().flatten() {
+            if fields.contains_key(field) {
+                continue; // already reported through its call signature
+            }
+            let name = format!("{prefix}.{field}");
+            if self.classes.get(ty).map(|f| f.is_empty()).unwrap_or(true) {
+                roles.nouns.push(name);
+            } else {
+                self.walk_class(ty, &name, roles);
             }
         }
     }
@@ -373,8 +435,15 @@ impl TypeSurface {
 /// mode permits — but they say different things about them, so they are
 /// parsed apart. Merged, the winner was whichever file was read last, and the
 /// two readers disagreed on the order.
+/// Reserved field key for a class's own call signature (`---@overload`).
+pub const CALLABLE: &str = "__call";
+
 pub const MISSION_MARKER: &str = "---@meta mission_dsl";
 pub const MODE_MARKER: &str = "---@meta mode_dsl";
+/// A module's actions, declared once and read by both grammars. This is the
+/// marker that makes .Allow(Transfer.Units) and Do(Transfer.Units(...)) the
+/// same entry rather than two that agree.
+pub const ACTIONS_MARKER: &str = "---@meta actions";
 
 /// Which sandbox a surface file publishes into.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -385,11 +454,13 @@ pub enum Sandbox {
     Mode,
 }
 
-fn sandbox_of(source: &str) -> Option<Sandbox> {
-    source.lines().take(4).find_map(|line| match line.trim() {
-        MISSION_MARKER => Some(Sandbox::Mission),
-        MODE_MARKER => Some(Sandbox::Mode),
-        _ => None,
+/// Whether a file publishes into the given sandbox: its own, or both.
+fn publishes_into(source: &str, sandbox: Sandbox) -> bool {
+    source.lines().take(4).any(|line| match line.trim() {
+        ACTIONS_MARKER => true,
+        MISSION_MARKER => sandbox == Sandbox::Mission,
+        MODE_MARKER => sandbox == Sandbox::Mode,
+        _ => false,
     })
 }
 
@@ -432,7 +503,7 @@ fn surface_sources(types_dir: &std::path::Path, sandbox: Sandbox) -> Vec<String>
     files
         .into_iter()
         .filter_map(|path| std::fs::read_to_string(path).ok())
-        .filter(|source| sandbox_of(source) == Some(sandbox))
+        .filter(|source| publishes_into(source, sandbox))
         .collect()
 }
 
