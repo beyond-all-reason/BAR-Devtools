@@ -378,8 +378,7 @@ fn modules_graph(modules: &[ModuleInfo]) -> String {
     let mut out = String::from(
         "<div class=\"me-graph-modes\">\
          <button class=\"me-graph-mode me-graph-mode-on\" data-graph-mode=\"flat\">Flat</button>\
-         <button class=\"me-graph-mode\" data-graph-mode=\"graph\">Graph</button>\
-         <button class=\"me-graph-mode\" data-graph-mode=\"mermaid\">Mermaid</button></div>",
+         <button class=\"me-graph-mode\" data-graph-mode=\"graph\">Graph</button></div>",
     );
 
     // --- flat: the roll-call ------------------------------------------------
@@ -404,36 +403,140 @@ fn modules_graph(modules: &[ModuleInfo]) -> String {
     }
     out.push_str("</div>");
 
-    // --- graph: nodes and edges, laid out by depth ---------------------------
-    const COL: usize = 168;
-    const ROW: usize = 44;
+    // --- graph: nodes and edges ---------------------------------------------
+    // Layered by dependency depth, then ordered within each layer by the mean
+    // position of what it connects to (a barycentre sweep). Without that the
+    // rows keep their alphabetical order and the edges cross for no reason.
+    const COL: usize = 176;
+    const ROW: usize = 52;
     const W: usize = 132;
-    const H: usize = 26;
-    let mut slot: HashMap<&str, (usize, usize)> = HashMap::new();
-    let mut per_depth: HashMap<usize, usize> = HashMap::new();
+    const H: usize = 30;
+
+    let mut layers: Vec<Vec<&str>> = Vec::new();
     for &(d, m) in rows.iter() {
-        let i = per_depth.entry(d).or_insert(0);
-        slot.insert(m.name.as_str(), (d, *i));
-        *i += 1;
+        while layers.len() <= d {
+            layers.push(Vec::new());
+        }
+        layers[d].push(m.name.as_str());
     }
-    let width = (rows.iter().map(|(d, _)| d + 1).max().unwrap_or(1)) * COL;
-    let height = per_depth.values().max().copied().unwrap_or(1) * ROW + 12;
-    let xy = |d: usize, i: usize| (d * COL + 8, i * ROW + 8);
+    // Order within each layer to reduce crossings. A barycentre sweep can make
+    // a layout worse as easily as better, so sweep both directions and keep the
+    // best ordering seen — never worse than the alphabetical start.
+    let edges: Vec<(&str, &str)> = rows
+        .iter()
+        .flat_map(|(_, m)| {
+            requires
+                .get(m.name.as_str())
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(move |d| (m.name.as_str(), d))
+        })
+        .collect();
+    let crossings = |layers: &Vec<Vec<&str>>| -> usize {
+        let at: HashMap<&str, (usize, usize)> = layers
+            .iter()
+            .enumerate()
+            .flat_map(|(d, l)| l.iter().enumerate().map(move |(i, n)| (*n, (d, i))))
+            .collect();
+        let mut count = 0;
+        for (i, (a, b)) in edges.iter().enumerate() {
+            for (c, d) in edges.iter().skip(i + 1) {
+                let (Some(&pa), Some(&pb), Some(&pc), Some(&pd)) =
+                    (at.get(a), at.get(b), at.get(c), at.get(d))
+                else {
+                    continue;
+                };
+                // Only edges spanning the same pair of layers can cross.
+                if pa.0 == pc.0 && pb.0 == pd.0 && a != c && b != d {
+                    let above = (pa.1 as isize - pc.1 as isize) * (pb.1 as isize - pd.1 as isize);
+                    if above < 0 {
+                        count += 1;
+                    }
+                }
+            }
+        }
+        count
+    };
+
+    let mut best = layers.clone();
+    let mut best_count = crossings(&layers);
+    for pass in 0..8 {
+        let forward = pass % 2 == 0;
+        let at: HashMap<&str, usize> = layers
+            .iter()
+            .flat_map(|l| l.iter().enumerate().map(|(i, n)| (*n, i)))
+            .collect();
+        let order: Vec<usize> = if forward {
+            (1..layers.len()).collect()
+        } else {
+            (0..layers.len().saturating_sub(1)).rev().collect()
+        };
+        for d in order {
+            // Barycentre against the neighbouring layer only, which is what
+            // makes the sweep converge instead of chasing itself.
+            let mut keyed: Vec<(f64, &str)> = layers[d]
+                .iter()
+                .map(|n| {
+                    let mut ns: Vec<usize> = Vec::new();
+                    for (a, b) in edges.iter() {
+                        if a == n {
+                            ns.extend(at.get(b));
+                        } else if b == n {
+                            ns.extend(at.get(a));
+                        }
+                    }
+                    let k = if ns.is_empty() {
+                        at.get(n).copied().unwrap_or(0) as f64
+                    } else {
+                        ns.iter().map(|i| *i as f64).sum::<f64>() / ns.len() as f64
+                    };
+                    (k, *n)
+                })
+                .collect();
+            keyed.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal).then(a.1.cmp(b.1)));
+            layers[d] = keyed.into_iter().map(|(_, n)| n).collect();
+        }
+        let c = crossings(&layers);
+        if c < best_count {
+            best_count = c;
+            best = layers.clone();
+        }
+    }
+    let layers = best;
+
+    let mut slot: HashMap<&str, (usize, usize)> = HashMap::new();
+    for (d, layer) in layers.iter().enumerate() {
+        for (i, name) in layer.iter().enumerate() {
+            slot.insert(name, (d, i));
+        }
+    }
+    let width = layers.len() * COL;
+    let height = layers.iter().map(Vec::len).max().unwrap_or(1) * ROW + 16;
+    let xy = |d: usize, i: usize| (d * COL + 10, i * ROW + 10);
 
     out.push_str(&format!(
         "<div class=\"me-graph me-graph-graph collapsed\" data-graph-pass=\"graph\">\
-         <svg class=\"me-svg\" viewBox=\"0 0 {width} {height}\" width=\"100%\" height=\"{height}\">"
+         <svg class=\"me-svg\" viewBox=\"0 0 {width} {height}\" width=\"100%\" height=\"{height}\">\
+         <defs><marker id=\"me-arrow\" viewBox=\"0 0 8 8\" refX=\"7\" refY=\"4\" \
+         markerWidth=\"7\" markerHeight=\"7\" orient=\"auto\">\
+         <path d=\"M0,0 L8,4 L0,8 z\" class=\"me-svg-head\"/></marker></defs>"
     ));
-    // Edges first, so nodes paint over them.
+    // Curved so parallel runs separate instead of overlapping into one line.
     for &(_, m) in rows.iter() {
         let (d, i) = slot[m.name.as_str()];
         let (x, y) = xy(d, i);
         for dep in requires.get(m.name.as_str()).cloned().unwrap_or_default() {
             if let Some(&(dd, di)) = slot.get(dep) {
                 let (dx, dy) = xy(dd, di);
+                let (x1, y1) = (x as f64, (y + H / 2) as f64);
+                let (x2, y2) = ((dx + W) as f64, (dy + H / 2) as f64);
+                let bend = ((x1 - x2).abs() * 0.45).max(26.0);
                 out.push_str(&format!(
-                    "<line class=\"me-svg-edge\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\"/>",
-                    x, y + H / 2, dx + W, dy + H / 2
+                    "<path class=\"me-svg-edge\" marker-end=\"url(#me-arrow)\" \
+                     d=\"M{x1:.0},{y1:.0} C{:.0},{y1:.0} {:.0},{y2:.0} {x2:.0},{y2:.0}\"/>",
+                    x1 - bend,
+                    x2 + bend
                 ));
             }
         }
@@ -443,16 +546,15 @@ fn modules_graph(modules: &[ModuleInfo]) -> String {
         let (x, y) = xy(d, i);
         out.push_str(&format!(
             "<g class=\"me-svg-node\" data-select-module=\"{name}\">\
-             <rect x=\"{x}\" y=\"{y}\" width=\"{W}\" height=\"{H}\" rx=\"5\"/>\
+             <rect x=\"{x}\" y=\"{y}\" width=\"{W}\" height=\"{H}\" rx=\"6\"/>\
              <text x=\"{tx}\" y=\"{ty}\">{name}</text></g>",
             name = m.name,
             tx = x + W / 2,
             ty = y + H / 2 + 4
         ));
     }
-    out.push_str("</svg></div>");
-
-    // --- mermaid: the same edges, as source ---------------------------------
+    // The mermaid source rides along for the copy button rather than taking a
+    // tab of its own: it is something you paste elsewhere, not something to read here.
     let mut mermaid = String::from("graph LR\n");
     for &(_, m) in rows.iter() {
         let deps = requires.get(m.name.as_str()).cloned().unwrap_or_default();
@@ -464,8 +566,8 @@ fn modules_graph(modules: &[ModuleInfo]) -> String {
         }
     }
     out.push_str(&format!(
-        "<div class=\"me-graph me-graph-mermaid collapsed\" data-graph-pass=\"mermaid\">\
-         <pre class=\"me-mermaid\">{mermaid}</pre></div>"
+        "</svg><button class=\"me-copy-mermaid\" data-copy-mermaid=\"{}\">Copy as mermaid</button></div>",
+        mermaid.replace('"', "&quot;").replace('\n', "&#10;")
     ));
     out
 }
@@ -1502,20 +1604,72 @@ When(Objective("build_pawns").IsComplete())
     }
 
     #[test]
-    fn the_graph_reads_three_ways_and_defaults_to_flat() {
+    fn the_graph_reads_two_ways_and_defaults_to_flat() {
         let view = render(&ast(), &domains(), &Scope::default());
-        for mode in ["flat", "graph", "mermaid"] {
+        for mode in ["flat", "graph"] {
             assert!(view.form.contains(&format!("data-graph-mode=\"{mode}\"")), "no {mode} button");
             assert!(view.form.contains(&format!("data-graph-pass=\"{mode}\"")), "no {mode} pass");
         }
         // Flat is what opens; the diagram and the source are second readings.
         assert!(view.form.contains("me-graph-graph collapsed"));
-        assert!(view.form.contains("me-graph-mermaid collapsed"));
         assert!(!view.form.contains("me-graph-flat collapsed"));
         // The diagram is drawn here, not by a client library: no network, and
         // it survives a sandboxed webview.
         assert!(view.form.contains("<svg class=\"me-svg\""), "no diagram");
+        // Mermaid rides on the copy button rather than a tab of its own.
+        assert!(view.form.contains("data-copy-mermaid="), "no copy button");
         assert!(view.form.contains("graph LR"), "no mermaid source");
+    }
+
+    #[test]
+    fn the_diagram_orders_layers_to_avoid_crossing_edges() {
+        // Alphabetically this crosses: "aa" needs the lower node and "bb" the
+        // upper one. A barycentre sweep should swap the second layer. Sweeps
+        // can regress as easily as improve, so the layout keeps the best
+        // ordering it finds rather than the last.
+        let module = |name: &str, req: &[&str]| {
+            serde_json::json!({
+                "name": name, "description": "", "requires": req,
+                "statements": [], "conditions": [], "effects": [], "nouns": [], "modes": [],
+            })
+        };
+        let mut ast = ast();
+        ast.surface = serde_json::json!({
+            "modules": [
+                module("alpha", &[]), module("beta", &[]),
+                module("aa", &["beta"]), module("bb", &["alpha"]),
+            ],
+        });
+        let view = render(&ast, &domains(), &Scope::default());
+        let mut placed: Vec<(usize, usize, String)> = Vec::new();
+        for caps in regex_lite_nodes(&view.form) {
+            placed.push(caps);
+        }
+        let y = |name: &str| placed.iter().find(|(_, _, n)| n == name).map(|(_, y, _)| *y).unwrap();
+        let x = |name: &str| placed.iter().find(|(x, _, n)| n == name).map(|(x2, _, _)| *x2).unwrap();
+        assert_eq!(x("alpha"), x("beta"), "roots share a column");
+        assert_eq!(x("aa"), x("bb"), "dependents share a column");
+        // aa needs beta and bb needs alpha, so their vertical order must mirror
+        // the roots' order for the edges to run parallel.
+        assert_eq!(
+            y("aa") > y("bb"),
+            y("beta") > y("alpha"),
+            "layers are ordered so the edges do not cross: {placed:?}"
+        );
+    }
+
+    /// The three numbers a node carries in the emitted diagram.
+    fn regex_lite_nodes(form: &str) -> Vec<(usize, usize, String)> {
+        let mut out = Vec::new();
+        for chunk in form.split("<g class=\"me-svg-node\" data-select-module=\"").skip(1) {
+            let name = chunk.split('"').next().unwrap_or("").to_string();
+            let x = chunk.split("<rect x=\"").nth(1).and_then(|c| c.split('"').next()).and_then(|v| v.parse().ok());
+            let y = chunk.split("y=\"").nth(1).and_then(|c| c.split('"').next()).and_then(|v| v.parse().ok());
+            if let (Some(x), Some(y)) = (x, y) {
+                out.push((x, y, name));
+            }
+        }
+        out
     }
 
     #[test]
