@@ -81,6 +81,11 @@ pub struct LiveProbe {
     /// Roster name for the named-unit kinds (unit_dead, unit_spotted).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unit_name: Option<String>,
+    /// Director name for the wave kinds, lowercased from the pack reference
+    /// the mission wrote (`Scavengers.Skirmish` -> `scavengers.skirmish`).
+    /// That is the name the director publishes its counters under.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pack: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -828,6 +833,7 @@ fn nouns_body(
                     need: None,
                     objective: Some(objective.clone()),
                     unit_name: None,
+                    pack: None,
                 });
             }
         }
@@ -1191,6 +1197,7 @@ fn probe_for(phrase_key: &str, value: &Value) -> Option<LiveProbe> {
                         need: Some(*need),
                         objective: None,
                         unit_name: None,
+                        pack: None,
                     })
                 }
                 _ => None,
@@ -1205,6 +1212,7 @@ fn probe_for(phrase_key: &str, value: &Value) -> Option<LiveProbe> {
                     need: None,
                     objective: Some(objective.clone()),
                     unit_name: None,
+                    pack: None,
                 }),
                 _ => None,
             }
@@ -1223,9 +1231,36 @@ fn probe_for(phrase_key: &str, value: &Value) -> Option<LiveProbe> {
                     need: None,
                     objective: None,
                     unit_name: Some(name.clone()),
+                    pack: None,
                 }),
                 _ => None,
             }
+        }
+        // Wave conditions are all counters against one director. The pack is
+        // a bare reference (`Scavengers.Skirmish`), and lowercasing it gives
+        // the name the director publishes its counters under — a mission
+        // names a pack and never learns a flavor's rulesparam prefix.
+        "Waves.Spawned" | "Waves.Cleared" | "Waves.BossDefeated" => {
+            let pack = find_name_ref(value)?.to_ascii_lowercase();
+            let kind = match phrase_key {
+                "Waves.Spawned" => "waves_spawned",
+                "Waves.Cleared" => "waves_cleared",
+                _ => "waves_boss_defeated",
+            };
+            // The count is optional in the DSL and defaults to one.
+            let need = match find_semantic_leaf(value, "count") {
+                Some(Value::Number { value: need, .. }) => *need,
+                _ => 1.0,
+            };
+            Some(LiveProbe {
+                key: format!("{kind}:{pack}:{}", fmt_num(need)),
+                kind: kind.into(),
+                unit_def: None,
+                need: Some(need),
+                objective: None,
+                unit_name: None,
+                pack: Some(pack),
+            })
         }
         // The Protect row's chip tracks its lifetime bound: delegate to the
         // Until condition's own probe.
@@ -1324,6 +1359,20 @@ fn slot_view(value: &Value, semantic: &str, ctx: &Ctx) -> Element {
     }
     let missing = format!("{{{semantic}}}");
     rsx! { "{missing}" }
+}
+
+/// The first bare dotted reference among a verb's arguments — the shape a
+/// noun contributed by another module takes (`Scavengers.Skirmish`).
+fn find_name_ref(value: &Value) -> Option<&str> {
+    match value {
+        Value::Name { path, .. } => Some(path.as_str()),
+        Value::Verb { calls, .. } => calls
+            .iter()
+            .flat_map(|c| c.args.iter())
+            .find_map(find_name_ref),
+        Value::Table { fields, .. } => fields.iter().find_map(|f| find_name_ref(&f.value)),
+        _ => None,
+    }
 }
 
 fn find_semantic_leaf<'a>(value: &'a Value, semantic: &str) -> Option<&'a Value> {
@@ -1920,6 +1969,19 @@ When(Objective("relieve_the_outpost").IsComplete())
 	.Do(Objective("find_the_enclave").Complete())
 "#;
 
+    // CM8's pressure file: the pack is a bare reference contributed by another
+    // module, which is the shape the wave probes have to read.
+    const CM8_WAVES: &str = r#"
+When(MatchFlow.Started())
+	.Do(Waves.Begin(Scavengers.Skirmish).Against(Team.Player).From(0.85, 0.15).Intensity(0.3))
+
+When(Waves.Cleared(Scavengers.Skirmish, 3))
+	.Do(Objective("held_the_line").Complete())
+
+When(Waves.BossDefeated(Scavengers.Horde))
+	.Do(MatchFlow.Victory(Team.Player))
+"#;
+
     fn cm8_ast() -> MissionAst {
         let rec = crate::recognizer::recognize_file("triggers/outpost.lua", CM8).unwrap();
         MissionAst {
@@ -1984,6 +2046,35 @@ When(Objective("relieve_the_outpost").IsComplete())
         assert!(view.form.contains("data-live=\"obj:find_the_enclave\""));
         assert!(view.form.contains(">NAMED UNITS<"));
         assert!(view.form.contains("armada_commander"));
+    }
+
+    #[test]
+    fn wave_probes_name_the_director_the_mission_named() {
+        let rec = crate::recognizer::recognize_file("triggers/waves.lua", CM8_WAVES).unwrap();
+        let ast = MissionAst {
+            version: 1,
+            generation: 3,
+            files: vec![rec.file],
+            surface: test_surface(),
+        };
+        let view = render(&ast, &domains(), &Scope::default());
+        assert_wellformed(&view.form);
+
+        // The pack is written `Scavengers.Skirmish`; the director publishes
+        // under `scavengers.skirmish`, and the probe has to bridge the two —
+        // a mission never learns a flavor's rulesparam prefix.
+        let cleared = view.live.iter().find(|p| p.kind == "waves_cleared").unwrap();
+        assert_eq!(cleared.pack.as_deref(), Some("scavengers.skirmish"));
+        assert_eq!(cleared.need, Some(3.0));
+        assert_eq!(cleared.key, "waves_cleared:scavengers.skirmish:3");
+
+        // The count is optional in the DSL and means one.
+        let boss = view.live.iter().find(|p| p.kind == "waves_boss_defeated").unwrap();
+        assert_eq!(boss.pack.as_deref(), Some("scavengers.horde"));
+        assert_eq!(boss.need, Some(1.0));
+
+        // And the chips are slotted into the form the game fills in.
+        assert!(view.form.contains("data-live=\"waves_cleared:scavengers.skirmish:3\""), "{}", view.form);
     }
 
     #[test]

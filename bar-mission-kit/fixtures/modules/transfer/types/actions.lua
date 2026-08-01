@@ -26,6 +26,8 @@
 
 --- Resources: grantable and narrowable; nothing performs it from a trigger.
 ---@class TransferResources : TransferGrant
+---@field Metal TransferGrant
+---@field Energy TransferGrant
 ---@field AtT2 TransferGrant
 ---@field AtT3 TransferGrant
 
@@ -41,18 +43,6 @@
 
 ---@type TransferActions
 Transfer = {}
-
----@type { Allied: TransferGrant }
-Assist = {}
-
----@type { AlliedUnits: TransferGrant }
-Reclaim = {}
-
----@type { Partial: TransferGrant }
-Resurrect = {}
-
----@type { Constructors: TransferGrant }
-Build = {}
 
 ---@type TransferGrant
 Take = {}

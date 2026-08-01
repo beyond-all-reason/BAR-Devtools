@@ -20,6 +20,10 @@
 ---| "UnitTaken"
 ---| "UnitEnteredLos"
 ---| "mission.objective_changed"
+---| "waves.wave_spawned"
+---| "waves.wave_cleared"
+---| "waves.boss_spawned"
+---| "waves.boss_defeated"
 
 --- A condition carries metadata about what can change its answer: inputs
 --- name bus events (nil = poll every cadence). Pure — reads only ctx, captures configuration never progress (progress lives in engine state, the savegame rule).
@@ -37,6 +41,11 @@
 ---@field TransferGroup fun(groupName: string, teamID: integer)
 ---@field Protect fun(name: string) combat-module protection by roster name
 ---@field Unprotect fun(name: string)
+---@field StartWaves fun(request: table) waves-module pressure, by pack
+---@field StopWaves fun(pack: string)
+---@field SetWaveIntensity fun(pack: string, intensity: number)
+---@field SurgeWaves fun(pack: string)
+---@field WaveStatus fun(pack: string): WaveStatus|nil
 ---@field frame integer current game frame
 
 --- A lazy effect built by a named verb (e.g. Objective("x").Complete()); the

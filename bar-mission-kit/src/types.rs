@@ -20,9 +20,12 @@ pub const SNAPSHOTS: &[&str] = &[
     include_str!("../fixtures/modules/missions/types/mode_policy.lua"),
     include_str!("../fixtures/modules/missions/types/trigger_policy.lua"),
     include_str!("../fixtures/modules/combat/types/actions.lua"),
+    include_str!("../fixtures/modules/construction/types/actions.lua"),
     include_str!("../fixtures/modules/matchflow/types/actions.lua"),
+    include_str!("../fixtures/modules/scavengers/types/actions.lua"),
     include_str!("../fixtures/modules/transfer/types/actions.lua"),
     include_str!("../fixtures/modules/transfer/types/mode_policy.lua"),
+    include_str!("../fixtures/modules/waves/types/actions.lua"),
 ];
 
 #[derive(Debug, Clone)]
