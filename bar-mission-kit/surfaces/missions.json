@@ -9,6 +9,7 @@
     "Unit.IsSpotted": "Unit spotted",
     "Objective.Complete": "Complete objective",
     "Transfer.Units": "Transfer group",
+    "Transfer.Give": "Give group outright",
     "Combat.Protect": "Protect unit",
     "MatchFlow.Victory": "Victory",
     "MatchFlow.Defeat": "Defeat",

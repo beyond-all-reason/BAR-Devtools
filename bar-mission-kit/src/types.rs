@@ -941,6 +941,13 @@ mod tests {
 
         let spawn = surface.step_sig("Spawn", "Spawn").expect("the head itself");
         assert_eq!(surface.semantic_for(&spawn.params[1].1).as_deref(), Some("team_role"));
+
+        // .After(30) is the case that made the rule worth stating: a bare
+        // `number` gave the author a nameless box and no way to know whether
+        // it wanted seconds or frames. The unit lives in the game's types,
+        // not in a label here.
+        let after = surface.step_sig("When", "After").expect("After on the trigger chain");
+        assert_eq!(surface.semantic_for(&after.params[0].1).as_deref(), Some("seconds"));
     }
 
     #[test]

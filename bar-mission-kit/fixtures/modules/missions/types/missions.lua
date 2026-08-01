@@ -10,6 +10,12 @@
 ---@alias MissionUnitGroup string roster group name, declared by units.lua Grouped(...)
 ---@alias ObjectiveName string
 ---@alias MissionTeamRole "player"|"enemy"|"gaia" spawn-time team role, resolved at arm
+--- Wall-clock seconds, never frames. An alias and not a bare number for the
+--- usual reason — a `number` has nothing to call itself in a sentence, so an
+--- editor can only offer a nameless box, and the one thing an author needs to
+--- know here is which unit they are typing in. The DSL converts on the way in
+--- using the engine's own tick rate, so "30" is thirty seconds at any speed.
+---@alias MissionSeconds number
 
 --- Mission bus vocabulary, CLOSED BY TYPE: every event name crossing the bus
 --- is a member of this alias, so the checker flags typos across every inputs/OnEvent consumer as type errors.
@@ -97,7 +103,7 @@
 --- loader finalizes all chains when the file's include returns; a chain without a Do fails the load.
 ---@class TriggerChain
 ---@field When fun(condition: MissionCondition): TriggerChain another condition; all must hold
----@field After fun(seconds: number): TriggerChain hold the effects until the conditions have held that long
+---@field After fun(seconds: MissionSeconds): TriggerChain hold the effects until the conditions have held that long
 ---@field Do fun(effect: MissionEffect): TriggerChain repeatable; effects run in Do order
 ---@field Once fun(once: boolean?): TriggerChain default true; pass false for repeating triggers
 

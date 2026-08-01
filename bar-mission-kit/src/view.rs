@@ -1143,8 +1143,13 @@ fn phrase_for(key: &str) -> Option<&'static str> {
         // leaves, and a team arrives as a noun path (Team.Player). Every
         // mission hands to the player today, so the sentence says so — a
         // handover to anyone else would read wrong until nouns can fill slots.
+        // "share" vs "give ... outright" is the whole distinction between
+        // these two, said in the author's terms. It used to read "mode or no
+        // mode", which is the implementation talking: sharing modes are a
+        // lobby concept a mission author never sees, so the phrase named the
+        // one thing that could not help them choose.
         "Transfer.Units" => Some("share group {unit_group} with the player"),
-        "Transfer.Give" => Some("give group {unit_group} to the player, mode or no mode"),
+        "Transfer.Give" => Some("give group {unit_group} to the player outright"),
         "Combat.Protect" => Some("protect {unit_name}"),
         "Combat.Unprotect" => Some("stop protecting {unit_name}"),
         // {until} is not a literal slot: it renders the Until argument's own
