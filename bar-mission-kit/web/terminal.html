@@ -163,6 +163,12 @@
 	.me-caret::before { content: "▾"; }
 	.me-section.collapsed .me-caret { transform: rotate(-90deg); }
 	.me-section.collapsed .me-section-body { display: none; }
+	/* A fired trigger tints and lifts its rule: progression is readable down
+	   the column without reading a single chip. Kept faint on purpose — this
+	   is a backdrop, and the chips stay the thing you actually read. */
+	.me-card.done { border-left-color: #4a7f5e; background: rgba(127,215,154,0.05); }
+	.me-card.done .me-card-title { color: #9fb8a8; }
+
 	/* triggers flatten from boxes to left-ruled groups inside the one card */
 	.me-card { background: none; border: none; border-left: 2px solid #2c3b4d; border-radius: 0;
 		box-shadow: none; margin: 8px 0; padding: 0 0 2px 10px; }
@@ -287,6 +293,11 @@
 		const stale = state.t > 0 && Date.now() / 1000 - state.t > 8;
 		document.body.classList.toggle("live-stale", stale);
 		document.body.classList.toggle("live-idle", !stale && state.armed === false);
+		// Whole-element state, no text: the card shades to show it has fired.
+		for (const el of document.querySelectorAll("[data-fired]")) {
+			const value = state.values && state.values[el.dataset.fired];
+			el.classList.toggle("done", !!value && value.state === "done");
+		}
 		for (const el of document.querySelectorAll("[data-live]")) {
 			const value = state.values && state.values[el.dataset.live];
 			if (!value) continue;

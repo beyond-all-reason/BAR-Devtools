@@ -86,6 +86,10 @@ pub struct LiveProbe {
     /// That is the name the director publishes its counters under.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pack: Option<String>,
+    /// `<file>:<order>` for the trigger kind — the same identity the runtime
+    /// stamps, minus the mission prefix the game adds back.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -834,6 +838,7 @@ fn nouns_body(
                     objective: Some(objective.clone()),
                     unit_name: None,
                     pack: None,
+                    trigger: None,
                 });
             }
         }
@@ -987,8 +992,31 @@ fn trigger_card(trigger: &Trigger, ctx: &Ctx) -> Element {
     let addable = ctx.editable
         && !(ctx.surface.conditions.is_empty() && ctx.surface.effects.is_empty())
         && trigger.steps.first().map(|s| s.verb == "When").unwrap_or(false);
+    // Whole-card progress. The engine's own "has this fired" is the honest
+    // signal — a once-trigger stays fired after its condition goes false, so
+    // shading off a live condition would flicker back to unfired. This rides
+    // its own attribute rather than data-live because the front-ends write
+    // TEXT into a data-live element, which would erase the card.
+    // Only the interactive form gets live wiring: the billboard is read-only
+    // display notation, and None omits the attribute entirely.
+    let fired_key = (ctx.style == Style::Ui).then(|| format!("trigger:{}", trigger.id));
+    if let Some(key) = fired_key.clone() {
+        let mut live = ctx.live.borrow_mut();
+        if !live.iter().any(|p| p.key == key) {
+            live.push(LiveProbe {
+                key,
+                kind: "trigger_fired".into(),
+                unit_def: None,
+                need: None,
+                objective: None,
+                unit_name: None,
+                pack: None,
+                trigger: Some(trigger.id.clone()),
+            });
+        }
+    }
     rsx! {
-        div { class: "me-card",
+        div { class: "me-card", "data-fired": fired_key,
             div { class: "me-card-head",
                 span {
                     class: "me-card-title me-jump",
@@ -1198,6 +1226,7 @@ fn probe_for(phrase_key: &str, value: &Value) -> Option<LiveProbe> {
                         objective: None,
                         unit_name: None,
                         pack: None,
+                        trigger: None,
                     })
                 }
                 _ => None,
@@ -1213,6 +1242,7 @@ fn probe_for(phrase_key: &str, value: &Value) -> Option<LiveProbe> {
                     objective: Some(objective.clone()),
                     unit_name: None,
                     pack: None,
+                    trigger: None,
                 }),
                 _ => None,
             }
@@ -1232,6 +1262,7 @@ fn probe_for(phrase_key: &str, value: &Value) -> Option<LiveProbe> {
                     objective: None,
                     unit_name: Some(name.clone()),
                     pack: None,
+                    trigger: None,
                 }),
                 _ => None,
             }
@@ -1260,6 +1291,7 @@ fn probe_for(phrase_key: &str, value: &Value) -> Option<LiveProbe> {
                 objective: None,
                 unit_name: None,
                 pack: Some(pack),
+                trigger: None,
             })
         }
         // The Protect row's chip tracks its lifetime bound: delegate to the
@@ -1912,7 +1944,10 @@ When(Objective("build_pawns").IsComplete())
         let view = render(&ast(), &domains(), &Scope::default());
         assert!(view.form.contains("data-live=\"unit:armpw:3\""), "{}", view.form);
         assert!(view.form.contains("data-live=\"obj:build_pawns\""));
-        assert_eq!(view.live.len(), 2, "{:?}", view.live.iter().map(|p| &p.key).collect::<Vec<_>>());
+        // Chip probes only: card-level trigger probes are their own channel
+        // and are counted by every_trigger_card_can_shade_when_it_fires.
+        let chips: Vec<_> = view.live.iter().filter(|p| p.kind != "trigger_fired").collect();
+        assert_eq!(chips.len(), 2, "{:?}", chips.iter().map(|p| &p.key).collect::<Vec<_>>());
         let unit = view.live.iter().find(|p| p.kind == "unit_count").unwrap();
         assert_eq!(unit.unit_def.as_deref(), Some("armpw"));
         assert_eq!(unit.need, Some(3.0));
@@ -2075,6 +2110,27 @@ When(Waves.BossDefeated(Scavengers.Horde))
 
         // And the chips are slotted into the form the game fills in.
         assert!(view.form.contains("data-live=\"waves_cleared:scavengers.skirmish:3\""), "{}", view.form);
+    }
+
+    #[test]
+    fn every_trigger_card_can_shade_when_it_fires() {
+        let view = render(&cm8_ast(), &domains(), &Scope::default());
+        let fired: Vec<_> = view.live.iter().filter(|p| p.kind == "trigger_fired").collect();
+        assert_eq!(fired.len(), 3, "one probe per trigger card");
+
+        // The id is the runtime's own identity minus the mission prefix the
+        // game adds back, so the bridge can compose it without the kit ever
+        // knowing which mission it is editing.
+        let first = fired.iter().find(|p| p.trigger.as_deref() == Some("triggers/outpost.lua:1"));
+        assert!(first.is_some(), "{:?}", fired.iter().map(|p| &p.trigger).collect::<Vec<_>>());
+
+        // It rides its own attribute: a data-live element gets TEXT written
+        // into it, which would erase the card. The name deliberately does not
+        // contain "data-live" either — the billboard asserts on that substring.
+        assert!(view.form.contains("data-fired=\"trigger:triggers/outpost.lua:1\""), "{}", view.form);
+        assert!(!view.form.contains("data-live=\"trigger:"), "cards must not use the text channel");
+        assert!(!view.billboard.contains("data-fired"), "the billboard carries no live wiring");
+        assert_wellformed(&view.form);
     }
 
     #[test]
