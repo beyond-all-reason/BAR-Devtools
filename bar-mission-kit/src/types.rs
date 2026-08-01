@@ -918,7 +918,10 @@ mod tests {
 
         let mut when_verbs = surface.chain_verbs("When");
         when_verbs.sort();
-        assert_eq!(when_verbs, vec!["Do", "Once", "When"]);
+        // After arrived purely by being declared on TriggerChain in the game's
+        // types — nothing here names it. That is the grammar being derived
+        // rather than curated, which is the whole contract of this file.
+        assert_eq!(when_verbs, vec!["After", "Do", "Once", "When"]);
         let mut spawn_verbs = surface.chain_verbs("Spawn");
         spawn_verbs.sort();
         assert_eq!(spawn_verbs, vec!["At", "Grouped", "Named"]);

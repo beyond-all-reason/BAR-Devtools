@@ -91,11 +91,13 @@
 ---@field condition MissionCondition
 ---@field effects MissionEffect[] executed in Do order when the condition fires
 ---@field once boolean fire at most once (default true)
+---@field delayFrames integer hold the effects until the conditions have held this long; 0 fires at once
 
 --- The dot-only builder chain returned by When. There is no terminator: the
 --- loader finalizes all chains when the file's include returns; a chain without a Do fails the load.
 ---@class TriggerChain
 ---@field When fun(condition: MissionCondition): TriggerChain another condition; all must hold
+---@field After fun(seconds: number): TriggerChain hold the effects until the conditions have held that long
 ---@field Do fun(effect: MissionEffect): TriggerChain repeatable; effects run in Do order
 ---@field Once fun(once: boolean?): TriggerChain default true; pass false for repeating triggers
 
@@ -115,6 +117,7 @@
 --- reload from source; this table is reapplied on top.
 ---@class TriggerEngineState
 ---@field fired table<string, boolean> trigger id -> has fired
+---@field heldSince table<string, integer> trigger id -> frame its conditions first held, for delays
 
 --- What a required module's mission_dsl.lua returns. The loader composes the
 --- sandbox env from the missions manifest's requires list — the dependency

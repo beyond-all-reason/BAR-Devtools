@@ -18,7 +18,8 @@
     "Waves.Begin": "Begin waves",
     "Waves.Intensify": "Change wave intensity",
     "Waves.Surge": "Surge one wave",
-    "Waves.End": "Stop waves"
+    "Waves.End": "Stop waves",
+    "When.After": "Wait before doing it"
   },
   "effects": [
     {
