@@ -1125,6 +1125,12 @@ fn step_phrase_for(verb: &str) -> Option<&'static str> {
         "At" => Some("{fx}, {fz}"),
         "Named" => Some("{unit_name}"),
         "Grouped" => Some("{unit_group}"),
+        // AFTER 30 reads as a number with no unit, and the one question an
+        // author has at that number is which unit it is in. The pill says
+        // AFTER, so the phrase says the rest. "seconds" is not spelled here
+        // twice by accident — the slot name comes from MissionSeconds in the
+        // game's types, and the trailing word is what makes it a sentence.
+        "After" => Some("{seconds} seconds"),
         _ => None,
     }
 }
@@ -2045,6 +2051,20 @@ When(Waves.BossDefeated(Scavengers.Horde))
             files: vec![rec.file],
             surface: test_surface(),
         }
+    }
+
+    #[test]
+    fn a_delayed_trigger_says_what_unit_the_delay_is_in() {
+        let src = "When(MatchFlow.Started())\n\t.After(30)\n\t.Do(MatchFlow.Victory(Team.Player))\n";
+        let rec = crate::recognizer::recognize_file("triggers/waves.lua", src).unwrap();
+        let ast =
+            MissionAst { version: 1, generation: 1, files: vec![rec.file], surface: test_surface() };
+        let view = render(&ast, &domains(), &Scope::default());
+        assert_wellformed(&view.form);
+        // The number alone was the bug: an author reading AFTER 30 has no way
+        // to tell seconds from frames, and the types knew all along.
+        assert!(view.form.contains("seconds"), "{}", view.form);
+        assert!(!view.form.contains("{seconds}"), "{}", view.form);
     }
 
     #[test]
