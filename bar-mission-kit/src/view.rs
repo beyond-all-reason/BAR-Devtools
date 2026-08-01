@@ -1150,6 +1150,21 @@ fn phrase_for(key: &str) -> Option<&'static str> {
         // {until} is not a literal slot: it renders the Until argument's own
         // sentence (see slot_view).
         "Combat.Protect.Until" => Some("protect {unit_name} until {until}"),
+        // Waves. The pack is a noun path (Scavengers.Skirmish), and a noun
+        // cannot fill a slot — same limitation Transfer.Units documents above
+        // — so these sentences say "the waves" and let the DO row's own
+        // module attribution carry which flavor it is. Begin's key depends on
+        // which dial came last, because the chain is order-free, so every
+        // ending gets the same sentence.
+        "Waves.Begin" | "Waves.Begin.Against" | "Waves.Begin.From" | "Waves.Begin.Intensity" => {
+            Some("send waves at the player")
+        }
+        "Waves.Intensify" => Some("set the wave intensity to {wave_intensity}"),
+        "Waves.Surge" => Some("send one wave now"),
+        "Waves.End" => Some("stop sending waves"),
+        "Waves.Spawned" => Some("a wave has spawned"),
+        "Waves.Cleared" => Some("a wave has been cleared"),
+        "Waves.BossDefeated" => Some("the boss has been defeated"),
         _ => None,
     }
 }
@@ -2131,6 +2146,31 @@ When(Waves.BossDefeated(Scavengers.Horde))
         assert!(!view.form.contains("data-live=\"trigger:"), "cards must not use the text channel");
         assert!(!view.billboard.contains("data-fired"), "the billboard carries no live wiring");
         assert_wellformed(&view.form);
+    }
+
+    #[test]
+    fn the_waves_vocabulary_renders_as_sentences() {
+        let rec = crate::recognizer::recognize_file("triggers/waves.lua", CM8_WAVES).unwrap();
+        let ast = MissionAst {
+            version: 1,
+            generation: 3,
+            files: vec![rec.file],
+            surface: test_surface(),
+        };
+        let view = render(&ast, &domains(), &Scope::default());
+        assert_wellformed(&view.form);
+
+        assert!(view.form.contains("send waves at the player"), "{}", view.form);
+        assert!(view.form.contains("a wave has been cleared"), "{}", view.form);
+        assert!(view.form.contains("the boss has been defeated"), "{}", view.form);
+
+        // Raw call notation is the fallback for shapes no phrase covers, so
+        // its presence here means a phrase key stopped matching. That is how
+        // this shipped once: the chain is order-free, so Begin's key is
+        // whichever dial came last.
+        assert!(!view.form.contains("Waves.Begin("), "{}", view.form);
+        assert!(!view.form.contains("Waves.Surge("), "{}", view.form);
+        assert!(!view.form.contains("Waves.End("), "{}", view.form);
     }
 
     #[test]

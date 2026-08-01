@@ -4,6 +4,12 @@
 --- The mission kit derives its authoring surface from these types, so the
 --- alias and class names here are load-bearing beyond the checker.
 
+--- The mission dial. 1.0 is the pack's own pace; below is background
+--- pressure, above is a siege. An ALIAS, not a bare number, because the
+--- editor derives its slot names from param types — a `number` has nothing
+--- to call itself in a sentence.
+---@alias WaveIntensity number
+
 --- A wave pack: a flavor module's noun, naming a composition defined once in
 --- that module. `name` doubles as the director's name and its savegame key.
 ---@class WavePackRef
@@ -20,13 +26,13 @@
 ---@class MissionWavesChain : MissionEffect
 ---@field Against fun(team: MissionTeam): MissionWavesChain
 ---@field From fun(fx: number, fz: number): MissionWavesChain
----@field Intensity fun(intensity: number): MissionWavesChain
+---@field Intensity fun(intensity: WaveIntensity): MissionWavesChain
 
 ---@class WavesBegin
 ---@overload fun(pack: WavePackRef): MissionWavesChain
 
 ---@class WavesIntensify
----@overload fun(pack: WavePackRef, intensity: number): MissionEffect
+---@overload fun(pack: WavePackRef, intensity: WaveIntensity): MissionEffect
 
 ---@class WavesSurge
 ---@overload fun(pack: WavePackRef): MissionEffect
