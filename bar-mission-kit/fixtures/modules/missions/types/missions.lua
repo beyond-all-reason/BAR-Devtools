@@ -79,6 +79,14 @@
 ---@field Named fun(name: MissionUnitName): MissionSpawnChain
 ---@field Grouped fun(group: MissionUnitGroup): MissionSpawnChain
 
+--- The dot-only builder chain returned by Claim. No At: a claimed unit is
+--- already somewhere. OrSpawnAt is required, and says where to build one when
+--- the team turns out to have none.
+---@class MissionClaimChain
+---@field Named fun(name: MissionUnitName): MissionClaimChain
+---@field Grouped fun(group: MissionUnitGroup): MissionClaimChain
+---@field OrSpawnAt fun(fx: number, fz: number): MissionClaimChain
+
 --- One validated spawn entry, as Roster.Finalize returns it.
 ---@class MissionRosterEntry
 ---@field def UnitDefName
@@ -87,6 +95,7 @@
 ---@field fz number
 ---@field name MissionUnitName|nil declared by Named
 ---@field group MissionUnitGroup|nil declared by Grouped
+---@field claim boolean|nil written by Claim: bind to an existing unit if the team has one
 
 --- A registered trigger. Identity = source filename + declaration order,
 --- stamped at registration — the unregister-by-identity key for hot reload.

@@ -26,7 +26,14 @@ pub enum FileKind {
 
 impl FileKind {
     pub fn of(path: &str) -> FileKind {
-        if path.contains("modes/") {
+        // By path COMPONENT, and either separator. A substring test for
+        // "modes/" reads false on Windows, where the display path arrives with
+        // backslashes, and true for a directory merely ending in the word —
+        // "gamemodes/" is not a preset directory.
+        let preset = path
+            .split(|c| c == '/' || c == '\\')
+            .any(|component| component == "modes");
+        if preset {
             FileKind::ModePreset
         } else {
             FileKind::Statements

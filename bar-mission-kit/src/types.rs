@@ -23,6 +23,7 @@ pub const SNAPSHOTS: &[&str] = &[
     include_str!("../fixtures/modules/construction/types/actions.lua"),
     include_str!("../fixtures/modules/matchflow/types/actions.lua"),
     include_str!("../fixtures/modules/scavengers/types/actions.lua"),
+    include_str!("../fixtures/modules/scavengers/types/mode_policy.lua"),
     include_str!("../fixtures/modules/transfer/types/actions.lua"),
     include_str!("../fixtures/modules/transfer/types/mode_policy.lua"),
     include_str!("../fixtures/modules/waves/types/actions.lua"),
@@ -97,8 +98,16 @@ impl TypeSurface {
     /// paths for a types/ dir with surface-marked files. Falls back to the
     /// built-in snapshot when none is found.
     pub fn load_near(paths: &[std::path::PathBuf]) -> TypeSurface {
+        TypeSurface::load_near_policy(paths, "trigger")
+    }
+
+    /// The same walk, for a named policy. A mode preset is written in the mode
+    /// vocabulary, not the trigger one — composing "trigger" for it hands the
+    /// file Spawn/When and no Mode at all, which is not a missing declaration
+    /// but the wrong dictionary.
+    pub fn load_near_policy(paths: &[std::path::PathBuf], policy: Policy) -> TypeSurface {
         for path in paths {
-            if let Some(dir) = TypeSurface::types_dir_near(path) {
+            if let Some(dir) = TypeSurface::types_dir_near_policy(path, policy) {
                 // A module's surface = its own marked types plus the marked
                 // types of every module its manifest requires (transitively):
                 // vocabulary travels with the module that injects it, and the
@@ -110,15 +119,27 @@ impl TypeSurface {
                     if !seen.insert(types_dir.clone()) {
                         continue;
                     }
+                    // Only a mission's vocabulary composes down the requires
+                    // graph. A mode preset is written in ITS OWN module's mode
+                    // vocabulary: every module that has presets declares its own
+                    // Mode chain, so composing the graph merges several
+                    // different Mode heads and an arbitrary one wins. Missions
+                    // requires transfer, and a missions preset was being checked
+                    // against transfer's sharing chain — Own rejected, Tax and
+                    // Gate offered instead.
+                    if policy != "trigger" {
+                        sources.extend(surface_sources(&types_dir, policy));
+                        continue;
+                    }
                     for name in manifest_requires(&types_dir) {
                         if let Some(module_dir) = types_dir.parent().and_then(|m| m.parent()) {
                             let required = module_dir.join(&name).join("types");
-                            if !surface_sources(&required, "trigger").is_empty() {
+                            if !surface_sources(&required, policy).is_empty() {
                                 queue.push(required);
                             }
                         }
                     }
-                    sources.extend(surface_sources(&types_dir, "trigger"));
+                    sources.extend(surface_sources(&types_dir, policy));
                 }
                 let refs: Vec<&str> = sources.iter().map(String::as_str).collect();
                 return TypeSurface::parse(&refs);
@@ -130,11 +151,21 @@ impl TypeSurface {
     /// The nearest ancestor types/ dir containing surface-marked files —
     /// the per-file surface cache key.
     pub fn types_dir_near(path: &std::path::Path) -> Option<std::path::PathBuf> {
+        TypeSurface::types_dir_near_policy(path, "trigger")
+    }
+
+    /// As above, for a named policy: the nearest types/ dir that publishes THAT
+    /// vocabulary. A module with triggers but no modes must not answer for a
+    /// preset, or the preset silently gets the wrong dictionary.
+    pub fn types_dir_near_policy(
+        path: &std::path::Path,
+        policy: Policy,
+    ) -> Option<std::path::PathBuf> {
         let start = if path.is_dir() { Some(path) } else { path.parent() };
         let mut ancestor = start;
         while let Some(dir) = ancestor {
             let candidate = dir.join("types");
-            if !surface_sources(&candidate, "trigger").is_empty() {
+            if !surface_sources(&candidate, policy).is_empty() {
                 return Some(candidate);
             }
             ancestor = dir.parent();
@@ -1004,6 +1035,56 @@ mod tests {
         assert!(surface.aliases.contains_key("UnitDefName"), "composed from the second file");
         assert!(!surface.globals.contains_key("Ban"), "unmarked scratch must stay out");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_mode_preset_resolves_its_own_module_s_mode_surface() {
+        // The bug this pins: surface resolution only ever composed "trigger",
+        // so a preset inside a real modules tree was handed Spawn/When and no
+        // Mode at all. It passed in tests only because a tree with no types dir
+        // falls back to the bundled snapshot, which happens to carry both.
+        let dir = std::env::temp_dir().join(format!("kit_modesurface_{}", std::process::id()));
+        let alpha = dir.join("modules/alpha");
+        std::fs::create_dir_all(alpha.join("types")).unwrap();
+        std::fs::create_dir_all(alpha.join("modes")).unwrap();
+        std::fs::write(
+            alpha.join("module.lua"),
+            "return { name = \"alpha\", requires = { \"beta\" } }",
+        )
+        .unwrap();
+        std::fs::write(
+            alpha.join("types/actions.lua"),
+            "---@meta actions\n---@return integer\nfunction Spawn(a, b) end\n",
+        )
+        .unwrap();
+        std::fs::write(
+            alpha.join("types/mode_policy.lua"),
+            "---@meta policy mode\n---@class AlphaChain\n---@field Own fun(): AlphaChain\n---@param name string\n---@return AlphaChain\nfunction Mode(name) end\n",
+        )
+        .unwrap();
+
+        // A required module with its OWN Mode head. Composing the requires
+        // graph for modes would merge the two and let an arbitrary one win.
+        let beta = dir.join("modules/beta");
+        std::fs::create_dir_all(beta.join("types")).unwrap();
+        std::fs::write(
+            beta.join("types/mode_policy.lua"),
+            "---@meta policy mode\n---@class BetaChain\n---@field Tax fun(): BetaChain\n---@param name string\n---@return BetaChain\nfunction Mode(name) end\n",
+        )
+        .unwrap();
+
+        let preset = alpha.join("modes/thing.lua");
+        let surface = TypeSurface::load_near_policy(&[preset], "mode");
+        assert!(surface.globals.contains_key("Mode"), "a preset must be given Mode");
+        // and it must be ALPHA's Mode, not the one it happens to require.
+        let heads = surface.statement_heads();
+        assert_eq!(heads.get("Mode").map(String::as_str), Some("AlphaChain"));
+
+        // The trigger surface for the same module is untouched by any of this.
+        let trigger = TypeSurface::load_near_policy(&[alpha.join("triggers/x.lua")], "trigger");
+        assert!(trigger.globals.contains_key("Spawn"));
+        assert!(!trigger.globals.contains_key("Mode"), "a trigger file never sees Mode");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

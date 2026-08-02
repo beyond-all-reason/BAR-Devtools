@@ -88,7 +88,13 @@ fn collect_lua_files(paths: &[PathBuf]) -> Vec<PathBuf> {
             ] {
                 for entry in glob::glob(&pattern).expect("valid glob").flatten() {
                     // spec/modes/, spec/**/triggers/ etc. are busted's, not ours.
-                    if entry.components().any(|c| c.as_os_str() == "spec") {
+                    // actions/ is the framework's action slot, and a module
+                    // whose action happens to be called units.lua is not a
+                    // mission roster — transfer has exactly that.
+                    if entry
+                        .components()
+                        .any(|c| c.as_os_str() == "spec" || c.as_os_str() == "actions")
+                    {
                         continue;
                     }
                     // modules/modes is a MODULE (mode infrastructure); its own
@@ -186,14 +192,27 @@ pub fn collect_ast(paths: &[PathBuf], generation: u64) -> (model::MissionAst, Ve
     // PER FILE — each file answers to its own module's published surface
     // (nearest marked types/ dir), so a sharing mode preset and a mission
     // trigger file check against different vocabularies in one walk.
-    let mut surfaces: std::collections::HashMap<PathBuf, std::rc::Rc<types::TypeSurface>> =
+    let mut surfaces: std::collections::HashMap<(PathBuf, &'static str), std::rc::Rc<types::TypeSurface>> =
         std::collections::HashMap::new();
     let mut surface_for = |file: &PathBuf| -> std::rc::Rc<types::TypeSurface> {
-        let key = types::TypeSurface::types_dir_near(file)
+        // A preset and a trigger file can live in one module and are written in
+        // different vocabularies, so the policy is part of the cache key. Keyed
+        // on the types dir alone, whichever kind was seen first would answer
+        // for both — and the other would be checked against the wrong grammar.
+        let policy = match recognizer::FileKind::of(&file.to_string_lossy()) {
+            recognizer::FileKind::ModePreset => "mode",
+            recognizer::FileKind::Statements => "trigger",
+        };
+        let key = types::TypeSurface::types_dir_near_policy(file, policy)
             .unwrap_or_else(|| PathBuf::from("<builtin>"));
         surfaces
-            .entry(key)
-            .or_insert_with(|| std::rc::Rc::new(types::TypeSurface::load_near(std::slice::from_ref(file))))
+            .entry((key, policy))
+            .or_insert_with(|| {
+                std::rc::Rc::new(types::TypeSurface::load_near_policy(
+                    std::slice::from_ref(file),
+                    policy,
+                ))
+            })
             .clone()
     };
 
