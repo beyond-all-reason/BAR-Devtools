@@ -64,6 +64,16 @@ enum Command {
     },
 }
 
+/// Record the port actually bound, so a client can find a serve that had to
+/// move aside. Written next to everything else the editor dir already carries.
+fn announce_port(editor_dir: &std::path::Path, port: u16) {
+    let _ = std::fs::create_dir_all(editor_dir);
+    let _ = std::fs::write(
+        editor_dir.join("serve_port.json"),
+        format!("{{\"port\":{port},\"pid\":{}}}", std::process::id()),
+    );
+}
+
 fn collect_lua_files(paths: &[PathBuf]) -> Vec<PathBuf> {
     let mut files = Vec::new();
     for path in paths {
@@ -330,7 +340,52 @@ fn main() -> ExitCode {
                 eprintln!("serve needs a missions dir or --missions-root");
                 return ExitCode::FAILURE;
             };
-            http::spawn(&listen, editor_dir.clone());
+            // A taken port is the normal consequence of the VS Code extension
+            // already serving this workspace. Silently carrying on without HTTP
+            // was the worst of the options: the second process stayed alive,
+            // invisible, writing the SAME editor dir as the first, so whichever
+            // wrote last won and the panel showed whichever that was.
+            match http::try_spawn(&listen, editor_dir.clone()) {
+                Ok(port) => announce_port(&editor_dir, port),
+                Err(http::BindError::Other) => return ExitCode::FAILURE,
+                Err(http::BindError::InUse) => {
+                    let ours = editor_dir.canonicalize().unwrap_or_else(|_| editor_dir.clone());
+                    let theirs = http::probe_editor_dir(&listen)
+                        .map(std::path::PathBuf::from)
+                        .map(|p| p.canonicalize().unwrap_or(p));
+                    if theirs.as_deref() == Some(ours.as_path()) {
+                        // Same workspace, already served. Doing nothing is the
+                        // correct outcome, and it is a success, not a failure —
+                        // the caller asked for this directory to be served and
+                        // it is being served.
+                        eprintln!(
+                            "serve: {} is already being served at http://{listen} — nothing to do",
+                            ours.display()
+                        );
+                        return ExitCode::SUCCESS;
+                    }
+                    // Somebody else's workspace. Step aside onto a free port so
+                    // two checkouts can be open at once.
+                    match http::try_spawn("127.0.0.1:0", editor_dir.clone()) {
+                        Ok(port) => {
+                            match theirs {
+                                Some(dir) => eprintln!(
+                                    "serve: http://{listen} is serving {} — using port {port} instead",
+                                    dir.display()
+                                ),
+                                None => eprintln!(
+                                    "serve: http://{listen} is taken by something that is not a mission serve — using port {port} instead"
+                                ),
+                            }
+                            announce_port(&editor_dir, port);
+                        }
+                        Err(_) => {
+                            eprintln!("serve: no free loopback port available");
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
+            }
             serve::Server::new(initial, editor_dir, editor_cmd, missions_root).run()
         }
     }

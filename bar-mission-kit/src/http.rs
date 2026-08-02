@@ -3,6 +3,7 @@
 //! the game uses. No shared state with the serve loop — the regeneration
 //! cycle is the confirmation, same as every other client.
 //!
+//!   GET  /whoami          -> which editor dir this process is serving
 //!   GET  /view            -> mission_view.json
 //!   GET  /status          -> status.json
 //!   POST /edit            -> <editor-dir>/edits/http_<ts>_<n>.json (validated shape)
@@ -17,17 +18,86 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+/// Minimal JSON string literal. Only the two escapes a filesystem path can
+/// realistically contain — this is not a general encoder and does not pretend
+/// to be one.
+fn json_string(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len() + 2);
+    out.push('"');
+    for c in raw.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Ask whoever currently holds `addr` which editor dir they are serving.
+/// `None` means nothing answered, or answered with something we cannot read —
+/// in both cases the caller should treat the port as belonging to a stranger.
+pub fn probe_editor_dir(addr: &str) -> Option<String> {
+    let mut stream = TcpStream::connect(addr).ok()?;
+    let timeout = std::time::Duration::from_millis(700);
+    stream.set_read_timeout(Some(timeout)).ok()?;
+    stream.set_write_timeout(Some(timeout)).ok()?;
+    write!(
+        stream,
+        "GET /whoami HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+    )
+    .ok()?;
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw).ok()?;
+    let body = raw.split("\r\n\r\n").nth(1)?;
+    let key = "\"editor_dir\":\"";
+    let start = body.find(key)? + key.len();
+    let rest = &body[start..];
+    let mut out = String::new();
+    let mut chars = rest.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => return Some(out),
+            '\\' => out.push(chars.next()?),
+            c => out.push(c),
+        }
+    }
+    None
+}
+
+/// Why a bind attempt did not produce a server.
+#[derive(Debug)]
+pub enum BindError {
+    /// Somebody already holds the address. The caller has to decide whether
+    /// that somebody is a duplicate of itself or a different workspace.
+    InUse,
+    Other,
+}
+
 /// Bind and serve on a background thread. Returns the bound port (for tests:
 /// pass port 0 to get an ephemeral one).
+#[cfg(test)]
 pub fn spawn(addr: &str, editor_dir: PathBuf) -> Option<u16> {
+    try_spawn(addr, editor_dir).ok()
+}
+
+/// Bind, distinguishing "taken" from every other failure. A taken port is a
+/// normal thing that happens the moment two workspaces are open at once; it is
+/// not an error until the caller has worked out whose it is.
+pub fn try_spawn(addr: &str, editor_dir: PathBuf) -> Result<u16, BindError> {
     let listener = match TcpListener::bind(addr) {
         Ok(l) => l,
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => return Err(BindError::InUse),
         Err(e) => {
             eprintln!("http: cannot bind {addr}: {e}");
-            return None;
+            return Err(BindError::Other);
         }
     };
-    let port = listener.local_addr().ok()?.port();
+    let Some(port) = listener.local_addr().ok().map(|a| a.port()) else {
+        eprintln!("http: bound {addr} but it reports no local address");
+        return Err(BindError::Other);
+    };
     eprintln!("http: listening on http://127.0.0.1:{port}");
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
@@ -37,7 +107,7 @@ pub fn spawn(addr: &str, editor_dir: PathBuf) -> Option<u16> {
             });
         }
     });
-    Some(port)
+    Ok(port)
 }
 
 fn handle(mut stream: TcpStream, editor_dir: PathBuf) -> std::io::Result<()> {
@@ -75,6 +145,17 @@ fn handle(mut stream: TcpStream, editor_dir: PathBuf) -> std::io::Result<()> {
             "text/html; charset=utf-8",
             include_bytes!("../web/terminal.html"),
         ),
+        // Identity, so a second invocation can tell whether the process
+        // already holding this port is itself in another window or a different
+        // workspace entirely. Cheap, and needs no state of its own.
+        ("GET", "/whoami") => {
+            let body = format!(
+                "{{\"editor_dir\":{},\"pid\":{}}}",
+                json_string(&editor_dir.to_string_lossy()),
+                std::process::id()
+            );
+            respond(&mut stream, 200, "application/json", body.as_bytes())
+        }
         ("GET", "/view") => respond_file(&mut stream, editor_dir.join("mission_view.json")),
         ("GET", "/ast") => respond_file(&mut stream, editor_dir.join("mission_ast.json")),
         ("GET", "/status") => respond_file(&mut stream, editor_dir.join("status.json")),
@@ -165,6 +246,41 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn a_second_serve_can_tell_whose_port_it_is() {
+        // The whole point of /whoami: when the bind fails, the loser has to
+        // decide between "that is me in another window" (do nothing) and "that
+        // is a different checkout" (move aside). It cannot decide without this.
+        let dir = std::env::temp_dir().join(format!("kit_whoami_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let port = spawn("127.0.0.1:0", dir.clone()).unwrap();
+        let addr = format!("127.0.0.1:{port}");
+
+        let seen = probe_editor_dir(&addr).expect("the holder should answer");
+        assert_eq!(std::path::PathBuf::from(seen), dir);
+
+        // Binding it again is refused as taken, not as some other failure.
+        assert!(matches!(
+            try_spawn(&addr, dir.clone()),
+            Err(BindError::InUse)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn probing_something_that_is_not_a_serve_answers_nothing() {
+        // A stranger on the port must not be mistaken for our own editor dir,
+        // or a second serve would exit thinking it was already running.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+        std::thread::spawn(move || {
+            for mut s in listener.incoming().flatten() {
+                let _ = s.write_all(b"HTTP/1.1 404 Not Found\r\n\r\n");
+            }
+        });
+        assert_eq!(probe_editor_dir(&addr), None);
     }
 
     #[test]
