@@ -123,6 +123,14 @@
 	#undo { flex: 0 0 auto; }
 	.me-select-unit { max-width: 15em; }
 	.me-input-unit { max-width: 15em; color: #9fd3a4; }
+	.me-combo { position: relative; display: inline-block; }
+	.me-combo-list { display: none; position: absolute; left: 0; top: 100%; z-index: 40;
+		min-width: 20em; max-height: 15em; overflow-y: auto;
+		background: #0d141c; border: 1px solid #33517a; border-radius: 4px;
+		box-shadow: 0 6px 18px rgba(0,0,0,0.55); }
+	.me-combo-row { padding: 3px 9px; cursor: pointer; white-space: nowrap; color: #c9d6e4; }
+	.me-combo-row:hover, .me-combo-row.on { background: #16283c; color: #8fbcff; }
+	.me-combo-empty { color: #6b7f95; cursor: default; }
 	.me-select-enum { max-width: 7em; }
 	.me-button { background: rgba(255,255,255,0.04); border: 1px solid #2c3b4d; border-radius: 5px;
 		color: #9fb3c8; padding: 3px 11px; font-size: 0.8em; cursor: pointer; }
@@ -370,43 +378,135 @@
 	// across untouched, so the delegated change handler keeps working and no
 	// edit path changes. RmlUi never sees this — it renders the <select> the
 	// view actually shipped, which still works there.
+	// The unit picker offers every def in the game — about two thousand. A
+	// native select can only be walked, so finding corllt means scrolling
+	// alphabetically past everything before it.
+	//
+	// A datalist was the first attempt and it was wrong: it is an autocomplete
+	// hint, not a dropdown — no list until you type, and no scrolling. This is
+	// a real dropdown that also filters. Click for the whole list, type to
+	// narrow it, arrows and Enter to choose.
+	//
+	// Browser only. RmlUi renders the <select> the view actually ships, which
+	// works there already.
+	let unitOptions = null;
+
+	function optionsFrom(select) {
+		const out = [];
+		for (const option of select.options) {
+			out.push({ value: option.value, label: option.textContent || option.value });
+		}
+		return out;
+	}
+
+	function openCombo(input, list) {
+		const typed = input.value.trim().toLowerCase();
+		const shown = input.dataset.filtering === "1" && typed
+			? unitOptions.filter(o =>
+				o.value.toLowerCase().includes(typed) || o.label.toLowerCase().includes(typed))
+			: unitOptions;
+		list.innerHTML = "";
+		for (const option of shown.slice(0, 400)) {
+			const row = document.createElement("div");
+			row.className = "me-combo-row";
+			row.textContent = option.label;
+			row.dataset.value = option.value;
+			if (option.value === input.dataset.current) {
+				row.classList.add("on");
+			}
+			list.appendChild(row);
+		}
+		if (!shown.length) {
+			const row = document.createElement("div");
+			row.className = "me-combo-row me-combo-empty";
+			row.textContent = "no unit matches";
+			list.appendChild(row);
+		}
+		list.style.display = "block";
+	}
+
+	function commitCombo(input, list, value) {
+		input.value = value;
+		input.dataset.current = value;
+		input.dataset.filtering = "0";
+		list.style.display = "none";
+		input.dispatchEvent(new Event("change", { bubbles: true }));
+	}
+
 	function makeUnitPickersSearchable() {
 		const selects = $("content").querySelectorAll("select.me-select-unit");
 		if (!selects.length) {
 			return;
 		}
-		// ONE list for all of them. Every unit picker offers the same couple of
-		// thousand defs, and a form with a dozen pickers was carrying twenty
-		// thousand option elements; sharing the list cuts that to one copy and
-		// leaves the page smaller than it was with the selects.
-		const id = "me-units";
-		let list = document.getElementById(id);
-		if (!list) {
-			list = document.createElement("datalist");
-			list.id = id;
-			for (const option of selects[0].options) {
-				const entry = document.createElement("option");
-				entry.value = option.value;
-				// The label carries the readable name, so a search can be for
-				// what the unit is CALLED and not only for its def id.
-				if (option.textContent && option.textContent !== option.value) {
-					entry.label = option.textContent;
-				}
-				list.appendChild(entry);
-			}
-			document.body.appendChild(list);
+		// One shared option array: every picker offers the same list, and a form
+		// with a dozen of them was carrying twenty-three thousand elements.
+		if (!unitOptions) {
+			unitOptions = optionsFrom(selects[0]);
 		}
 		for (const select of selects) {
+			const wrap = document.createElement("span");
+			wrap.className = "me-combo";
 			const input = document.createElement("input");
 			input.type = "text";
 			input.className = "me-input me-input-unit";
-			input.setAttribute("list", id);
 			input.value = select.value;
-			input.placeholder = "search units";
+			input.dataset.current = select.value;
+			input.dataset.filtering = "0";
 			for (const key in select.dataset) {
 				input.dataset[key] = select.dataset[key];
 			}
-			select.replaceWith(input);
+			const list = document.createElement("div");
+			list.className = "me-combo-list";
+
+			input.addEventListener("focus", () => openCombo(input, list));
+			input.addEventListener("input", () => {
+				input.dataset.filtering = "1";
+				openCombo(input, list);
+			});
+			input.addEventListener("blur", () => {
+				// Late enough for a click on a row to land first.
+				setTimeout(() => {
+					list.style.display = "none";
+					// An abandoned search must not be mistaken for a new value.
+					if (input.dataset.filtering === "1") {
+						input.value = input.dataset.current;
+						input.dataset.filtering = "0";
+					}
+				}, 150);
+			});
+			input.addEventListener("keydown", event => {
+				const rows = [...list.querySelectorAll(".me-combo-row:not(.me-combo-empty)")];
+				const at = rows.findIndex(r => r.classList.contains("on"));
+				if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+					event.preventDefault();
+					if (!rows.length) return;
+					const next = event.key === "ArrowDown"
+						? Math.min(at + 1, rows.length - 1)
+						: Math.max(at - 1, 0);
+					rows.forEach(r => r.classList.remove("on"));
+					rows[next].classList.add("on");
+					rows[next].scrollIntoView({ block: "nearest" });
+				} else if (event.key === "Enter") {
+					event.preventDefault();
+					const chosen = rows[at < 0 ? 0 : at];
+					if (chosen) commitCombo(input, list, chosen.dataset.value);
+				} else if (event.key === "Escape") {
+					input.value = input.dataset.current;
+					input.dataset.filtering = "0";
+					list.style.display = "none";
+				}
+			});
+			list.addEventListener("mousedown", event => {
+				const row = event.target.closest(".me-combo-row");
+				if (row && !row.classList.contains("me-combo-empty")) {
+					event.preventDefault();
+					commitCombo(input, list, row.dataset.value);
+				}
+			});
+
+			wrap.appendChild(input);
+			wrap.appendChild(list);
+			select.replaceWith(wrap);
 		}
 	}
 
