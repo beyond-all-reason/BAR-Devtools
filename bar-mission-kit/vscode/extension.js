@@ -38,7 +38,21 @@ function activate(context) {
 		),
 		vscode.commands.registerCommand("barMissionEditor.openModules", () =>
 			vscode.commands.executeCommand("barMissionEditor.modules.focus")
-		)
+		),
+		// Ctrl+Z has to be claimed by the extension, not by the page. The form
+		// is an iframe inside a webview: it only sees a keystroke while it has
+		// focus, and VS Code binds Ctrl+Z to its own undo regardless. Declaring
+		// the keybinding with `when: focusedView == barMissionEditor.form`
+		// takes it while the panel is focused and leaves the editor's undo
+		// alone everywhere else. Posting straight to serve, because that is the
+		// same channel the page itself uses.
+		vscode.commands.registerCommand("barMissionEditor.undo", async () => {
+			try {
+				await fetch(serverUrl() + "/undo", { method: "POST" });
+			} catch (err) {
+				note(`undo failed: ${err}`);
+			}
+		})
 	);
 
 	const timer = setInterval(async () => {

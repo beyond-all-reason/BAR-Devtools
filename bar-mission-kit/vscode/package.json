@@ -48,6 +48,10 @@
       {
         "command": "barMissionEditor.openModules",
         "title": "Beyond All Reason: Open Reference"
+      },
+      {
+        "command": "barMissionEditor.undo",
+        "title": "Beyond All Reason: Undo Last Editor Change"
       }
     ],
     "configuration": {
@@ -69,6 +73,14 @@
           "description": "Engine write directory, where the editor artifact is published so the in-game panel can read it. Empty auto-detects the usual install locations."
         }
       }
-    }
+    },
+    "keybindings": [
+      {
+        "command": "barMissionEditor.undo",
+        "key": "ctrl+z",
+        "mac": "cmd+z",
+        "when": "focusedView == barMissionEditor.form"
+      }
+    ]
   }
 }

@@ -118,7 +118,11 @@
 		text-overflow: ellipsis; }
 	/* Slot controls size to their content, not to the row: a unit name is long,
 	   a team role is one word. */
+	#titlebar { display: flex; align-items: baseline; gap: 10px; }
+	#titlebar h1 { flex: 1 1 auto; }
+	#undo { flex: 0 0 auto; }
 	.me-select-unit { max-width: 15em; }
+	.me-input-unit { max-width: 15em; color: #9fd3a4; }
 	.me-select-enum { max-width: 7em; }
 	.me-button { background: rgba(255,255,255,0.04); border: 1px solid #2c3b4d; border-radius: 5px;
 		color: #9fb3c8; padding: 3px 11px; font-size: 0.8em; cursor: pointer; }
@@ -219,7 +223,7 @@
 		   fixed measure, so long names (cm8's) are readable instead of clipped. */
 		.me-input, .me-input-obj { width: 100%; }
 		.me-input-num { width: 4em; }
-		.me-select-unit, .me-select-enum { max-width: 100%; }
+		.me-select-unit, .me-select-enum, .me-input-unit { max-width: 100%; }
 		.me-card-head { display: block; position: relative; padding-right: 26px; }
 		.me-card-head .me-x { position: absolute; right: 0; top: 0; }
 	}
@@ -227,7 +231,7 @@
 </head>
 <body>
 <div id="panel">
-	<h1>Campaign Editor</h1>
+	<div id="titlebar"><h1>Campaign Editor</h1><button id="undo" class="me-button" title="Undo the last change (Ctrl+Z)">Undo</button></div>
 	<div id="hint">Waiting for bar-mission-kit serve to write the view artifact…</div>
 	<div id="status"></div>
 	<div id="live-banner">Mission not armed — values go live once it runs in-game.</div>
@@ -265,6 +269,7 @@
 				view = fresh;
 				$("content").innerHTML = fresh.form;
 				applySectionStates();
+				makeUnitPickersSearchable();
 			}
 			const statusResponse = await fetch("/status");
 			if (statusResponse.ok) {
@@ -334,6 +339,16 @@
 		lastGeneration = null;
 	}
 
+	$("undo").addEventListener("click", postUndo);
+
+	// The message channel the extension uses when VS Code swallowed the key
+	// before the iframe ever saw it.
+	addEventListener("message", event => {
+		if (event.data && event.data.command === "undo") {
+			postUndo();
+		}
+	});
+
 	addEventListener("keydown", event => {
 		const undo = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z";
 		if (!undo || event.shiftKey) {
@@ -345,6 +360,55 @@
 		event.preventDefault();
 		postUndo();
 	});
+
+	// The unit picker carries every unit def in the game — around two thousand
+	// of them. A native <select> can only be walked, so finding "corllt" means
+	// scrolling past everything alphabetically before it.
+	//
+	// Swapping it for an <input list> hands the filtering to the browser: type
+	// any part of a name and the list narrows. The dataset attributes come
+	// across untouched, so the delegated change handler keeps working and no
+	// edit path changes. RmlUi never sees this — it renders the <select> the
+	// view actually shipped, which still works there.
+	function makeUnitPickersSearchable() {
+		const selects = $("content").querySelectorAll("select.me-select-unit");
+		if (!selects.length) {
+			return;
+		}
+		// ONE list for all of them. Every unit picker offers the same couple of
+		// thousand defs, and a form with a dozen pickers was carrying twenty
+		// thousand option elements; sharing the list cuts that to one copy and
+		// leaves the page smaller than it was with the selects.
+		const id = "me-units";
+		let list = document.getElementById(id);
+		if (!list) {
+			list = document.createElement("datalist");
+			list.id = id;
+			for (const option of selects[0].options) {
+				const entry = document.createElement("option");
+				entry.value = option.value;
+				// The label carries the readable name, so a search can be for
+				// what the unit is CALLED and not only for its def id.
+				if (option.textContent && option.textContent !== option.value) {
+					entry.label = option.textContent;
+				}
+				list.appendChild(entry);
+			}
+			document.body.appendChild(list);
+		}
+		for (const select of selects) {
+			const input = document.createElement("input");
+			input.type = "text";
+			input.className = "me-input me-input-unit";
+			input.setAttribute("list", id);
+			input.value = select.value;
+			input.placeholder = "search units";
+			for (const key in select.dataset) {
+				input.dataset[key] = select.dataset[key];
+			}
+			select.replaceWith(input);
+		}
+	}
 
 	function fieldIntent(el, newText) {
 		return {
