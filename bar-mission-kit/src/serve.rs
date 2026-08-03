@@ -559,8 +559,16 @@ pub fn apply_edit_journaled(
     edited.push_str(&new_text);
     edited.push_str(&source[end..]);
 
-    // Gate against the same type-derived grammar the view was built from.
-    let surface = crate::types::TypeSurface::load_near(&[missions_dir.to_path_buf()]);
+    // Gate against the same type-derived grammar the view was built from —
+    // resolved from the FILE, not from the missions dir. A mode preset is
+    // written in its module's mode vocabulary, so gating it against the trigger
+    // one made Mode an unknown verb and refused every edit to a preset; and a
+    // preset in another module answers to that module, not to this one.
+    let policy = match recognizer::FileKind::of(&intent.file) {
+        recognizer::FileKind::ModePreset => "mode",
+        recognizer::FileKind::Statements => "trigger",
+    };
+    let surface = crate::types::TypeSurface::load_near_policy(&[path.clone()], policy);
     let recognized = recognizer::recognize_file_with(&intent.file, &edited, &surface)
         .map_err(|e| format!("edit rejected — result does not parse: {e}"))?;
     if !recognized.findings.is_empty() {
@@ -769,6 +777,53 @@ mod tests {
             base_hash: None,
         };
         assert!(apply_edit(&dir, &intent).is_err());
+    }
+
+    #[test]
+    fn a_mode_preset_can_be_edited() {
+        // The write gate re-checks the result before writing, so it has to use
+        // the vocabulary the file is written in. Gated against the trigger
+        // grammar, Mode is an unknown verb and EVERY edit to a preset is
+        // refused — the editor stops accepting changes and the reason goes only
+        // to the serve log.
+        //
+        // The tree matters: the missions dir must itself sit on a types/ dir
+        // publishing the TRIGGER surface, or resolution falls back to the
+        // bundled snapshot — which carries both vocabularies and hides exactly
+        // this bug, as the first version of this test did.
+        let dir = tmpdir("mode-edit");
+        std::fs::create_dir_all(dir.join("types")).unwrap();
+        std::fs::create_dir_all(dir.join("modes")).unwrap();
+        std::fs::write(dir.join("module.lua"), "return { name = \"alpha\" }").unwrap();
+        std::fs::write(
+            dir.join("types/trigger_policy.lua"),
+            "---@meta actions\n---@param c any\n---@return any\nfunction When(c) end\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("types/mode_policy.lua"),
+            "---@meta policy mode\n---@class AlphaChain\n---@field Desc fun(d: string): AlphaChain\n---@param name string\n---@return AlphaChain\nfunction Mode(name) end\n",
+        )
+        .unwrap();
+        let preset = dir.join("modes/thing.lua");
+        std::fs::write(&preset, "return Mode(\"Thing\")\n\t.Desc(\"before\")\n").unwrap();
+
+        // Precondition: the trigger surface really does NOT know Mode, so a
+        // pass below means the policy was chosen, not that everything is known.
+        let trigger = crate::types::TypeSurface::load_near_policy(&[dir.clone()], "trigger");
+        assert!(!trigger.globals.contains_key("Mode"), "test tree is not exercising the bug");
+
+        let source = std::fs::read_to_string(&preset).unwrap();
+        let from = source.find("before").unwrap();
+        let intent = EditIntent {
+            file: "modes/thing.lua".into(),
+            start: from,
+            end: from + "before".len(),
+            new_text: "after".into(),
+            base_hash: None,
+        };
+        apply_edit(&dir, &intent).expect("a preset must be editable");
+        assert!(std::fs::read_to_string(&preset).unwrap().contains("after"));
     }
 
     #[test]
