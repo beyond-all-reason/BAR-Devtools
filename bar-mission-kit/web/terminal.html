@@ -325,6 +325,27 @@
 		lastGeneration = null;
 	}
 
+	// Ctrl+Z / Cmd+Z. A click in this form never enters the text editor's undo
+	// stack, so without this the only way back from a mistyped field is to find
+	// the file and fix it by hand. Typing inside an input keeps the browser's
+	// own undo — this is for the form, not for the caret.
+	async function postUndo() {
+		await fetch("/undo", { method: "POST" });
+		lastGeneration = null;
+	}
+
+	addEventListener("keydown", event => {
+		const undo = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z";
+		if (!undo || event.shiftKey) {
+			return;
+		}
+		if (event.target.matches("input, textarea, select")) {
+			return;
+		}
+		event.preventDefault();
+		postUndo();
+	});
+
 	function fieldIntent(el, newText) {
 		return {
 			file: el.dataset.file,

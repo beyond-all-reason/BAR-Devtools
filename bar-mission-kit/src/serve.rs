@@ -42,6 +42,11 @@ struct AppliedEdit {
     start: usize,
     end: usize,
     new_len: usize,
+    /// What this write replaced. The rebase logic never needed it — spans and
+    /// hashes are enough to carry an intent forward — but undo cannot
+    /// reconstruct anything without it, and the journal is the only place that
+    /// knows.
+    old_text: String,
 }
 
 /// Recent writes per file, so an intent stamped with an older view generation
@@ -50,6 +55,10 @@ struct AppliedEdit {
 #[derive(Default)]
 pub struct EditJournal {
     by_file: std::collections::HashMap<String, std::collections::VecDeque<AppliedEdit>>,
+    /// The file the last recorded write landed in. Ctrl+Z means "undo the
+    /// thing I just did", and the form spans several files, so the panel
+    /// cannot be the one to say which.
+    last_written: Option<String>,
 }
 
 const JOURNAL_DEPTH: usize = 64;
@@ -60,6 +69,7 @@ fn stale(file: &str) -> String {
 
 impl EditJournal {
     fn record(&mut self, file: &str, applied: AppliedEdit) {
+        self.last_written = Some(file.to_string());
         let entries = self.by_file.entry(file.to_string()).or_default();
         entries.push_back(applied);
         while entries.len() > JOURNAL_DEPTH {
@@ -98,6 +108,53 @@ impl EditJournal {
         }
         Err(stale(file))
     }
+}
+
+/// The edit that would put `file` back the way it was before its most recent
+/// recorded write. Undo is not a special path: this hands back an ordinary
+/// intent, which goes through the same gate as anything a person clicks — it
+/// has to parse, it has to stay inside the grammar, and it is refused if the
+/// file moved underneath.
+impl EditJournal {
+    fn undo_intent(&self, file: &str, current: &str) -> Result<EditIntent, String> {
+        let entries = self.by_file.get(file).ok_or_else(|| nothing_to_undo(file))?;
+        let last = entries.back().ok_or_else(|| nothing_to_undo(file))?;
+        if last.after != current {
+            // Something else wrote the file after we did. Undoing our write
+            // would silently discard theirs.
+            return Err(stale(file));
+        }
+        Ok(EditIntent {
+            file: file.to_string(),
+            start: last.start,
+            end: last.start + last.new_len,
+            new_text: last.old_text.clone(),
+            base_hash: Some(current.to_string()),
+        })
+    }
+
+    /// Drop the write an undo has just reversed, so a second undo reaches the
+    /// one before it rather than bouncing between two states forever.
+    fn forget_last(&mut self, file: &str) {
+        if let Some(entries) = self.by_file.get_mut(file) {
+            entries.pop_back();
+        }
+    }
+
+    fn depth(&self, file: &str) -> usize {
+        self.by_file.get(file).map(|e| e.len()).unwrap_or(0)
+    }
+
+    /// The file an unqualified undo should act on.
+    fn most_recent(&self) -> Option<&str> {
+        self.last_written.as_deref()
+    }
+}
+
+fn nothing_to_undo(file: &str) -> String {
+    // Deliberately not "this serve has not written it": by the time the
+    // history is walked back to nothing, it usually has.
+    format!("nothing left to undo for {file}")
 }
 
 #[derive(Deserialize, Debug)]
@@ -277,6 +334,7 @@ impl Server {
             // same tick.
             self.consume_edits();
             self.consume_open_request();
+            self.consume_undo_request();
 
             self.consume_select_mission();
             self.follow_active();
@@ -416,6 +474,50 @@ impl Server {
         let span = apply_edit_journaled(&self.missions_dir, &intent, &mut self.journal)?;
         eprintln!("applied edit to {} [{}..{})", intent.file, span.0, span.1);
         Ok(())
+    }
+
+    /// Undo the most recent write this serve made, through the same gate as
+    /// any other edit. Nothing here bypasses the grammar check: the inverse is
+    /// an ordinary intent, and if putting the old text back would leave the
+    /// file outside the mission subset it is refused like anything else.
+    fn consume_undo_request(&mut self) {
+        let path = self.editor_dir.join("undo_request.json");
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        std::fs::remove_file(&path).ok();
+        let requested: Option<String> = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|v| v.get("file").and_then(|f| f.as_str()).map(|s| s.to_string()));
+        let Some(file) = requested.or_else(|| self.journal.most_recent().map(String::from)) else {
+            self.write_status(false, "nothing left to undo — this serve has not written anything yet");
+            return;
+        };
+        let result = (|| {
+            let path = resolve_mission_file(&self.missions_dir, &file)?;
+            let source = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+            let current = recognizer::fnv1a(source.as_bytes());
+            let intent = self.journal.undo_intent(&file, &current)?;
+            apply_edit_journaled(&self.missions_dir, &intent, &mut self.journal)?;
+            // Two entries now describe the same round trip. Dropping both
+            // leaves the next undo reaching the write before it, rather than
+            // flipping between two states forever.
+            self.journal.forget_last(&file);
+            self.journal.forget_last(&file);
+            Ok::<_, String>(())
+        })();
+        match result {
+            Ok(()) => {
+                self.generation += 1;
+                let left = self.journal.depth(&file);
+                self.write_status(true, &format!("undid the last edit to {file} ({left} left)"));
+                eprintln!("undid the last edit to {file}");
+            }
+            Err(message) => {
+                self.generation += 1;
+                self.write_status(false, &message);
+            }
+        }
     }
 
     /// Open requests become a sequenced open-target artifact (GET
@@ -585,7 +687,14 @@ pub fn apply_edit_journaled(
     std::fs::write(&path, edited).map_err(|e| e.to_string())?;
     journal.record(
         &intent.file,
-        AppliedEdit { before: current, after, start, end, new_len: new_text.len() },
+        AppliedEdit {
+            before: current,
+            after,
+            start,
+            end,
+            new_len: new_text.len(),
+            old_text: source[start..end].to_string(),
+        },
     );
     Ok((start, end))
 }
@@ -824,6 +933,85 @@ mod tests {
         };
         apply_edit(&dir, &intent).expect("a preset must be editable");
         assert!(std::fs::read_to_string(&preset).unwrap().contains("after"));
+    }
+
+    /// Drive one edit through the same path serve does, keeping the journal.
+    fn edit_with(dir: &Path, journal: &mut EditJournal, intent: &EditIntent) -> Result<Span, String> {
+        apply_edit_journaled(dir, intent, journal)
+    }
+
+    #[test]
+    fn undo_restores_what_the_last_edit_replaced() {
+        let dir = tmpdir("undo-basic");
+        setup(&dir);
+        let file = "hello/triggers/win.lua";
+        let path = dir.join(file);
+        let before = std::fs::read_to_string(&path).unwrap();
+        let at = before.find('3').unwrap();
+
+        let mut journal = EditJournal::default();
+        edit_with(&dir, &mut journal, &EditIntent {
+            file: file.into(), start: at, end: at + 1, new_text: "5".into(), base_hash: None,
+        })
+        .unwrap();
+        assert!(std::fs::read_to_string(&path).unwrap().contains("armpw\"), 5)"));
+
+        let current = recognizer::fnv1a(std::fs::read_to_string(&path).unwrap().as_bytes());
+        let inverse = journal.undo_intent(file, &current).unwrap();
+        edit_with(&dir, &mut journal, &inverse).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before, "undo must restore the bytes exactly");
+    }
+
+    #[test]
+    fn undo_refuses_when_someone_else_wrote_the_file() {
+        // Undo puts back what WE replaced. If another hand changed the file
+        // since, replaying our inverse would quietly discard their work.
+        let dir = tmpdir("undo-stale");
+        setup(&dir);
+        let file = "hello/triggers/win.lua";
+        let path = dir.join(file);
+        let at = std::fs::read_to_string(&path).unwrap().find('3').unwrap();
+
+        let mut journal = EditJournal::default();
+        edit_with(&dir, &mut journal, &EditIntent {
+            file: file.into(), start: at, end: at + 1, new_text: "5".into(), base_hash: None,
+        })
+        .unwrap();
+
+        std::fs::write(&path, WIN.replace('3', "9")).unwrap();
+        let current = recognizer::fnv1a(std::fs::read_to_string(&path).unwrap().as_bytes());
+        assert!(journal.undo_intent(file, &current).is_err(), "undo must not clobber a foreign write");
+    }
+
+    #[test]
+    fn undo_is_gated_like_any_other_edit() {
+        // Putting the old text back is still an edit, and still has to leave a
+        // file the grammar accepts. Nothing about undo is privileged.
+        let dir = tmpdir("undo-gate");
+        setup(&dir);
+        let file = "hello/triggers/win.lua";
+        let mut journal = EditJournal::default();
+        let intent = EditIntent {
+            file: file.into(), start: 0, end: 0, new_text: "-- hi\n".into(), base_hash: None,
+        };
+        edit_with(&dir, &mut journal, &intent).unwrap();
+
+        let path = dir.join(file);
+        let current = recognizer::fnv1a(std::fs::read_to_string(&path).unwrap().as_bytes());
+        let inverse = journal.undo_intent(file, &current).unwrap();
+        // The inverse is an ordinary intent: same struct, same route.
+        assert_eq!(inverse.new_text, "");
+        edit_with(&dir, &mut journal, &inverse).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), WIN);
+    }
+
+    #[test]
+    fn nothing_to_undo_is_a_message_not_a_panic() {
+        let dir = tmpdir("undo-empty");
+        setup(&dir);
+        let journal = EditJournal::default();
+        let err = journal.undo_intent("hello/triggers/win.lua", "deadbeef").unwrap_err();
+        assert!(err.contains("nothing left to undo"), "{err}");
     }
 
     #[test]

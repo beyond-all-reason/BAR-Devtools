@@ -8,6 +8,7 @@
 //!   GET  /status          -> status.json
 //!   POST /edit            -> <editor-dir>/edits/http_<ts>_<n>.json (validated shape)
 //!   POST /open            -> <editor-dir>/open_request.json
+//!   POST /undo            -> <editor-dir>/undo_request.json
 //!   POST /select_mission  -> <editor-dir>/select_mission.json
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -162,6 +163,16 @@ fn handle(mut stream: TcpStream, editor_dir: PathBuf) -> std::io::Result<()> {
         ("GET", "/state") => respond_file(&mut stream, editor_dir.join("state.json")),
         ("GET", "/open_request") => respond_file(&mut stream, editor_dir.join("open_target.json")),
         ("POST", "/edit") => respond_edit(&mut stream, &editor_dir, &body),
+        // Undo drops an intent like everything else — the serve loop decides
+        // what it means and whether it is allowed.
+        ("POST", "/undo") => {
+            // An empty body means "the last thing I did, wherever it was".
+            let payload: &[u8] = if body.is_empty() { b"{}" } else { &body };
+            match std::fs::write(editor_dir.join("undo_request.json"), payload) {
+                Ok(()) => respond(&mut stream, 202, "application/json", b"{\"queued\":true}"),
+                Err(e) => respond(&mut stream, 400, "text/plain", e.to_string().as_bytes()),
+            }
+        }
         ("POST", "/open") => {
             if serde_json::from_slice::<crate::serve::OpenRequest>(&body).is_err() {
                 return respond(&mut stream, 400, "text/plain", b"bad open request");
