@@ -7,7 +7,10 @@ set export
 DEVTOOLS_DIR := justfile_directory()
 BAR_DIR      := DEVTOOLS_DIR / "Beyond-All-Reason"
 CODEMOD_DIR  := DEVTOOLS_DIR / "bar-lua-codemod"
-CODEMOD_BIN  := CODEMOD_DIR / "target" / "release" / "bar-lua-codemod"
+# Overridable so a prebuilt binary can stand in for a local build — the dev
+# image ships one at /usr/local/bin, which is what CI uses instead of spending
+# ~2.5 minutes on cargo. A local target/ build still wins by default.
+CODEMOD_BIN  := env('CODEMOD_BIN', CODEMOD_DIR / "target" / "release" / "bar-lua-codemod")
 
 [private]
 require-bar:

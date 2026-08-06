@@ -7,7 +7,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
         rust cargo \
         clang-tools-extra cmake \
         just \
-        gcc gcc-c++ make git curl jq unzip binutils \
+        gcc gcc-c++ make git gh curl jq unzip binutils \
         gawk \
         python3-pip \
         gpgme \
