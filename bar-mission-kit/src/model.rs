@@ -29,6 +29,12 @@ pub struct FileAst {
     pub hash: String,
     /// Every Objective("name") seen in this file — dropdown fodder.
     pub objectives: Vec<String>,
+    /// Objective ids this file DECLARES (objectives.lua statement heads) —
+    /// the definition sites objective references cross-check against.
+    pub objective_defs: Vec<String>,
+    /// Objective references this file makes (trigger conditions/effects and
+    /// the definition site's own nested IsComplete gates), with lines.
+    pub objective_refs: Vec<NameRef>,
     /// Unit/group names this file DECLARES (units.lua Named/Grouped) — the
     /// definition sites Unit()/Units.* references are cross-checked against.
     pub unit_defs: Vec<String>,

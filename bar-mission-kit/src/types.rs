@@ -342,7 +342,31 @@ impl TypeSurface {
         heads
     }
 
+    /// The objectives definition-site grammar (objectives.lua): the same
+    /// Objective verb opens a declaration chain there. The head exists
+    /// exactly when the game's types declare the declaration class — derived
+    /// presence, hardcoded name, mirroring the runtime's per-sandbox env.
+    pub fn objective_heads(&self) -> BTreeMap<String, String> {
+        let mut heads = BTreeMap::new();
+        if self.classes.contains_key("MissionObjectiveDeclaration") {
+            heads.insert("Objective".to_string(), "MissionObjectiveDeclaration".to_string());
+        }
+        heads
+    }
+
+    /// A class's callable field names — the chain verbs a head mapped to it
+    /// admits.
+    pub fn class_field_names(&self, class: &str) -> Vec<String> {
+        self.classes
+            .get(class)
+            .map(|fields| fields.keys().filter(|k| *k != CALLABLE).cloned().collect())
+            .unwrap_or_default()
+    }
+
     /// The chain verbs a statement head admits (the chain class's fields).
+    /// The recognizer resolves through its per-kind heads map instead; this
+    /// remains the spec-facing entry.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn chain_verbs(&self, head: &str) -> Vec<String> {
         self.statement_heads()
             .get(head)

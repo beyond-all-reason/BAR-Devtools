@@ -15,8 +15,15 @@
 ---@return TriggerChain
 function When(condition) end
 
----Objective handle: .Complete() builds the effect side, .IsComplete() the
----condition side.
+---Objective handle: .Complete() and .Reveal() build the effect side,
+---.IsComplete() the condition side. Reveal marks the objective relevant so
+---the tracker widget draws it; Complete implies Reveal.
+---
+---In objectives.lua — the mission's definition site, sibling of units.lua —
+---the same verb starts a declaration instead (MissionObjectiveDeclaration:
+---.Title/.CompletedWhen/.When/.RevealedWhen/.Foreshadow). When that file
+---exists, an id no declaration backs is a load error here, the same
+---contract Unit has with the roster.
 ---@param name ObjectiveName
 ---@return MissionObjective
 function Objective(name) end

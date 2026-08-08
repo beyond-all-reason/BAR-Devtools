@@ -32,6 +32,24 @@
       "template": "Waves.Begin(Scavengers.Skirmish).Against(Team.Player).From(0.85, 0.15).Intensity(0.3)"
     }
   ],
+  "declarations": [
+    {
+      "label": "Declare an objective",
+      "template": "\nObjective(\"NEW_OBJECTIVE\")\n\t.Title(\"TITLE\")\n\t.CompletedWhen(Unit(\"UNIT_NAME\").IsSpotted(Team.Player))\n"
+    },
+    {
+      "label": "Declare, gated on a predecessor",
+      "template": "\nObjective(\"NEW_OBJECTIVE\")\n\t.Title(\"TITLE\")\n\t.CompletedWhen(Unit(\"UNIT_NAME\").IsSpotted(Team.Player))\n\t.When(Objective(\"OBJECTIVE\").IsComplete())\n"
+    },
+    {
+      "label": "Declare with its own reveal moment",
+      "template": "\nObjective(\"NEW_OBJECTIVE\")\n\t.Title(\"TITLE\")\n\t.RevealedWhen(MatchFlow.Started())\n\t.CompletedWhen(Unit(\"UNIT_NAME\").IsSpotted(Team.Player))\n"
+    },
+    {
+      "label": "Declare foreshadowed (greyed until revealed)",
+      "template": "\nObjective(\"NEW_OBJECTIVE\")\n\t.Title(\"TITLE\")\n\t.Foreshadow()\n\t.CompletedWhen(Unit(\"UNIT_NAME\").IsSpotted(Team.Player))\n"
+    }
+  ],
   "spawns": [
     {
       "label": "Spawn a unit",

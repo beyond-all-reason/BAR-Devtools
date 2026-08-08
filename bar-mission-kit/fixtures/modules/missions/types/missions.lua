@@ -59,11 +59,43 @@
 ---@class MissionEffect
 ---@field execute fun(ctx: MissionContext)
 
---- The injected Objective verb's handle: Complete() builds the effect side,
---- IsComplete() the condition side.
+--- The injected Objective verb's handle. In trigger files: Complete() and
+--- Reveal() build the effect side, IsComplete() the condition side (Reveal
+--- marks the objective relevant so the tracker draws it; Complete implies
+--- Reveal). In objectives.lua — the definition-site sandbox — the same verb
+--- starts a declaration: Title/CompletedWhen/When/RevealedWhen/Foreshadow
+--- chain there and ONLY there, the way Spawn belongs to units.lua.
 ---@class MissionObjective
 ---@field Complete fun(): MissionEffect
+---@field Reveal fun(): MissionEffect
 ---@field IsComplete fun(): MissionCondition
+---@field Title fun(title: string): MissionObjectiveDeclaration objectives.lua sandbox only
+---@field CompletedWhen fun(condition: MissionCondition): MissionObjectiveDeclaration objectives.lua sandbox only
+---@field RevealedWhen fun(condition: MissionCondition): MissionObjectiveDeclaration objectives.lua sandbox only
+---@field Foreshadow fun(): MissionObjectiveDeclaration objectives.lua sandbox only
+
+--- The declaration chain in objectives.lua — the definition site for every
+--- objective id the mission speaks, the way units.lua is for unit names.
+--- Declaration order is the tracker's display order and the default reveal
+--- cadence (first line at arm, each next when its predecessor completes);
+--- the sequence gates reveal ONLY — completion gating stays explicit, via
+--- When. IsComplete is the reference side, valid in any condition slot.
+---@class MissionObjectiveDeclaration
+---@field Title fun(title: string): MissionObjectiveDeclaration display wording; defaults to the id with underscores as spaces
+---@field CompletedWhen fun(condition: MissionCondition): MissionObjectiveDeclaration one way to complete; a second CompletedWhen is another way (OR), each compiling to its own trigger
+---@field When fun(condition: MissionCondition): MissionObjectiveDeclaration another condition on the LATEST CompletedWhen; all in a disjunct must hold (AND)
+---@field RevealedWhen fun(condition: MissionCondition): MissionObjectiveDeclaration replace the default reveal cadence with the mission's own moment
+---@field Foreshadow fun(): MissionObjectiveDeclaration draw the line greyed-out before its reveal
+---@field IsComplete fun(): MissionCondition
+
+--- One declared objective, as objectives.lua's Finalize returns it.
+---@class MissionObjectiveDeclarationEntry
+---@field id string
+---@field title string
+---@field completions MissionCondition[][] disjuncts (one per CompletedWhen), each AND-composed into its own derived trigger; empty = a standing objective, transparent to the reveal cadence
+---@field revealedWhen MissionCondition|nil set by RevealedWhen
+---@field revealAtArm boolean|nil marked by the loader: no declared moment, no completable predecessor
+---@field foreshadow boolean
 
 --- A named-unit reference produced by the injected Unit verb. Both
 --- conditions are latched; the name is validated against the roster at load — unknown names never arm.

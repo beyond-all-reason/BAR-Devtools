@@ -22,6 +22,10 @@ use std::collections::BTreeMap;
 pub enum FileKind {
     Statements,
     ModePreset,
+    /// objectives.lua at the mission root: the objective definition site,
+    /// Objective declaration chains — the runtime injects a different env
+    /// there, and so does the recognizer.
+    Objectives,
 }
 
 impl FileKind {
@@ -35,10 +39,20 @@ impl FileKind {
             .any(|component| component == "modes");
         if preset {
             FileKind::ModePreset
+        } else if is_objectives(path) {
+            FileKind::Objectives
         } else {
             FileKind::Statements
         }
     }
+}
+
+/// The mission-root objectives.lua — the definition site. A trigger file
+/// that happens to be called objectives.lua is still a trigger file.
+pub fn is_objectives(path: &str) -> bool {
+    let components: Vec<&str> = path.split(|c| c == '/' || c == '\\').collect();
+    components.last() == Some(&"objectives.lua")
+        && !components.iter().any(|c| *c == "triggers" || *c == "modes")
 }
 
 /// Steps a chain must contain to be executable, per head. The runtime
@@ -77,11 +91,18 @@ pub fn recognize_file_with(
             .join("; "));
     }
 
+    let kind = FileKind::of(path);
+    // The heads ARE the sandbox: the definition site speaks declarations,
+    // everything else speaks the statement grammar.
+    let heads = match kind {
+        FileKind::Objectives => surface.objective_heads(),
+        _ => surface.statement_heads(),
+    };
     let mut rec = Rec {
         path: path.to_string(),
         source,
-        kind: FileKind::of(path),
-        heads: surface.statement_heads(),
+        kind,
+        heads: heads.clone(),
         surface,
         groups: vec![Group { label: None, triggers: Vec::new() }],
         opaque: Vec::new(),
@@ -116,9 +137,20 @@ pub fn recognize_file_with(
         for trigger in &mut group.triggers {
             let head = trigger.steps.first().map(|s| s.verb.clone()).unwrap_or_default();
             for step in &mut trigger.steps {
-                if let Some(sig) = surface.step_sig(&head, &step.verb) {
-                    let sig = sig.clone();
-                    annotator.stamp_call(&sig, &mut step.args, &mut nouns);
+                // The head resolves through its global; chained verbs through
+                // the head's chain class — the same split the runtime's env
+                // makes, and the only resolution that works for the
+                // definition site (whose global returns the OTHER surface).
+                let sig = if step.verb == head {
+                    surface.step_sig(&head, &head).cloned()
+                } else {
+                    heads.get(&head).and_then(|class| surface.member_sig(class, &step.verb)).cloned()
+                };
+                if let Some(sig) = sig {
+                    // The definition site's head argument IS the declaration;
+                    // every other objective id anywhere is a reference.
+                    let declares_objective = kind == FileKind::Objectives && step.verb == head;
+                    annotator.stamp_call_as(&sig, &mut step.args, &mut nouns, declares_objective);
                 }
                 for arg in &mut step.args {
                     annotator.value(arg, &mut nouns);
@@ -134,6 +166,8 @@ pub fn recognize_file_with(
             path: rec.path,
             hash: fnv1a(source.as_bytes()),
             objectives: nouns.objectives,
+            objective_defs: nouns.objective_defs,
+            objective_refs: nouns.objective_refs,
             unit_defs: nouns.unit_defs,
             group_defs: nouns.group_defs,
             unit_refs: nouns.unit_refs,
@@ -301,7 +335,13 @@ impl<'s> Rec<'s> {
                 self.finding(span, message.to_string());
             }
         }
-        let chain_verbs = self.surface.chain_verbs(&head);
+        // Through the per-kind heads map, so the definition site's chain
+        // resolves against its declaration class, not the trigger surface.
+        let chain_verbs = self
+            .heads
+            .get(&head)
+            .map(|class| self.surface.class_field_names(class))
+            .unwrap_or_default();
         for step in steps.iter().skip(1) {
             if step.verb == "Register" {
                 self.finding(step.span, "Register is gone — chains end at their last Do".into());
@@ -538,6 +578,8 @@ struct Decorator {
 #[derive(Default)]
 struct Nouns {
     objectives: Vec<String>,
+    objective_defs: Vec<String>,
+    objective_refs: Vec<NameRef>,
     unit_defs: Vec<String>,
     group_defs: Vec<String>,
     unit_refs: Vec<NameRef>,
@@ -554,12 +596,25 @@ struct Annotator<'s> {
 impl<'s> Annotator<'s> {
     /// Stamp one invocation's literal args from a signature, positionally.
     fn stamp_call(&self, sig: &crate::types::FnSig, args: &mut [Value], nouns: &mut Nouns) {
+        self.stamp_call_as(sig, args, nouns, false);
+    }
+
+    /// As stamp_call; `declares_objective` marks this invocation the
+    /// objective definition site (an objectives.lua head), so its id lands
+    /// in defs instead of refs.
+    fn stamp_call_as(
+        &self,
+        sig: &crate::types::FnSig,
+        args: &mut [Value],
+        nouns: &mut Nouns,
+        declares_objective: bool,
+    ) {
         for (param, arg) in sig.params.iter().zip(args.iter_mut()) {
             let (name, type_name) = param;
             match arg {
                 Value::String { value, span, semantic } => {
                     if let Some(slug) = self.surface.semantic_for(type_name) {
-                        self.collect(&slug, value, span.0, nouns);
+                        self.collect(&slug, value, span.0, nouns, declares_objective);
                         *semantic = Some(slug);
                     }
                 }
@@ -575,9 +630,19 @@ impl<'s> Annotator<'s> {
         }
     }
 
-    fn collect(&self, slug: &str, value: &str, at: usize, nouns: &mut Nouns) {
+    fn collect(&self, slug: &str, value: &str, at: usize, nouns: &mut Nouns, declares_objective: bool) {
         match slug {
-            "objective_name" => nouns.objectives.push(value.to_string()),
+            "objective_name" => {
+                nouns.objectives.push(value.to_string());
+                if declares_objective {
+                    nouns.objective_defs.push(value.to_string());
+                } else {
+                    nouns.objective_refs.push(NameRef {
+                        name: value.to_string(),
+                        line: line_of(self.source, at),
+                    });
+                }
+            }
             "unit_name" => {
                 if self.declares {
                     nouns.unit_defs.push(value.to_string());

@@ -540,7 +540,7 @@
 	// the module editor owns nouns and modules. ?focus= names the view; each
 	// keeps only its own sections and summary. A dashboard tile pointing at
 	// the other view's section still reveals it — the tiles are the crossing.
-	const VIEW_SECTIONS = { mission: ["mission", "units", "nouns"], modules: ["graph", "modules"] };
+	const VIEW_SECTIONS = { mission: ["mission", "objectives", "units", "nouns"], modules: ["graph", "modules"] };
 	const viewScope = new URLSearchParams(location.search).get("focus") || "mission";
 	const scopedSections = VIEW_SECTIONS[viewScope] || null;
 	function applySectionStates() {
@@ -674,7 +674,7 @@
 		if (swap) return openModal("swap_" + swap.dataset.pool, swap);
 		const add = event.target.closest("[data-add]");
 		if (add) {
-			const modal = { statement: "add_statement", spawn: "add_spawn" }[add.dataset.add] || "add_step";
+			const modal = { statement: "add_statement", spawn: "add_spawn", declaration: "add_declaration" }[add.dataset.add] || "add_step";
 			return openModal(modal, add);
 		}
 	});

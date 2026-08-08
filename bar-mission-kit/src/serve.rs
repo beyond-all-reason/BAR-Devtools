@@ -668,7 +668,9 @@ pub fn apply_edit_journaled(
     // preset in another module answers to that module, not to this one.
     let policy = match recognizer::FileKind::of(&intent.file) {
         recognizer::FileKind::ModePreset => "mode",
-        recognizer::FileKind::Statements => "trigger",
+        // The board's grammar rides the trigger policy surface: the same
+        // metas declare Objective and the declaration class.
+        recognizer::FileKind::Statements | recognizer::FileKind::Objectives => "trigger",
     };
     let surface = crate::types::TypeSurface::load_near_policy(&[path.clone()], policy);
     let recognized = recognizer::recognize_file_with(&intent.file, &edited, &surface)

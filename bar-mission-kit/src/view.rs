@@ -98,6 +98,8 @@ pub struct Modals {
     pub add_statement: Modal,
     /// The roster's own palette: spawn chains, not trigger vocabulary.
     pub add_spawn: Modal,
+    /// The board's palette: objective declarations (objectives.lua).
+    pub add_declaration: Modal,
     pub swap_conditions: Modal,
     pub swap_effects: Modal,
 }
@@ -167,6 +169,10 @@ struct Surface {
     /// fraction, and `number` cannot say that.
     #[serde(default)]
     spawns: Vec<SurfaceEntry>,
+    /// Objective declaration chains (objectives.lua). Curated like spawns:
+    /// a declaration is a composition, not one signature.
+    #[serde(default)]
+    declarations: Vec<SurfaceEntry>,
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -253,8 +259,9 @@ pub fn unknown_unit_defs(ast: &MissionAst, domains: &Domains) -> Vec<crate::mode
 pub fn render(ast: &MissionAst, domains: &Domains, scope: &Scope) -> ViewArtifact {
     let surface: Surface = serde_json::from_value(ast.surface.clone()).unwrap_or_default();
     let live = std::cell::RefCell::new(Vec::new());
-    let triggers = xmlize(&dioxus_ssr::render_element(body(ast, &surface, domains, true, &live, Some(false))));
-    let units = xmlize(&dioxus_ssr::render_element(body(ast, &surface, domains, true, &live, Some(true))));
+    let triggers = xmlize(&dioxus_ssr::render_element(body(ast, &surface, domains, true, &live, Some(Panel::Triggers))));
+    let units = xmlize(&dioxus_ssr::render_element(body(ast, &surface, domains, true, &live, Some(Panel::Roster))));
+    let objectives_board = xmlize(&dioxus_ssr::render_element(body(ast, &surface, domains, true, &live, Some(Panel::Objectives))));
     let billboard = xmlize(&dioxus_ssr::render_element(body(ast, &surface, domains, false, &live, None)));
     let nouns = xmlize(&dioxus_ssr::render_element(nouns_body(ast, domains, &live)));
 
@@ -275,21 +282,18 @@ pub fn render(ast: &MissionAst, domains: &Domains, scope: &Scope) -> ViewArtifac
         unit_names,
         groups,
     };
-    let trigger_files = ast.files.iter().filter(|f| !is_roster(&f.path)).count();
-    let spawn_count: usize = ast
-        .files
-        .iter()
-        .filter(|f| is_roster(&f.path))
-        .flat_map(|f| f.groups.iter())
-        .map(|g| g.triggers.len())
-        .sum();
-    let trigger_count: usize = ast
-        .files
-        .iter()
-        .filter(|f| !is_roster(&f.path))
-        .flat_map(|f| f.groups.iter())
-        .map(|g| g.triggers.len())
-        .sum();
+    let chains_in = |panel: Panel| -> usize {
+        ast.files
+            .iter()
+            .filter(|f| panel_of(&f.path) == panel)
+            .flat_map(|f| f.groups.iter())
+            .map(|g| g.triggers.len())
+            .sum()
+    };
+    let trigger_files = ast.files.iter().filter(|f| panel_of(&f.path) == Panel::Triggers).count();
+    let spawn_count = chains_in(Panel::Roster);
+    let trigger_count = chains_in(Panel::Triggers);
+    let declaration_count = chains_in(Panel::Objectives);
     let form = [
         format!("<div class=\"me-view\" data-view=\"mission\">{}{}</div>",
             crumb(scope),
@@ -300,6 +304,13 @@ pub fn render(ast: &MissionAst, domains: &Domains, scope: &Scope) -> ViewArtifac
             &format!("{trigger_count} in {trigger_files} file{}", plural(trigger_files)),
             true,
             &triggers,
+        ),
+        section(
+            "objectives",
+            "Objectives",
+            &format!("{declaration_count} declaration{}", plural(declaration_count)),
+            true,
+            &objectives_board,
         ),
         section(
             "units",
@@ -900,11 +911,29 @@ fn nouns_body(
     }
 }
 
-/// A mission's files split by what they author: roster (units.lua) or
-/// triggers. They get their own sections — a spawn list and a rule list are
-/// different work, and mixing them buries both.
+/// A mission's files split by what they author: roster (units.lua),
+/// objective board (objectives.lua) or triggers. They get their own
+/// sections — a spawn list, a board and a rule list are different work, and
+/// mixing them buries all three.
 fn is_roster(path: &str) -> bool {
     path.ends_with("units.lua")
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Panel {
+    Triggers,
+    Roster,
+    Objectives,
+}
+
+fn panel_of(path: &str) -> Panel {
+    if is_roster(path) {
+        Panel::Roster
+    } else if crate::recognizer::is_objectives(path) {
+        Panel::Objectives
+    } else {
+        Panel::Triggers
+    }
 }
 
 fn body<'a>(
@@ -913,11 +942,11 @@ fn body<'a>(
     domains: &'a Domains,
     editable: bool,
     live: &'a std::cell::RefCell<Vec<LiveProbe>>,
-    roster: Option<bool>,
+    panel: Option<Panel>,
 ) -> Element {
     let style = if editable { Style::Ui } else { Style::Dsl };
     rsx! {
-        for file in ast.files.iter().filter(|f| roster.is_none_or(|r| is_roster(&f.path) == r)) {
+        for file in ast.files.iter().filter(|f| panel.is_none_or(|p| panel_of(&f.path) == p)) {
             {file_view(file, &Ctx {
                 file: &file.path,
                 hash: &file.hash,
@@ -950,9 +979,9 @@ fn file_view(file: &FileAst, ctx: &Ctx) -> Element {
                 {trigger_card(trigger, ctx)}
             }
         }
-        // Two palettes, one per file kind: trigger vocabulary for trigger
-        // files, spawn chains for the roster.
-        if ctx.editable && file.path.ends_with("units.lua") && !ctx.surface.spawns.is_empty() {
+        // One palette per file kind: trigger vocabulary for trigger files,
+        // spawn chains for the roster, declarations for the board.
+        if ctx.editable && panel_of(&file.path) == Panel::Roster && !ctx.surface.spawns.is_empty() {
             div { class: "me-add-row me-add-statement-row",
                 button {
                     class: "me-button me-add-btn",
@@ -964,7 +993,19 @@ fn file_view(file: &FileAst, ctx: &Ctx) -> Element {
                 }
             }
         }
-        if ctx.editable && !ctx.surface.conditions.is_empty() && !file.path.ends_with("units.lua") {
+        if ctx.editable && panel_of(&file.path) == Panel::Objectives && !ctx.surface.declarations.is_empty() {
+            div { class: "me-add-row me-add-statement-row",
+                button {
+                    class: "me-button me-add-btn",
+                    "data-add": "declaration",
+                    "data-insert": "{file.insert_trigger_at}",
+                    "data-file": "{ctx.file}",
+                    "data-hash": "{ctx.hash}",
+                    "+ declare objective"
+                }
+            }
+        }
+        if ctx.editable && !ctx.surface.conditions.is_empty() && panel_of(&file.path) == Panel::Triggers {
             div { class: "me-add-row me-add-statement-row",
                 button {
                     class: "me-button me-add-btn",
@@ -1060,7 +1101,14 @@ fn step_row(step: &Step, step_index: usize, ctx: &Ctx) -> Element {
         "Do" => "effect",
         _ => "mod",
     };
-    let verb = step.verb.to_uppercase();
+    // Split camel case before shouting: CompletedWhen -> COMPLETED WHEN.
+    let mut verb = String::new();
+    for (i, ch) in step.verb.char_indices() {
+        if ch.is_uppercase() && i > 0 {
+            verb.push(' ');
+        }
+        verb.push(ch.to_ascii_uppercase());
+    }
     let pool = match badge {
         "cond" if !ctx.surface.conditions.is_empty() => Some("conditions"),
         "effect" if !ctx.surface.effects.is_empty() => Some("effects"),
@@ -1639,6 +1687,11 @@ fn modals(surface: &Surface) -> Modals {
         add_spawn.push(row("spawn", sp, sp.template.clone()));
     }
 
+    let mut add_declaration = vec![group("DECLARE")];
+    for d in &surface.declarations {
+        add_declaration.push(row("trigger", d, d.template.clone()));
+    }
+
     let mut add_statement = vec![group("STARTS WHEN...")];
     for c in &surface.conditions {
         add_statement.push(row(
@@ -1662,6 +1715,7 @@ fn modals(surface: &Surface) -> Modals {
         add_step: Modal { title: "Add to this trigger".into(), rows: add_step },
         add_statement: Modal { title: "New statement".into(), rows: add_statement },
         add_spawn: Modal { title: "Add a spawn".into(), rows: add_spawn },
+        add_declaration: Modal { title: "Declare an objective".into(), rows: add_declaration },
         swap_conditions: Modal { title: "Swap condition".into(), rows: swap(&surface.conditions) },
         swap_effects: Modal { title: "Swap effect".into(), rows: swap(&surface.effects) },
     }
@@ -2110,6 +2164,26 @@ When(Waves.BossDefeated(Scavengers.Horde))
         assert!(view.form.contains("data-op=\"remove\""), "{}", view.form);
         assert_eq!(view.vocabulary.unit_names, vec!["hub".to_string()]);
         assert_eq!(view.vocabulary.groups, vec!["outpost".to_string()]);
+    }
+
+    #[test]
+    fn the_board_gets_its_own_section_and_palette() {
+        let board = "Objective(\"first\")\n\t.Title(\"The First\")\n\t.CompletedWhen(Unit(\"hub\").IsSpotted(Team.Player))\n";
+        let rec = crate::recognizer::recognize_file("objectives.lua", board).unwrap();
+        let ast = MissionAst { version: 1, generation: 1, files: vec![rec.file], surface: test_surface() };
+        let view = render(&ast, &domains(), &Scope::default());
+        assert_wellformed(&view.form);
+        // Its own section, counted as declarations — not as triggers.
+        assert!(view.form.contains("data-section=\"objectives\""), "{}", view.form);
+        assert!(view.form.contains("1 declaration"), "{}", view.form);
+        assert!(view.form.contains("0 in 0 file"), "{}", view.form);
+        // Its own palette: declarations, not trigger vocabulary or spawns.
+        assert!(view.form.contains("data-add=\"declaration\""), "{}", view.form);
+        assert!(view.form.contains("+ declare objective"));
+        assert!(!view.form.contains("data-add=\"statement\""), "{}", view.form);
+        assert!(view.modals.add_declaration.rows.len() > 1, "curated declaration templates ride the surface");
+        // The declared id feeds the same vocabulary triggers complete against.
+        assert_eq!(view.vocabulary.objectives, vec!["first".to_string()]);
     }
 
     #[test]
