@@ -1047,14 +1047,14 @@ fn trigger_card(trigger: &Trigger, ctx: &Ctx) -> Element {
                     }
                 }
             }
-            for step in trigger.steps.iter().filter(|s| s.verb != "Register") {
-                {step_row(step, ctx)}
+            for (step_index, step) in trigger.steps.iter().filter(|s| s.verb != "Register").enumerate() {
+                {step_row(step, step_index, ctx)}
             }
         }
     }
 }
 
-fn step_row(step: &Step, ctx: &Ctx) -> Element {
+fn step_row(step: &Step, step_index: usize, ctx: &Ctx) -> Element {
     let badge = match step.verb.as_str() {
         "When" | "AndWhen" => "cond",
         "Do" => "effect",
@@ -1095,7 +1095,10 @@ fn step_row(step: &Step, ctx: &Ctx) -> Element {
                         img { src: "/luaui/images/repeat.png", width: "11", height: "11" }
                     }
                 }
-                if ctx.editable && step.verb == "Do" {
+                // Do lines and CHAINED When lines are whole-line removable;
+                // the head (index 0) opens the statement and its next line
+                // starts with a dot, so it keeps no remove button.
+                if ctx.editable && (step.verb == "Do" || (step_index > 0 && step.verb == "When")) {
                     button {
                         class: "me-button me-x",
                         "data-op": "remove",
@@ -2211,6 +2214,22 @@ When(Waves.BossDefeated(Scavengers.Horde))
         assert!(view.modals.swap_conditions.rows.iter().all(|r| r.kind == "swap"
             && r.new_text.starts_with('(')
             && r.new_text.ends_with(')')));
+    }
+
+    #[test]
+    fn chained_conditions_are_removable_and_the_head_is_not() {
+        let chained = r#"
+When(Team.Player.Has(UnitDef("armpw"), 3))
+	.When(Objective("build_pawns").IsComplete())
+	.Do(MatchFlow.Victory(Team.Player))
+"#;
+        let rec = crate::recognizer::recognize_file("triggers/chained.lua", chained).unwrap();
+        let ast = MissionAst { version: 1, generation: 1, files: vec![rec.file], surface: test_surface() };
+        let view = render(&ast, &domains(), &Scope::default());
+        // Exactly three removes: the trigger card, the Do line, and the
+        // chained When. A fourth would mean the HEAD grew one — removing the
+        // opener would leave the next line starting with a dot.
+        assert_eq!(view.form.matches("data-op=\"remove\"").count(), 3, "{}", view.form);
     }
 
     #[test]
