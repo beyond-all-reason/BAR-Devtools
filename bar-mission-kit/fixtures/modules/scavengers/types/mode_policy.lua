@@ -18,7 +18,7 @@
 --- left open for the lobby while everything else is pinned.
 ---@class ScavengersModeChain
 ---@field Desc fun(desc: string): ScavengersModeChain
----@field Ranked fun(): ScavengersModeChain
+---@field Ranked fun(enabled: boolean?): ScavengersModeChain permission is a flag; Ranked(false) pins ranked_game off, lockable like any policy
 ---@field RetainValues fun(): ScavengersModeChain
 ---@field Hidden fun(): ScavengersModeChain
 ---@field Unlocked fun(): ScavengersModeChain
@@ -34,7 +34,9 @@
 --- keeps every existing lobby working.
 ---@field Bot fun(aiName: string): ScavengersModeChain
 
----Start a mode chain; the key is the name's snake_case.
+---Start a mode chain; the key is the name's snake_case. The category is
+---not a parameter: the grammar binds every chain from this module to
+---"game".
 ---@param name string
 ---@return ScavengersModeChain
 function Mode(name) end

@@ -22,6 +22,9 @@ pub const SNAPSHOTS: &[&str] = &[
     include_str!("../fixtures/modules/combat/types/actions.lua"),
     include_str!("../fixtures/modules/construction/types/actions.lua"),
     include_str!("../fixtures/modules/matchflow/types/actions.lua"),
+    include_str!("../fixtures/modules/matchflow/types/mode_policy.lua"),
+    include_str!("../fixtures/modules/modes/types/mode_policy.lua"),
+    include_str!("../fixtures/modules/raptors/types/mode_policy.lua"),
     include_str!("../fixtures/modules/scavengers/types/actions.lua"),
     include_str!("../fixtures/modules/scavengers/types/mode_policy.lua"),
     include_str!("../fixtures/modules/transfer/types/actions.lua"),
@@ -292,8 +295,17 @@ impl TypeSurface {
                 let name = &line[..eq];
                 if name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
                     if let Some(type_expr) = pending_type.take() {
-                        self.globals
-                            .insert(name.to_string(), Global::Object(parse_object_type(&type_expr)));
+                        // One game global can be declared by several files —
+                        // MatchFlow is the mission's actions in actions.lua and
+                        // the mode's facet in mode_policy.lua. Merge, don't
+                        // clobber: both grammars belong to the same name.
+                        let members = parse_object_type(&type_expr);
+                        match self.globals.get_mut(name) {
+                            Some(Global::Object(existing)) => existing.extend(members),
+                            _ => {
+                                self.globals.insert(name.to_string(), Global::Object(members));
+                            }
+                        }
                     }
                 }
             }
@@ -371,23 +383,24 @@ impl TypeSurface {
             }
             Global::Object(members) => {
                 // A bare `---@type ClassName` object stores its class under
-                // the "" marker; member lookups then go through the class.
+                // the "" marker; a merged global carries that AND named
+                // members. A named member wins its own segment; everything
+                // else is a field lookup through the "" class.
                 let mut current_class = members.get("").cloned();
-                let mut object_members = if current_class.is_some() { None } else { Some(members) };
+                let mut object_members = Some(members);
                 for segment in segments {
-                    if let Some(m) = object_members {
-                        let type_name = m.get(segment)?.clone();
-                        if self.classes.contains_key(&type_name) {
-                            current_class = Some(type_name);
-                            object_members = None;
-                        } else {
-                            return None;
+                    if let Some(m) = object_members.take() {
+                        if let Some(type_name) = m.get(segment) {
+                            if !self.classes.contains_key(type_name) {
+                                return None;
+                            }
+                            current_class = Some(type_name.clone());
+                            continue;
                         }
-                    } else {
-                        // Field lookup in the current class ends the path.
-                        let class = current_class.as_deref()?;
-                        return self.classes.get(class)?.get(segment).cloned();
                     }
+                    // Field lookup in the current class ends the path.
+                    let class = current_class.as_deref()?;
+                    return self.classes.get(class)?.get(segment).cloned();
                 }
                 None
             }
@@ -585,10 +598,13 @@ impl TypeSurface {
                     None => {}
                 },
                 Global::Object(members) => {
-                    if let Some(class) = members.get("") {
-                        self.walk_class(class, name, &mut roles);
-                    } else {
-                        for (member, class) in members {
+                    // "" is the global's own class; named members are grammars
+                    // grafted onto the same name (a merged declaration keeps
+                    // both, so walk both).
+                    for (member, class) in members {
+                        if member.is_empty() {
+                            self.walk_class(class, name, &mut roles);
+                        } else {
                             self.walk_class(class, &format!("{name}.{member}"), &mut roles);
                         }
                     }
@@ -607,18 +623,20 @@ impl TypeSurface {
                 out.push_str(&self.arguments(sig));
                 sig.ret.clone()?
             }
-            Global::Object(members) => match members.get("") {
-                // `---@type Class`: the global IS the class; segments that
-                // follow are its fields.
-                Some(class) => class.clone(),
-                // `---@type { Member: Class }`: the next segment names a member.
-                None => {
-                    let next = segments.next()?;
-                    out.push('.');
-                    out.push_str(next);
-                    members.get(next)?.clone()
+            Global::Object(members) => {
+                // A named member claims its segment (`---@type { Member: Class }`,
+                // possibly merged with a bare `---@type Class`); otherwise the
+                // "" class answers and the segment is a field of it.
+                match segments.clone().next().and_then(|next| members.get(next)) {
+                    Some(class) => {
+                        let next = segments.next()?;
+                        out.push('.');
+                        out.push_str(next);
+                        class.clone()
+                    }
+                    None => members.get("")?.clone(),
                 }
-            },
+            }
         };
         for segment in segments {
             let sig = self.classes.get(&class)?.get(segment)?;
@@ -955,7 +973,7 @@ mod tests {
         assert_eq!(when_verbs, vec!["After", "Do", "Once", "When"]);
         let mut spawn_verbs = surface.chain_verbs("Spawn");
         spawn_verbs.sort();
-        assert_eq!(spawn_verbs, vec!["At", "Grouped", "Named"]);
+        assert_eq!(spawn_verbs, vec!["At", "Grouped", "Named", "Neutral"]);
     }
 
     #[test]

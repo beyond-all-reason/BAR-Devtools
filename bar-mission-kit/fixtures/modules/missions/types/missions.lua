@@ -78,6 +78,7 @@
 ---@field At fun(fx: number, fz: number): MissionSpawnChain
 ---@field Named fun(name: MissionUnitName): MissionSpawnChain
 ---@field Grouped fun(group: MissionUnitGroup): MissionSpawnChain
+---@field Neutral fun(): MissionSpawnChain starts inert: neither shoots nor is shot at, until handed over
 
 --- The dot-only builder chain returned by Claim. No At: a claimed unit is
 --- already somewhere. OrSpawnAt is required, and says where to build one when
@@ -96,6 +97,7 @@
 ---@field name MissionUnitName|nil declared by Named
 ---@field group MissionUnitGroup|nil declared by Grouped
 ---@field claim boolean|nil written by Claim: bind to an existing unit if the team has one
+---@field neutral boolean|nil written by Neutral: spawn inert, cleared when the unit changes hands
 
 --- A registered trigger. Identity = source filename + declaration order,
 --- stamped at registration — the unregister-by-identity key for hot reload.

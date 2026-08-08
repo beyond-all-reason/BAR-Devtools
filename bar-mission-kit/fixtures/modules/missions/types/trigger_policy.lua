@@ -35,7 +35,7 @@ function Unit(name) end
 
 ---Declare one unit of the mission's opening world state. units.lua sandbox
 ---only — not injected into trigger files. Chain .At(fx, fz) (required, map
----fractions), .Named(name), .Grouped(group).
+---fractions), .Named(name), .Grouped(group), .Neutral().
 ---@param unitDef MissionUnitDefRef
 ---@param team MissionTeamRole
 ---@return MissionSpawnChain
