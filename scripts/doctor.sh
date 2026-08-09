@@ -189,15 +189,16 @@ check_doctor_game_dir() {
   local game_dir
   game_dir="$(detect_game_dir 2>/dev/null)" || true
   if [ -z "$game_dir" ]; then
-    _pass "no game data directory detected"
+    warn "Game directory not found. Set BAR_DATA_DIR env var in the .env file"
     echo ""
     return 0
   fi
   if game_dir_has_engine "$game_dir"; then
-    _pass "game directory has engine ($game_dir/engine/recoil_*)"
+    _pass "game directory exists and has engine"
   else
-    _warn "game directory $game_dir has no engine folder"
-    echo "       Launch BAR once so the first-time downloader fetches the engine, then re-run 'just doctor'."
+    _warn "game directory $game_dir has no engine folder or engine folder is empty."
+    echo "        This suggests BAR has never run from this folder."
+    echo "        Launch BAR once so the first-time downloader fetches the engine, then re-run 'just doctor'."
   fi
   echo ""
 }
