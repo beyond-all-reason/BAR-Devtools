@@ -172,6 +172,37 @@ check_doctor_flatpak() {
 }
 
 
+# True if the game dir has a downloaded Recoil engine. The engine folder is
+# versioned (e.g. engine/recoil_2026.07.04), so match the recoil_* prefix
+# generically rather than pinning a version.
+game_dir_has_engine() {
+  local dir="$1"
+  [ -d "$dir/engine" ] || return 1
+  local v
+  for v in "$dir"/engine/recoil_*; do
+    [ -d "$v" ] && return 0
+  done
+  return 1
+}
+
+check_doctor_game_dir() {
+  local game_dir
+  game_dir="$(detect_game_dir 2>/dev/null)" || true
+  if [ -z "$game_dir" ]; then
+    _pass "no game data directory detected"
+    echo ""
+    return 0
+  fi
+  if game_dir_has_engine "$game_dir"; then
+    _pass "game directory has engine ($game_dir/engine/recoil_*)"
+  else
+    _warn "game directory $game_dir has no engine folder"
+    echo "       Launch BAR once so the first-time downloader fetches the engine, then re-run 'just doctor'."
+  fi
+  echo ""
+}
+
+
 check_doctor_ports() {
   echo -e "${BOLD}Ports${NC}"
 
@@ -386,6 +417,7 @@ cmd_doctor() {
   check_doctor_env
   check_doctor_wsl
   check_doctor_flatpak
+  check_doctor_game_dir
   check_doctor_modules
   check_doctor_ports
   check_doctor_repos
