@@ -24,7 +24,7 @@ tasks/
 .backups/
 *.log
 bar-lua-codemod/target/
-.claude/settings.local.json
+settings.local.json
 .claude/projects/
 .claude/todos/
 .claude/cache/
