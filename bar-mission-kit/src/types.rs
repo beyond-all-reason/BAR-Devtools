@@ -753,21 +753,23 @@ pub struct PolicyInfo {
     pub stages: Vec<String>,
 }
 
-/// Stage names out of a policy file: `:Gate("Name", ...)` and
-/// `:Compute("Name", ...)` in source order. A line scan, not a Lua parse —
-/// the registrar only accepts string-literal names, so a literal scan IS
-/// the grammar.
+/// Stage names out of a policy file: `.Gate("Name", ...)` and
+/// `.Compute("Name", ...)` in source order (the colon spelling is accepted
+/// for older trees). A line scan, not a Lua parse — the registrar only
+/// accepts string-literal names, so a literal scan IS the grammar.
 pub fn policy_stages(source: &str) -> Vec<String> {
     let mut found: Vec<(usize, String)> = Vec::new();
     for kind in ["Gate", "Compute"] {
-        let needle = format!(":{kind}(\"");
-        let mut from = 0;
-        while let Some(at) = source[from..].find(&needle) {
-            let name_start = from + at + needle.len();
-            if let Some(len) = source[name_start..].find('"') {
-                found.push((from + at, format!("{kind} {}", &source[name_start..name_start + len])));
+        for sep in ['.', ':'] {
+            let needle = format!("{sep}{kind}(\"");
+            let mut from = 0;
+            while let Some(at) = source[from..].find(&needle) {
+                let name_start = from + at + needle.len();
+                if let Some(len) = source[name_start..].find('"') {
+                    found.push((from + at, format!("{kind} {}", &source[name_start..name_start + len])));
+                }
+                from = name_start;
             }
-            from = name_start;
         }
     }
     found.sort_by_key(|(at, _)| *at);
@@ -1037,15 +1039,17 @@ mod tests {
     fn policy_stages_read_in_source_order_across_kinds() {
         let source = r#"
 Policies.Pipeline()
-	:Gate("SharingDisabled", function(ctx) end)
-	:Compute("Rate", function(ctx) end)
-	:Gate("NotAllied", function(ctx) end)
-	:Register()
+	.Gate("SharingDisabled", function(ctx) end)
+	.Compute("Rate", function(ctx) end)
+	.Gate("NotAllied", function(ctx) end)
+	.Register()
 "#;
         assert_eq!(
             policy_stages(source),
             vec!["Gate SharingDisabled", "Compute Rate", "Gate NotAllied"]
         );
+        // Older trees spell the chain with colons; same stages.
+        assert_eq!(policy_stages(":Gate(\"A\", f):Compute(\"B\", g)"), vec!["Gate A", "Compute B"]);
         assert!(policy_stages("local x = 1").is_empty());
     }
 
