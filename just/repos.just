@@ -60,19 +60,29 @@ restack repo base +branches:
     done
     [ "${#branches[@]}" -gt 0 ] || { err "No branches given"; exit 1; }
 
-    git diff --quiet && git diff --cached --quiet || { err "Working tree not clean"; exit 1; }
+    [ -z "$(git status --porcelain)" ] || { err "Working tree not clean"; exit 1; }
 
-    prev_old="" prev_new="{{base}}"
-    for br in "${branches[@]}"; do
-        old="$(git rev-parse "$br")"
-        step "Rebasing $br onto $prev_new..."
-        if [ -z "$prev_old" ]; then
-            git rebase "$prev_new" "$br" || { err "Conflict in $br. Resolve, 'git rebase --continue', then restack the rest: just repos::restack {{repo}} $br <remaining>"; exit 1; }
-        else
-            git rebase --onto "$prev_new" "$prev_old" "$br" || { err "Conflict in $br. Resolve, 'git rebase --continue', then restack the rest: just repos::restack {{repo}} $br <remaining>"; exit 1; }
-        fi
-        prev_old="$old" prev_new="$br"
+    for br in "{{base}}" "${branches[@]}"; do
+        git rev-parse --verify --quiet "$br^{commit}" >/dev/null || { err "No such branch: $br"; exit 1; }
     done
+
+    prev="${branches[0]}"
+    for br in "${branches[@]:1}"; do
+        git merge-base --is-ancestor "$prev" "$br" || {
+            err "$br is not stacked on $prev - check the order you listed the branches in."
+            exit 1
+        }
+        prev="$br"
+    done
+
+    tip="${branches[-1]}"
+    step "Rebasing ${#branches[@]} branches onto {{base}}..."
+    if ! git rebase --update-refs "{{base}}" "$tip"; then
+        git rebase --abort 2>/dev/null || true
+        err "Conflict rebasing onto {{base}} - aborted, tree left clean."
+        err "To resolve by hand: git -C $dir rebase --update-refs {{base}} $tip"
+        exit 1
+    fi
     ok "Stack rebased: ${branches[*]}"
 
     if [ "$push" != 1 ]; then
@@ -80,9 +90,6 @@ restack repo base +branches:
         exit 0
     fi
 
-    # A branch pushed at the same tip as the one below it reads to GitHub as
-    # merged: it closes the PR, credits the pusher, and deletes the branch.
-    # That cannot be undone - a merged PR will not reopen.
     prev="{{base}}"
     for br in "${branches[@]}"; do
         n="$(git rev-list --count "$prev..$br" --)" || {
@@ -97,8 +104,6 @@ restack repo base +branches:
         prev="$br"
     done
 
-    for r in ${REMOTE:-origin}; do
-        step "Force-pushing ${#branches[@]} branches to $r..."
-        git push --force-with-lease "$r" "${branches[@]}"
-        ok "Pushed to $r"
-    done
+    step "Force-pushing ${#branches[@]} branches to origin..."
+    git push --force-with-lease origin "${branches[@]}"
+    ok "Pushed to origin"
