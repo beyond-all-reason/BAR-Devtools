@@ -738,6 +738,40 @@ pub struct ModuleInfo {
     pub nouns: Vec<String>,
     /// Mode presets shipped under <module>/modes/.
     pub modes: Vec<String>,
+    /// Policy pipelines shipped under <module>/policies/, as provenance:
+    /// read-only in every consumer. The grammar is the authoring surface;
+    /// this is the disassembly pane.
+    pub policies: Vec<PolicyInfo>,
+}
+
+/// One policy pipeline: the file that ships it and its named stages in
+/// declaration order — the order the runtime evaluates them.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PolicyInfo {
+    pub file: String,
+    /// "Gate NotAllied", "Compute Rate" — kind + name, source order.
+    pub stages: Vec<String>,
+}
+
+/// Stage names out of a policy file: `:Gate("Name", ...)` and
+/// `:Compute("Name", ...)` in source order. A line scan, not a Lua parse —
+/// the registrar only accepts string-literal names, so a literal scan IS
+/// the grammar.
+pub fn policy_stages(source: &str) -> Vec<String> {
+    let mut found: Vec<(usize, String)> = Vec::new();
+    for kind in ["Gate", "Compute"] {
+        let needle = format!(":{kind}(\"");
+        let mut from = 0;
+        while let Some(at) = source[from..].find(&needle) {
+            let name_start = from + at + needle.len();
+            if let Some(len) = source[name_start..].find('"') {
+                found.push((from + at, format!("{kind} {}", &source[name_start..name_start + len])));
+            }
+            from = name_start;
+        }
+    }
+    found.sort_by_key(|(at, _)| *at);
+    found.into_iter().map(|(_, stage)| stage).collect()
 }
 
 /// Read one field out of a module.lua manifest (`name = "x"` / `description = "y"`).
@@ -813,6 +847,24 @@ pub fn explore_modules(modules_root: &std::path::Path) -> Vec<ModuleInfo> {
             })
             .collect();
         modes.sort();
+        // Filename order is load order (the module handler lists the dir the
+        // same way); within a file, declaration order.
+        let mut policies: Vec<PolicyInfo> = std::fs::read_dir(dir.join("policies"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| {
+                let p = e.path();
+                if !p.extension().map(|x| x == "lua").unwrap_or(false) {
+                    return None;
+                }
+                Some(PolicyInfo {
+                    file: p.file_stem()?.to_str()?.to_string(),
+                    stages: policy_stages(&std::fs::read_to_string(&p).ok()?),
+                })
+            })
+            .collect();
+        policies.sort_by(|a, b| a.file.cmp(&b.file));
         out.push(ModuleInfo {
             description: manifest_field(&manifest, "description").unwrap_or_default(),
             requires: manifest_requires(&dir.join("types")),
@@ -822,6 +874,7 @@ pub fn explore_modules(modules_root: &std::path::Path) -> Vec<ModuleInfo> {
             effects,
             nouns,
             modes,
+            policies,
         });
     }
     out
@@ -979,6 +1032,22 @@ fn parse_object_type(type_expr: &str) -> BTreeMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn policy_stages_read_in_source_order_across_kinds() {
+        let source = r#"
+Policies.Pipeline()
+	:Gate("SharingDisabled", function(ctx) end)
+	:Compute("Rate", function(ctx) end)
+	:Gate("NotAllied", function(ctx) end)
+	:Register()
+"#;
+        assert_eq!(
+            policy_stages(source),
+            vec!["Gate SharingDisabled", "Compute Rate", "Gate NotAllied"]
+        );
+        assert!(policy_stages("local x = 1").is_empty());
+    }
 
     #[test]
     fn the_snapshot_surface_derives_the_statement_grammar() {

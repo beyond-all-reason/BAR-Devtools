@@ -150,6 +150,17 @@ struct ModuleInfo {
     nouns: Vec<String>,
     #[serde(default)]
     modes: Vec<String>,
+    /// Policy pipelines the module ships — provenance only, never editable:
+    /// the grammar is the authoring surface, this is the disassembly pane.
+    #[serde(default)]
+    policies: Vec<PolicyEntry>,
+}
+
+#[derive(Deserialize, Clone, Default)]
+struct PolicyEntry {
+    file: String,
+    #[serde(default)]
+    stages: Vec<String>,
 }
 
 #[derive(Deserialize, Clone, Default)]
@@ -694,6 +705,20 @@ fn modules_body(modules: &[ModuleInfo]) -> String {
             ));
             for step in &statement.steps {
                 out.push_str(&format!("<span class=\"me-chip me-chip-build\">{step}</span>"));
+            }
+            out.push_str("</div>");
+        }
+        // Policy pipelines, same shape as statements: the file is the
+        // subject, the stages chain onto it in evaluation order. Provenance
+        // only — no control carries an edit intent.
+        for policy in &m.policies {
+            out.push_str(&format!(
+                "<div class=\"me-module-row\"><span class=\"me-module-key\">policy</span>\
+                 <span class=\"me-chip me-chip-stmt\">{}</span>",
+                policy.file
+            ));
+            for stage in &policy.stages {
+                out.push_str(&format!("<span class=\"me-chip me-chip-build\">{stage}</span>"));
             }
             out.push_str("</div>");
         }
@@ -2164,6 +2189,28 @@ When(Waves.BossDefeated(Scavengers.Horde))
         assert!(view.form.contains("data-op=\"remove\""), "{}", view.form);
         assert_eq!(view.vocabulary.unit_names, vec!["hub".to_string()]);
         assert_eq!(view.vocabulary.groups, vec!["outpost".to_string()]);
+    }
+
+    #[test]
+    fn the_module_explorer_shows_policy_pipelines_read_only() {
+        let module = ModuleInfo {
+            name: "transfer".into(),
+            policies: vec![PolicyEntry {
+                file: "resource_transfer".into(),
+                stages: vec!["Gate SharingDisabled".into(), "Gate NotAllied".into()],
+            }],
+            ..Default::default()
+        };
+        let markup = modules_body(&[module]);
+        assert!(markup.contains("me-module-key\">policy"), "{markup}");
+        assert!(markup.contains("resource_transfer"), "{markup}");
+        // Evaluation order preserved: SharingDisabled before NotAllied.
+        let a = markup.find("Gate SharingDisabled").unwrap();
+        let b = markup.find("Gate NotAllied").unwrap();
+        assert!(a < b);
+        // Provenance only: no policy row carries an edit control.
+        assert!(!markup.contains("data-add"), "{markup}");
+        assert!(!markup.contains("data-op"), "{markup}");
     }
 
     #[test]
