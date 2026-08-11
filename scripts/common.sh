@@ -232,8 +232,8 @@ enter_distrobox() {
     fi
 }
 
-# run a single interactive command inside the distrobox with a real PTY.
-# script(1) is the PTY wrapper; it parses its arg via /bin/sh, hence printf %q.
+# run a single interactive command inside the distrobox; distrobox enter
+# allocates the tty itself when the caller has one
 distrobox_exec_interactive() {
     if _in_container; then
         exec "$@"
@@ -242,10 +242,5 @@ distrobox_exec_interactive() {
         err "DEVTOOLS_DISTROBOX not set. Run: just setup::distrobox"
         return 1
     fi
-    local quoted_box quoted_cmd="" arg
-    quoted_box="$(printf '%q' "$DEVTOOLS_DISTROBOX")"
-    for arg in "$@"; do
-        quoted_cmd+=" $(printf '%q' "$arg")"
-    done
-    exec script -qec "distrobox enter ${quoted_box} --${quoted_cmd}" /dev/null
+    exec distrobox enter "$DEVTOOLS_DISTROBOX" -- "$@"
 }
