@@ -46,11 +46,11 @@ RUN ARCH=$(uname -m) \
     && chmod +x /usr/local/bin/stylua \
     && rm /tmp/stylua.zip
 
-ARG EMMYLUA_VERSION=0.22.0
+ARG EMMYLUA_VERSION=0.24.0
 RUN ARCH=$(uname -m) \
     && case "$ARCH" in \
          x86_64)  LS_ASSET="emmylua_ls-linux-x64.tar.gz";              CHECK_ASSET="emmylua_check-linux-x64.tar.gz" ;; \
-         aarch64) LS_ASSET="emmylua_ls-linux-arm64-glibc.2.17.tar.gz"; CHECK_ASSET="emmylua_check-linux-arm64-glibc.2.17.tar.gz" ;; \
+         aarch64) LS_ASSET="emmylua_ls-linux-aarch64-glibc.2.17.tar.gz"; CHECK_ASSET="emmylua_check-linux-aarch64-glibc.2.17.tar.gz" ;; \
          *) echo "unsupported arch for EmmyLua binaries: $ARCH" >&2; exit 1;; \
        esac \
     && BASE="https://github.com/EmmyLuaLs/emmylua-analyzer-rust/releases/download/${EMMYLUA_VERSION}" \
