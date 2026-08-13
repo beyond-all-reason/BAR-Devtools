@@ -4,6 +4,14 @@ Local development environment for [Beyond All Reason](https://www.beyondallreaso
 
 Everything server-side runs in Docker. The game client runs natively.
 
+## Scope and contributing
+
+This repo is the orchestrator of the local dev experience. It gets a contributor from clone to a working engine, lobby, and server stack, and it keeps that loop working: setup, doctor, launch, sync, docker/compose, just recipes, editor wiring, and config.
+
+Standalone products and pipelines are out of scope. A change belongs here when it serves the local dev loop. A change that ships its own server, editor, or end user interface needs its own repository, its own CI, and its own review before any of it can be wired into this repo through a normal change.
+
+Pull requests should have one concern and stay small enough to review in one sitting. A few hundred lines is a good ceiling; thousands is a sign the change needs splitting, or its own repository. If a change is outside scope, or cannot be reviewed as a single unit, it will be returned for rework before merge. Full expectations live in [CONTRIBUTING](CONTRIBUTING.md). AI usage is covered by the [AI policy](AI_POLICY.md).
+
 ## Quickstart (Linux)
 
 ```bash
