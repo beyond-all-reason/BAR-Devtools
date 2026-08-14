@@ -10,7 +10,7 @@ export DEVTOOLS_SYNC_DISTROBOX
 
 # Our own Docker client config; Docker Desktop's ~/.docker/config.json names a
 # credsStore helper that can't be exec'd from WSL.
-DOCKER_CONFIG="$DEVTOOLS_DIR/.devtools/docker"
+: "${DOCKER_CONFIG:=$DEVTOOLS_DIR/.devtools/docker}"
 export DOCKER_CONFIG
 mkdir -p "$DOCKER_CONFIG"
 
