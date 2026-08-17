@@ -392,9 +392,9 @@ bar_launch_repo_path() {
   echo "$DEVTOOLS_DIR/bar_debug_launcher"
 }
 
-# The launcher runs from source inside bar-dev (Fedora Tk + deps come from
-# dev.Containerfile), so there's nothing to install on the host -- just confirm
-# the checkout and that the AppImage path is set.
+# The launcher runs from source: on the host when its python3 has the deps,
+# else inside bar-dev (Fedora Tk + deps come from dev.Containerfile). Nothing
+# to install either way -- just confirm the checkout and the AppImage path.
 cmd_setup_bar_launch() {
   local repo_path
   repo_path="$(bar_launch_repo_path)"
@@ -403,7 +403,7 @@ cmd_setup_bar_launch() {
     info "Add it via: just repos::clone bar (or set local_path in repos.local.conf)."
     return 0
   fi
-  ok "bar-launch runs from ${repo_path} inside ${DEVTOOLS_DISTROBOX:-bar-dev}"
+  ok "bar-launch runs from ${repo_path} (host if python3 has tkinter/six/requests, else ${DEVTOOLS_DISTROBOX:-bar-dev})"
   ensure_bar_appimage_path_set
 }
 

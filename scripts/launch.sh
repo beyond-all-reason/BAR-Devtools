@@ -66,14 +66,80 @@ run_linux() {
 
   preflight_appimage "${user_args[@]}"
 
-  # GUI/CLI run inside bar-dev (Fedora Tk: real fonts + antialiasing); the engine
-  # is launched back on the host via host_cmd_prefix(). Run from source so repo
-  # edits stay live -- no install, no shared ~/.local/bin pipx conflict.
-  local box="${DEVTOOLS_DISTROBOX:-bar-dev}"
+  local where
+  where="$(_launch_where "${user_args[@]}")"
+  # Strip our placement flags before handing off to bar_launch.
+  if _has_flag --host "${user_args[@]}" || _has_flag --container "${user_args[@]}"; then
+    mapfile -d '' user_args < <(_strip_flag --host "${user_args[@]}")
+    mapfile -d '' user_args < <(_strip_flag --container "${user_args[@]}")
+  fi
+
+  # Run from source so repo edits stay live -- no install, no shared
+  # ~/.local/bin pipx conflict.
   cd "$repo_path"   # launcher autodetect anchors on cwd
+  if [ "$where" = "host" ]; then
+    # Host is the default: a host-run launcher execs the engine directly.
+    info "Running on host: bar_launch ${injected[*]:-} ${user_args[*]:-}"
+    exec env PYTHONPATH="$repo_path" python3 -m bar_launch "${injected[@]}" "${user_args[@]}"
+  fi
+
+  # Container: bar-dev's Fedora Tk gives the GUI real fonts + antialiasing on
+  # hosts whose python3 has no usable Tk. The engine is launched back on the
+  # host by bar_launch via distrobox-host-exec -> host-spawn, which rides on
+  # flatpak's session helper (org.freedesktop.Flatpak on the session bus): a
+  # host without flatpak gets a bare "exit 127". Say so before it happens.
+  local box="${DEVTOOLS_DISTROBOX:-bar-dev}"
+  if ! command -v flatpak >/dev/null 2>&1; then
+    warn "flatpak is not installed on this host: the container->host engine bridge"
+    warn "(distrobox-host-exec -> host-spawn -> flatpak-session-helper) will fail with exit 127."
+    warn "Either install flatpak, or run the launcher on the host: just bar::launch --host ..."
+    warn "  (host GUI needs: python3 with tkinter, six, requests)"
+  fi
   info "Running in ${box}: bar_launch ${injected[*]:-} ${user_args[*]:-}"
   exec distrobox enter "$box" -- \
     env PYTHONPATH="$repo_path" python3 -m bar_launch "${injected[@]}" "${user_args[@]}"
+}
+
+# Where the launcher process runs: "host" or "container".
+#
+# Host by default. Nothing about a headless launch needs the container, and a
+# host-run launcher execs the compiled engine directly -- no
+# distrobox-host-exec -> host-spawn -> flatpak-session-helper bridge, which is
+# an unrelated flatpak dependency and fails with a bare 127 where flatpak isn't
+# installed. The container is only worth it for the GUI on a host whose
+# python3 can't import tkinter (bar-dev's Fedora Tk has real fonts).
+#
+# Override: --host / --container on the command line, or BAR_LAUNCH_IN=host|container
+# in .env. Explicit choices are honored even if the host is missing modules
+# (you'll get python's ImportError, which names what to install).
+_launch_where() {
+  if _has_flag --host "$@"; then echo host; return; fi
+  if _has_flag --container "$@"; then echo container; return; fi
+  case "${BAR_LAUNCH_IN:-}" in
+    host|container) echo "$BAR_LAUNCH_IN"; return ;;
+  esac
+  local headless=0
+  if _has_flag --headless "$@" || _has_flag --no-gui "$@" || _has_flag --print-cmd "$@"; then
+    headless=1
+  fi
+  if [ "$headless" = 1 ]; then
+    # slpp (the modinfo/cache Lua parser) needs six; that's the whole dependency list.
+    if _host_python_has six; then echo host; return; fi
+    info "host python3 lacks 'six' (pip install six) -- running headless in ${DEVTOOLS_DISTROBOX:-bar-dev}"
+    echo container; return
+  fi
+  if _host_python_has tkinter six requests; then echo host; return; fi
+  info "host python3 lacks tkinter/six/requests -- running the GUI in ${DEVTOOLS_DISTROBOX:-bar-dev}"
+  info "  (to run it on the host: install python3-tk, then pip install six requests)"
+  echo container
+}
+
+# True if the host python3 can import every named module.
+_host_python_has() {
+  command -v python3 >/dev/null 2>&1 || return 1
+  local mods="" m
+  for m in "$@"; do mods+="import $m; "; done
+  python3 -c "$mods" >/dev/null 2>&1
 }
 
 # Matches both "--engine X" and "--engine=X" forms.
@@ -137,6 +203,16 @@ _launch_uses_appimage() {
 preflight_appimage() {
   _launch_uses_appimage "$@" || return 0
   bar_appimage_resolves && return 0
+
+  if ! _has_flag --play "$@" && ! _has_flag --boot "$@"; then
+    # Plain GUI launch: only *might* need the AppImage. The GUI explains a
+    # missing one in its command panel and Boot = engine works without it,
+    # so don't block someone who just wants to run their compiled engine.
+    info "No Beyond-All-Reason AppImage configured: in the GUI, Boot = launcher will say so;"
+    info "  Boot = engine needs none. To set one: just setup::reconfigure"
+    info "  (or BAR_APPIMAGE_PATH in $DEVTOOLS_DIR/.env)"
+    return 0
+  fi
 
   if [ -t 0 ]; then
     warn "This launch boots via the AppImage launcher, but no Beyond-All-Reason AppImage resolves."
