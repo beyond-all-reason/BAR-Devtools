@@ -159,7 +159,8 @@ check_doctor_flatpak() {
 
     echo ""
     _warn "The Flatpak sandbox blocks the Spring engine from following symlinks"
-    warn "into folders it hasn't been granted access to."
+    warn "into folders it hasn't been granted access to. "
+    warn "See above for symlinks targets currently outside that sandbox. "
     warn "Please grant access to these folders with:"
     if [ "$install_mode" = "system" ]; then
       warn "  sudo flatpak override info.beyondallreason.bar --filesystem=$DEVTOOLS_DIR"
@@ -171,10 +172,6 @@ check_doctor_flatpak() {
   echo ""
 }
 
-
-# True if the game dir has a downloaded Recoil engine. The engine folder is
-# versioned (e.g. engine/recoil_2026.07.04), so match the recoil_* prefix
-# generically rather than pinning a version.
 game_dir_has_engine() {
   local dir="$1"
   [ -d "$dir/engine" ] || return 1
@@ -202,7 +199,6 @@ check_doctor_game_dir() {
   fi
   echo ""
 }
-
 
 check_doctor_ports() {
   echo -e "${BOLD}Ports${NC}"
