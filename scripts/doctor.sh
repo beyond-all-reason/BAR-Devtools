@@ -392,6 +392,127 @@ check_doctor_services() {
 }
 
 
+check_doctor_game_dir() {
+  echo -e "${BOLD}Game directory (.sdd conflicts)${NC}"
+
+  local game_dir
+  game_dir="$(detect_game_dir 2>/dev/null)" || true
+  game_dir="${game_dir%/}"
+  if [ -z "$game_dir" ]; then
+    info "  Game directory not detected (set BAR_DATA_DIR or run just setup::init)."
+    echo ""
+    return 0
+  fi
+
+  local games_dir="$game_dir/games"
+  if [ ! -d "$games_dir" ]; then
+    info "  No games/ directory at $games_dir"
+    echo ""
+    return 0
+  fi
+
+  # The devtools-managed symlink created by `just link create bar`.
+  local dev_symlink="$games_dir/Beyond-All-Reason.sdd"
+  local dev_symlink_target=""
+  if [ -L "$dev_symlink" ]; then
+    dev_symlink_target="$(readlink -f "$dev_symlink" 2>/dev/null || true)"
+  fi
+
+  # Recoil recursively scans the games/ root for *.sdd dirs (it descends into
+  # every subdir, so a nested copy like tmp_archive/BAR.sdd is a full competitor).
+  # -L so the devtools symlink is followed and reported by its link path.
+  local -a sdd_paths=()
+  while IFS= read -r -d '' p; do
+    sdd_paths+=("$p")
+  done < <(find -L "$games_dir" -type d -name '*.sdd' -print0 2>/dev/null)
+
+  if [ "${#sdd_paths[@]}" -eq 0 ]; then
+    info "  No .sdd directories found under $games_dir"
+    echo ""
+    return 0
+  fi
+
+  modinfo_name() {
+    local f="$1/modinfo.lua"
+    [ -f "$f" ] || return 1
+    sed -n "s/^[[:space:]]*name[[:space:]]*=[[:space:]]*[\"']\([^\"',\r]*\)[\"'],*/\1/p" "$f" | tr -d '\r' | head -n1
+  }
+
+  # First pass: collect (path, name) pairs and count occurrences per name
+  local -a paths=()
+  local -a names=()
+  local -A name_count=()
+  local path name
+  for path in "${sdd_paths[@]}"; do
+    name="$(modinfo_name "$path")"
+    if [ -z "$name" ]; then
+      info "  $path has no modinfo.lua name (engine will skip it)"
+      continue
+    fi
+    paths+=("$path")
+    names+=("$name")
+    name_count[$name]=$(( ${name_count[$name]:-0} + 1 ))
+  done
+
+  local collision=0
+  local -A reported=()
+  local i j
+  for i in "${!paths[@]}"; do
+    name="${names[$i]}"
+    if [ "${name_count[$name]}" -lt 2 ]; then
+      continue
+    fi
+    if [ -n "${reported[$name]+x}" ]; then
+      continue
+    fi
+    reported[$name]=1
+    collision=1
+
+    # Collect all members sharing this name
+    local -a members=()
+    for j in "${!paths[@]}"; do
+      if [ "${names[$j]}" = "$name" ]; then
+        members+=("${paths[$j]}")
+      fi
+    done
+
+    # Check 3: generic same-name collision — engine loads only one by scan order.
+    _warn "Multiple .sdd folders share the game name \"$name\":"
+    local m
+    for m in "${members[@]}"; do
+      warn "    $m"
+    done
+    info "  Recoil loads only ONE of these (by scan order); the rest are ignored."
+
+    # Check 4: the devtools symlink is one of the competitors — its branch/
+    # feature changes may be silently overridden by the other copy.
+    local dev_shadowed=0
+    for m in "${members[@]}"; do
+      if [ "$m" = "$dev_symlink" ]; then
+        dev_shadowed=1; break
+      fi
+      if [ -n "$dev_symlink_target" ] && [ "$(readlink -f "$m" 2>/dev/null || echo "$m")" = "$dev_symlink_target" ]; then
+        dev_shadowed=1; break
+      fi
+    done
+
+    if [ "$dev_shadowed" -eq 1 ]; then
+      warn "Your devtools symlink ($dev_symlink) is competing with another copy."
+      warn "The engine may load the OTHER copy, so branch/feature changes in your"
+      warn "linked repo may appear ignored."
+      warn "Delete or move the competing .sdd folder and re-run the game."
+    fi
+    echo ""
+  done
+
+  if [ "$collision" -eq 0 ]; then
+    _pass "No competing .sdd folders (${#sdd_paths[@]} found, all distinct game names)"
+  fi
+
+  echo ""
+}
+
+
 check_doctor_modules() {
   if [ "${#SETUP_MODULES[@]}" -eq 0 ]; then
     return 0
@@ -409,6 +530,7 @@ cmd_doctor() {
   check_doctor_env
   check_doctor_wsl
   check_doctor_flatpak
+  check_doctor_game_dir
   check_doctor_modules
   check_doctor_ports
   check_doctor_repos

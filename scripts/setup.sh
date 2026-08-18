@@ -1682,6 +1682,16 @@ detect_game_dir() {
     fi
   fi
 
+  # Flatpak install: ask the app where its data lives
+  if command -v flatpak >/dev/null 2>&1; then
+    local flatpak_data_dir
+    flatpak_data_dir="$(flatpak run --command=sh info.beyondallreason.bar -c 'echo "$XDG_DATA_HOME"' 2>/dev/null)"
+    if [ -n "$flatpak_data_dir" ] && [ -d "$flatpak_data_dir" ]; then
+      echo "$flatpak_data_dir"
+      return 0
+    fi
+  fi
+
   local xdg_state="${XDG_STATE_HOME:-$HOME/.local/state}"
   local candidate="$xdg_state/Beyond All Reason"
   if [ -d "$candidate" ]; then
