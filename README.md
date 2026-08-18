@@ -210,6 +210,8 @@ just bar::launch --no-gui --play bar --source local --map "Quicksilver"
 just bar::launch --print-cmd --play bar --source latest
 ```
 
+On Linux the launcher runs **on the host** and execs your compiled engine directly. It only drops into the `bar-dev` container when the GUI needs a Tk your host `python3` doesn't have (`import tkinter, six, requests` fails) -- in that case the engine is launched back on the host through `distrobox-host-exec`, which rides on flatpak's session helper, so the host needs `flatpak` installed. Force either placement with `--host` / `--container`, or `BAR_LAUNCH_IN=host|container` in `.env`. Headless launches (`--headless`, `--print-cmd`) need only `python3` + `six` on the host.
+
 <details>
 <summary><strong>Booting via the AppImage launcher (Linux)</strong></summary>
 
