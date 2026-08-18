@@ -5,7 +5,7 @@ RECOIL_DIR   := DEVTOOLS_DIR / "RecoilEngine"
 BAR_DIR      := DEVTOOLS_DIR / "Beyond-All-Reason"
 LDE_DIR      := DEVTOOLS_DIR / "lua-doc-extractor"
 COMPOSE_FILE := DEVTOOLS_DIR / "docker-compose.dev.yml"
-COMPOSE      := "docker compose -f " + COMPOSE_FILE
+COMPOSE      := "podman compose -f " + COMPOSE_FILE
 
 # Friendlier name for `library` — same recipe, "build the lua library"
 alias build := library

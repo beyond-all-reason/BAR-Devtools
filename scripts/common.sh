@@ -8,6 +8,12 @@ export DEVTOOLS_DISTROBOX
 : "${DEVTOOLS_SYNC_DISTROBOX:=bar-sync}"
 export DEVTOOLS_SYNC_DISTROBOX
 
+# Our own Docker client config; Docker Desktop's ~/.docker/config.json names a
+# credsStore helper that can't be exec'd from WSL.
+: "${DOCKER_CONFIG:=$DEVTOOLS_DIR/.devtools/docker}"
+export DOCKER_CONFIG
+mkdir -p "$DOCKER_CONFIG"
+
 RED=$'\033[0;31m'
 GREEN=$'\033[0;32m'
 YELLOW=$'\033[1;33m'

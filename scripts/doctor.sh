@@ -40,6 +40,20 @@ check_doctor_deps() {
     _pass "podman $(podman --version | awk '{print $3}') + compose $(_compose_version) + socket"
   fi
 
+  if is_wsl; then
+    local docker_bin found=""
+    docker_bin="$(command -v docker 2>/dev/null || true)"
+    [ -n "$docker_bin" ] && [[ "$(readlink -f "$docker_bin")" == *docker-desktop* ]] \
+      && found="docker on PATH"
+    [ -f "$HOME/.docker/config.json" ] && grep -q '"credsStore"' "$HOME/.docker/config.json" \
+      && found="${found:+$found, }credsStore in ~/.docker/config.json"
+    if [ -n "$found" ]; then
+      _warn "Docker Desktop detected ($found)"
+      echo "       just recipes pin CONTAINER_RUNTIME/DOCKER_CONFIG around it;"
+      echo "       direct docker-compose or docker-build-v2/build.sh calls will fail"
+    fi
+  fi
+
   if ! command -v distrobox &>/dev/null; then
     _warn "distrobox not installed (optional — needed for bar::lint, bar::fmt, lua::*)"
     echo "       Install: just setup::deps"
