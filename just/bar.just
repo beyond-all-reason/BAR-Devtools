@@ -237,3 +237,106 @@ setup-hooks:
         git -C "$BAR_DIR" config blame.ignoreRevsFile .git-blame-ignore-revs
         ok "Configured git blame to ignore formatting commits"
     fi
+
+# Run bar-mission-kit unit tests (mission DSL recognizer)
+mission-kit-test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    step "Testing bar-mission-kit..."
+    bash "$DEVTOOLS_DIR/scripts/mission-kit-cargo.sh" test
+    # The terminal's script is embedded HTML: cargo cannot see a syntax error
+    # in it, only a blank panel at runtime can.
+    step "Checking the kit's type fixtures against the game..."
+    bash "$DEVTOOLS_DIR/scripts/sync-kit-fixtures.sh" --check
+    step "Checking the browser terminal's script..."
+    enter_distrobox bash "$DEVTOOLS_DIR/bar-mission-kit/check_terminal_js.sh"
+    ok "All tests passed"
+
+# Mirror the game's DSL types into the kit's fixtures (--check fails if stale)
+sync-kit-fixtures *args: require-bar
+    @bash "$DEVTOOLS_DIR/scripts/sync-kit-fixtures.sh" {{args}}
+
+# Install the VS Code extension (copies over any previous install; reload the window after)
+mission-editor-install:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    src="$DEVTOOLS_DIR/bar-mission-kit/vscode"
+    version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$src/package.json")"
+    dest="$HOME/.vscode/extensions/beyond-all-reason.bar-mission-editor-$version"
+    # Ship the server with the plugin: the whole point is that BAR-Devtools is
+    # not required to use it. The extension still adopts a running server first.
+    bash "$DEVTOOLS_DIR/scripts/mission-kit-cargo.sh" build --release
+    mkdir -p "$src/server"
+    cp "$DEVTOOLS_DIR/bar-mission-kit/target/release/bar-mission-kit" "$src/server/"
+    # Replace, never overwrite in place: the extension runs the bundled server
+    # straight out of this directory, and cp onto a running binary is ETXTBSY.
+    # Older version dirs go too - they accumulate and VS Code scans each one.
+    rm -rf "$HOME/.vscode/extensions/beyond-all-reason.bar-mission-editor-"*
+    mkdir -p "$dest"
+    cp -r "$src/." "$dest/"
+    ok "installed to $dest"
+    info "Reload the VS Code window (Developer: Reload Window) to pick it up."
+
+# Validate mission trigger files (default: hello_pawns)
+mission-check *args: require-bar
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    args="{{args}}"
+    bash "$DEVTOOLS_DIR/scripts/mission-kit-cargo.sh" run -q -- check ${args:-"$BAR_DIR/modules/missions/hello_pawns"}
+
+# Regenerate the mission AST artifact the in-game editor view renders
+mission-ast: require-bar
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    mkdir -p "$BAR_DIR/modules/missions/.editor"
+    bash "$DEVTOOLS_DIR/scripts/mission-kit-cargo.sh" run -q -- parse "$BAR_DIR/modules/missions/hello_pawns" --out "$BAR_DIR/modules/missions/.editor/mission_ast.json"
+    ok "Wrote modules/missions/.editor/mission_ast.json"
+
+# Run the mission editor service: watch triggers, regen AST, apply UI edits, open-in-editor
+mission-serve *args: require-bar
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    bash "$DEVTOOLS_DIR/scripts/mission-kit-cargo.sh" build --release
+    args="{{args}}"
+    # The editor dir must live in the ENGINE WRITE DIR (the widget reads the
+    # artifact and writes intents there via VFS/io; VFS searches it first).
+    # Override with BAR_WRITE_DIR if your install writes elsewhere.
+    write_dir="${BAR_WRITE_DIR:-$HOME/.local/state/Beyond All Reason}"
+    if [ ! -d "$write_dir" ]; then
+        write_dir="$BAR_DIR"
+        info "engine write dir not found; falling back to the repo"
+    fi
+    if [ -z "$args" ]; then
+        # Default: follow the game — the editor re-scopes to whatever mission
+        # the picker arms (active_mission.json from the bridge).
+        set -- --missions-root "$BAR_DIR/modules/missions"
+    else
+        set -- $args
+    fi
+    exec "$DEVTOOLS_DIR/bar-mission-kit/target/release/bar-mission-kit" serve \
+        "$@" \
+        --editor-dir "$write_dir/modules/missions/.editor"
+
+# Tail the game side of the mission editor (bridge, terminal, loader) from infolog
+mission-logs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    write_dir="${BAR_WRITE_DIR:-$HOME/.local/state/Beyond All Reason}"
+    exec tail -F "$write_dir/infolog.txt" | grep --line-buffered -Ei 'mission_editor|mission_bridge|mission_loader|mission (armed|reload)'
+
+# Mission-dev session: mission-serve in the background + game launch; serve dies with the session
+mission-dev *args: require-bar
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$DEVTOOLS_DIR/scripts/common.sh"
+    step "Starting mission-serve..."
+    just bar::mission-serve &
+    serve_pid=$!
+    trap 'kill "$serve_pid" 2>/dev/null || true' EXIT
+    just bar::launch {{args}}
+

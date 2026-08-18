@@ -1,0 +1,71 @@
+{
+  "name": "missions",
+  "comment": "Labels and curated extras only. The palette itself is derived: every verb a module publishes becomes an entry, with an example call built from its signature (src/types.rs template_for). A label here overrides the humanised default; extras are compositions no signature implies. Spawn rows are curated: a position is a map fraction, which the number type cannot say.",
+  "labels": {
+    "MatchFlow.Started": "Mission started",
+    "Team.Player.Has": "Player has units",
+    "Objective.IsComplete": "Objective complete",
+    "Unit.IsDestroyed": "Unit destroyed",
+    "Unit.IsSpotted": "Unit spotted",
+    "Objective.Complete": "Complete objective",
+    "Transfer.Units": "Transfer group",
+    "Transfer.Give": "Give group outright",
+    "Combat.Protect": "Protect unit",
+    "MatchFlow.Victory": "Victory",
+    "MatchFlow.Defeat": "Defeat",
+    "Waves.Spawned": "Wave spawned",
+    "Waves.Cleared": "Wave cleared",
+    "Waves.BossDefeated": "Boss defeated",
+    "Waves.Begin": "Begin waves",
+    "Waves.Intensify": "Change wave intensity",
+    "Waves.Surge": "Surge one wave",
+    "Waves.End": "Stop waves",
+    "When.After": "Wait before doing it"
+  },
+  "effects": [
+    {
+      "label": "Protect unit until",
+      "template": "Combat.Protect(Unit(\"UNIT_NAME\")).Until(Objective(\"OBJECTIVE\").IsComplete())"
+    },
+    {
+      "label": "Begin waves against the player",
+      "template": "Waves.Begin(Scavengers.Skirmish).Against(Team.Player).From(0.85, 0.15).Intensity(0.3)"
+    }
+  ],
+  "declarations": [
+    {
+      "label": "Declare an objective",
+      "template": "\nObjective(\"NEW_OBJECTIVE\")\n\t.Title(\"TITLE\")\n\t.CompletedWhen(Unit(\"UNIT_NAME\").IsSpotted(Team.Player))\n"
+    },
+    {
+      "label": "Declare, gated on a predecessor",
+      "template": "\nObjective(\"NEW_OBJECTIVE\")\n\t.Title(\"TITLE\")\n\t.CompletedWhen(Unit(\"UNIT_NAME\").IsSpotted(Team.Player))\n\t.When(Objective(\"OBJECTIVE\").IsComplete())\n"
+    },
+    {
+      "label": "Declare with its own reveal moment",
+      "template": "\nObjective(\"NEW_OBJECTIVE\")\n\t.Title(\"TITLE\")\n\t.RevealedWhen(MatchFlow.Started())\n\t.CompletedWhen(Unit(\"UNIT_NAME\").IsSpotted(Team.Player))\n"
+    },
+    {
+      "label": "Declare foreshadowed (greyed until revealed)",
+      "template": "\nObjective(\"NEW_OBJECTIVE\")\n\t.Title(\"TITLE\")\n\t.Foreshadow()\n\t.CompletedWhen(Unit(\"UNIT_NAME\").IsSpotted(Team.Player))\n"
+    }
+  ],
+  "spawns": [
+    {
+      "label": "Spawn a unit",
+      "template": "\nSpawn(UnitDef(\"armpw\"), \"player\")\n\t.At(0.50, 0.50)\n"
+    },
+    {
+      "label": "Spawn a named unit",
+      "template": "\nSpawn(UnitDef(\"armpw\"), \"player\")\n\t.At(0.50, 0.50)\n\t.Named(\"NEW_UNIT\")\n"
+    },
+    {
+      "label": "Spawn into a group",
+      "template": "\nSpawn(UnitDef(\"armpw\"), \"player\")\n\t.At(0.50, 0.50)\n\t.Grouped(\"GROUP\")\n"
+    },
+    {
+      "label": "Spawn for the enemy",
+      "template": "\nSpawn(UnitDef(\"armpw\"), \"enemy\")\n\t.At(0.50, 0.50)\n"
+    }
+  ]
+}
