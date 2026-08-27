@@ -37,7 +37,7 @@ RUN /root/.cargo/bin/cargo-binstall --no-confirm \
 
 # stylua direct, not `lx install`: lux's tool runner only resolves src/ layouts.
 # Track: https://github.com/lumen-oss/lux/issues/953
-ARG STYLUA_VERSION=2.0.2
+ARG STYLUA_VERSION=2.5.2
 RUN ARCH=$(uname -m) \
     && case "$ARCH" in x86_64) PLAT=linux-x86_64;; aarch64) PLAT=linux-aarch64;; esac \
     && curl -fsSL "https://github.com/JohnnyMorganz/StyLua/releases/download/v${STYLUA_VERSION}/stylua-${PLAT}.zip" \
