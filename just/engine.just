@@ -36,7 +36,9 @@ build *args:
         fi
         ;;
     esac
-    bash "$build_script" {{args}}
+    # build.sh picks docker over podman when both are on PATH -- under Docker
+    # Desktop that lands the build in another WSL distro's VM.
+    CONTAINER_RUNTIME=podman bash "$build_script" {{args}}
     # Skip the mirror for `--help`; otherwise mirror the refreshed install/.
     case " {{args}} " in
       *" --help "*|*" -h "*) ;;
