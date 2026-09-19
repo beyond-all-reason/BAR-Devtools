@@ -43,3 +43,9 @@ sync *args="all":
     source "$DEVTOOLS_DIR/scripts/common.sh"
     source "$DEVTOOLS_DIR/scripts/repos.sh"
     cmd_sync {{args}}
+
+# Inspect or restack a linear branch stack, bottom branch first
+# (stack status a b c | stack rebase a b c | stack push a b c).
+# STACK_REMOTE / STACK_BASE / STACK_REPO override the derived defaults.
+stack cmd *branches:
+    @cd "{{invocation_directory()}}" && bash "$DEVTOOLS_DIR/scripts/stack.sh" {{cmd}} {{branches}}
